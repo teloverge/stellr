@@ -1,0 +1,13 @@
+# Rust
+target/
+
+# Node / frontend
+node_modules/
+web/dist/
+
+# Tauri
+crates/app/gen/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
