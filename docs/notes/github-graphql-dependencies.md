@@ -22,9 +22,9 @@ dependency fields:
 
 GitHub's current schema reference documents the same fields and shapes:
 
-- [`Issue.blockedBy` and `Issue.blocking`](https://docs.github.com/en/graphql/reference/issues#issue)
-- [`IssueConnection`](https://docs.github.com/en/graphql/reference/issues#issueconnection)
-- [`IssueDependenciesSummary`](https://docs.github.com/en/graphql/reference/issues#issuedependenciessummary)
+- [`Issue.blockedBy` and `Issue.blocking`](https://docs.github.com/en/graphql/reference/issues#object-issue)
+- [`IssueConnection`](https://docs.github.com/en/graphql/reference/issues#object-issueconnection)
+- [`IssueDependenciesSummary`](https://docs.github.com/en/graphql/reference/issues#object-issuedependenciessummary)
 
 No schema-preview header was required.
 
