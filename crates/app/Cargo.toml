@@ -1,0 +1,14 @@
+[package]
+name = "stellr-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "stellr"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
