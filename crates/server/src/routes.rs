@@ -31,11 +31,11 @@ async fn model(State(state): State<Arc<AppState>>) -> Json<Model> {
 }
 
 async fn control_ws(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| control_loop(socket, state))
+    let receiver = state.hub.subscribe();
+    ws.on_upgrade(move |socket| control_loop(socket, receiver))
 }
 
-async fn control_loop(mut socket: WebSocket, state: Arc<AppState>) {
-    let mut receiver = state.hub.subscribe();
+async fn control_loop(mut socket: WebSocket, mut receiver: tokio::sync::watch::Receiver<Model>) {
     if !send_snapshot(&mut socket, &mut receiver).await {
         return;
     }
@@ -44,6 +44,7 @@ async fn control_loop(mut socket: WebSocket, state: Arc<AppState>) {
         tokio::select! {
             changed = receiver.changed() => {
                 if changed.is_err() {
+                    let _ = socket.send(Message::Close(None)).await;
                     return;
                 }
                 if !send_snapshot(&mut socket, &mut receiver).await {

@@ -13,6 +13,22 @@ async fn serve(state: Arc<AppState>) -> String {
     format!("http://{addr}")
 }
 
+async fn serve_until_shutdown(state: Arc<AppState>) -> (String, tokio::sync::oneshot::Sender<()>) {
+    let app = stellr_server::routes::router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown, shutdown_signal) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_signal.await;
+            })
+            .await
+            .unwrap()
+    });
+    (format!("http://{addr}"), shutdown)
+}
+
 fn state(token: Option<&str>) -> Arc<AppState> {
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
     Arc::new(AppState {
@@ -109,17 +125,7 @@ async fn control_socket_sends_fresh_snapshot_on_model_change() {
     let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
 
     socket.next().await.unwrap().unwrap();
-    hub.send_replace(Model {
-        spaces: vec![SpaceModel {
-            id: "space-1".into(),
-            repo: "owner/repo".into(),
-            name: "repo".into(),
-            stars: vec![],
-            synced_at: None,
-            stale: false,
-            error: None,
-        }],
-    });
+    hub.send_replace(model_with_space("space-1"));
 
     let frame = tokio::time::timeout(std::time::Duration::from_secs(1), socket.next())
         .await
@@ -129,8 +135,34 @@ async fn control_socket_sends_fresh_snapshot_on_model_change() {
         .into_text()
         .expect("changed snapshot should be a text frame");
     let model: Model = serde_json::from_str(&frame).unwrap();
-    assert_eq!(model.spaces.len(), 1);
-    assert_eq!(model.spaces[0].id, "space-1");
+    assert_eq!(model, model_with_space("space-1"));
+}
+
+#[tokio::test]
+async fn control_socket_closes_quietly_when_watch_channel_closes() {
+    let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let (base, shutdown) = serve_until_shutdown(Arc::new(AppState {
+        hub: hub.clone(),
+        token: None,
+    }))
+    .await;
+    let ws_url = control_url(&base);
+    let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
+
+    socket.next().await.unwrap().unwrap();
+    drop(hub);
+    shutdown.send(()).unwrap();
+
+    let closure = tokio::time::timeout(std::time::Duration::from_secs(1), socket.next())
+        .await
+        .expect("closed watch channel should end the active socket promptly");
+    assert!(
+        matches!(
+            closure,
+            None | Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_)))
+        ),
+        "unexpected terminal websocket result: {closure:?}"
+    );
 }
 
 #[tokio::test]
@@ -151,17 +183,7 @@ async fn control_socket_ignores_client_data_and_keeps_streaming_snapshots() {
         ))
         .await
         .unwrap();
-    hub.send_replace(Model {
-        spaces: vec![SpaceModel {
-            id: "still-streaming".into(),
-            repo: "owner/repo".into(),
-            name: "repo".into(),
-            stars: vec![],
-            synced_at: None,
-            stale: false,
-            error: None,
-        }],
-    });
+    hub.send_replace(model_with_space("still-streaming"));
 
     let frame = tokio::time::timeout(std::time::Duration::from_secs(1), socket.next())
         .await
@@ -171,7 +193,7 @@ async fn control_socket_ignores_client_data_and_keeps_streaming_snapshots() {
         .into_text()
         .expect("changed snapshot should be a text frame");
     let model: Model = serde_json::from_str(&frame).unwrap();
-    assert_eq!(model.spaces[0].id, "still-streaming");
+    assert_eq!(model, model_with_space("still-streaming"));
 }
 
 #[tokio::test]
