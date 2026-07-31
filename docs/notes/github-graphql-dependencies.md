@@ -60,10 +60,11 @@ relationships. GitHub returned:
 }
 ```
 
-This also demonstrates the summary semantics: `blockedBy` reports the open
-blockers while `totalBlockedBy` includes open and closed blockers. The summary
-is useful for a quick gate, but it cannot provide the issue numbers needed for
-graph edges.
+This also demonstrates the summary semantics:
+`issueDependenciesSummary.blockedBy` reports the open blockers, while
+`issueDependenciesSummary.totalBlockedBy` includes open and closed blockers.
+The summary is useful for a quick gate, but it cannot provide the issue numbers
+needed for graph edges.
 
 GitHub announced issue dependencies as generally available with GraphQL API
 support and a maximum of 50 relationships in each direction:
@@ -71,7 +72,7 @@ support and a maximum of 50 relationships in each direction:
 
 ## Decision for GraphQL sync
 
-Issue #7 must:
+Task 7 must:
 
 1. Select `blockedBy(first: 50) { nodes { number } }` for every fetched issue.
    GitHub's documented relationship limit makes that page size exhaustive.
