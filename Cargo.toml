@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/github", "crates/server", "crates/app"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/teloverge/stellr"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
