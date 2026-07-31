@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Request, State},
+    extract::{
+        Request, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -18,12 +21,58 @@ const TOKEN_COOKIE: &str = "stellr_token";
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/model", get(model))
+        .route("/ws/control", get(control_ws))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
 }
 
 async fn model(State(state): State<Arc<AppState>>) -> Json<Model> {
     Json(state.hub.borrow().clone())
+}
+
+async fn control_ws(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| control_loop(socket, state))
+}
+
+async fn control_loop(mut socket: WebSocket, state: Arc<AppState>) {
+    let mut receiver = state.hub.subscribe();
+    if !send_snapshot(&mut socket, &mut receiver).await {
+        return;
+    }
+
+    loop {
+        tokio::select! {
+            changed = receiver.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                if !send_snapshot(&mut socket, &mut receiver).await {
+                    return;
+                }
+            }
+            incoming = socket.recv() => {
+                match incoming {
+                    None | Some(Err(_)) => return,
+                    Some(Ok(Message::Close(_))) => {
+                        // One more read lets tungstenite flush its automatic close reply.
+                        let _ = socket.recv().await;
+                        return;
+                    }
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
+    }
+}
+
+async fn send_snapshot(
+    socket: &mut WebSocket,
+    receiver: &mut tokio::sync::watch::Receiver<Model>,
+) -> bool {
+    let Ok(snapshot) = serde_json::to_string(&*receiver.borrow_and_update()) else {
+        return false;
+    };
+    socket.send(Message::Text(snapshot.into())).await.is_ok()
 }
 
 async fn auth(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
