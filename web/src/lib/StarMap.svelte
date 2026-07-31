@@ -15,6 +15,8 @@
 
   onMount(() => {
     renderer = new Renderer()
+    const background = getComputedStyle(host).getPropertyValue('--background').trim()
+    renderer.setBackground(background)
     renderer.mount(host)
     renderer.onSelect((issueNumber) => {
       if (issueNumber !== null) select?.(issueNumber)

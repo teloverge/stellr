@@ -1,3 +1,5 @@
+// Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
+
 export type TicketStatus =
   | 'open'
   | 'blocked'

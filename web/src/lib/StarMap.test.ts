@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 import StarMap from './StarMap.svelte'
+import StarMapTestHost from './StarMap.test-host.svelte'
 import type { SpaceModel } from './model'
+import { StarMap as Renderer } from './starmap/starmap'
 
 const mounted: object[] = []
 
@@ -10,6 +12,8 @@ afterEach(async () => {
     await unmount(component)
   }
   document.body.innerHTML = ''
+  document.documentElement.style.removeProperty('--background')
+  vi.restoreAllMocks()
 })
 
 function space(number: number): SpaceModel {
@@ -37,6 +41,42 @@ function space(number: number): SpaceModel {
 }
 
 describe('StarMap wrapper', () => {
+  it('sets the initial renderer background from the mounted document token', () => {
+    document.documentElement.style.setProperty('--background', 'rgb(12, 34, 56)')
+    const setBackground = vi.spyOn(Renderer.prototype, 'setBackground')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+
+    const component = mount(StarMap, {
+      target,
+      props: { space: space(42) },
+    })
+    mounted.push(component)
+    flushSync()
+
+    expect(setBackground).toHaveBeenCalledWith('rgb(12, 34, 56)')
+  })
+
+  it('feeds reactive space prop updates to the renderer', () => {
+    const setModel = vi.spyOn(Renderer.prototype, 'setModel')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+
+    const component = mount(StarMapTestHost, {
+      target,
+      props: { initialSpace: space(42) },
+    })
+    mounted.push(component)
+    flushSync()
+
+    component.updateSpace(space(99))
+    flushSync()
+
+    expect(setModel).toHaveBeenLastCalledWith([
+      expect.objectContaining({ num: 99, slug: '99', title: 'Issue 99' }),
+    ])
+  })
+
   it('mounts the canvas island and forwards a selected issue number', () => {
     const target = document.createElement('div')
     document.body.appendChild(target)
