@@ -287,12 +287,18 @@ async fn fetch_maps_invalid_json_to_parse() {
 
 #[tokio::test]
 async fn fetch_maps_transport_failures_to_http() {
-    let server = MockServer::start().await;
-    let base_uri = server.uri();
-    drop(server);
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let base_uri = format!("http://{}", listener.local_addr().unwrap());
+    let close_connection = tokio::spawn(async move {
+        let (connection, _) = listener.accept().await.unwrap();
+        drop(connection);
+    });
 
     let provider = GithubProvider::with_base_uri("tok".into(), &base_uri).unwrap();
     let error = provider.fetch(&repo()).await.unwrap_err();
+    close_connection.await.unwrap();
 
     match error {
         ProviderError::Http(_) => {}
