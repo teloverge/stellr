@@ -7,4 +7,5 @@ repository.workspace = true
 
 [dependencies]
 serde.workspace = true
+stellr-core = { path = "../core" }
 thiserror.workspace = true

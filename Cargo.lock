@@ -109,6 +109,7 @@ name = "stellr-github"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "stellr-core",
  "thiserror",
 ]
 
