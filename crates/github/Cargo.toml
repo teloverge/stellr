@@ -6,6 +6,15 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
 serde.workspace = true
+serde_json.workspace = true
 stellr-core = { path = "../core" }
 thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3"
