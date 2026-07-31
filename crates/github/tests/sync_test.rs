@@ -1,0 +1,301 @@
+use serde_json::{Value, json};
+use stellr_core::{IssueState, Provider, ProviderError, RawIssue, RepoRef};
+use stellr_github::sync::GithubProvider;
+use wiremock::matchers::{body_partial_json, body_string_contains, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn repo() -> RepoRef {
+    RepoRef {
+        owner: "o".into(),
+        name: "r".into(),
+    }
+}
+
+fn page(nodes: Value) -> Value {
+    json!({
+        "data": {
+            "repository": {
+                "issues": {
+                    "pageInfo": {
+                        "hasNextPage": true,
+                        "endCursor": "NEXT"
+                    },
+                    "nodes": nodes
+                }
+            }
+        }
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn node(
+    number: u64,
+    title: &str,
+    body: Option<&str>,
+    url: &str,
+    state: &str,
+    state_reason: Option<&str>,
+    assignees: &[&str],
+    milestone: Option<&str>,
+    labels: &[&str],
+    blocked_by: &[u64],
+) -> Value {
+    json!({
+        "number": number,
+        "title": title,
+        "body": body,
+        "url": url,
+        "state": state,
+        "stateReason": state_reason,
+        "assignees": {
+            "nodes": assignees
+                .iter()
+                .map(|login| json!({ "login": login }))
+                .collect::<Vec<_>>()
+        },
+        "milestone": milestone.map(|title| json!({ "title": title })),
+        "labels": {
+            "nodes": labels
+                .iter()
+                .map(|name| json!({ "name": name }))
+                .collect::<Vec<_>>()
+        },
+        "blockedBy": {
+            "nodes": blocked_by
+                .iter()
+                .map(|number| json!({ "number": number }))
+                .collect::<Vec<_>>()
+        }
+    })
+}
+
+async fn mount_graphql_response(server: &MockServer, response: Value) {
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_partial_json(json!({
+            "variables": {
+                "owner": "o",
+                "name": "r",
+                "cursor": null
+            }
+        })))
+        .and(body_string_contains(
+            "issues(first: 100, after: $cursor, states: [OPEN, CLOSED])",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
+    let server = MockServer::start().await;
+    mount_graphql_response(
+        &server,
+        page(json!([
+            node(
+                1,
+                "Completed",
+                Some(""),
+                "https://example.test/o/r/issues/1",
+                "CLOSED",
+                Some("COMPLETED"),
+                &["ada", "grace"],
+                Some("M1"),
+                &["bug", "urgent"],
+                &[],
+            ),
+            node(
+                2,
+                "Not planned",
+                None,
+                "https://example.test/o/r/issues/2",
+                "CLOSED",
+                Some("NOT_PLANNED"),
+                &[],
+                None,
+                &[],
+                &[],
+            ),
+            node(
+                3,
+                "Merged dependencies",
+                Some("Blocked by #1, #2, #7\nBlocked by #1\nBlocks #4, #999"),
+                "https://example.test/o/r/issues/3",
+                "OPEN",
+                None,
+                &["linus"],
+                None,
+                &["feature"],
+                &[7, 2, 2],
+            ),
+            node(
+                4,
+                "Inversion target",
+                Some("Blocked by #8"),
+                "https://example.test/o/r/issues/4",
+                "OPEN",
+                None,
+                &[],
+                Some("M2"),
+                &["planning"],
+                &[3],
+            ),
+        ])),
+    )
+    .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let issues = provider.fetch(&repo()).await.unwrap();
+
+    assert_eq!(
+        issues,
+        vec![
+            RawIssue {
+                number: 1,
+                title: "Completed".into(),
+                body: "".into(),
+                state: IssueState::Closed,
+                assignees: vec!["ada".into(), "grace".into()],
+                milestone: Some("M1".into()),
+                labels: vec!["bug".into(), "urgent".into()],
+                blocked_by: vec![],
+                url: "https://example.test/o/r/issues/1".into(),
+            },
+            RawIssue {
+                number: 2,
+                title: "Not planned".into(),
+                body: "".into(),
+                state: IssueState::ClosedNotPlanned,
+                assignees: vec![],
+                milestone: None,
+                labels: vec![],
+                blocked_by: vec![],
+                url: "https://example.test/o/r/issues/2".into(),
+            },
+            RawIssue {
+                number: 3,
+                title: "Merged dependencies".into(),
+                body: "Blocked by #1, #2, #7\nBlocked by #1\nBlocks #4, #999".into(),
+                state: IssueState::Open,
+                assignees: vec!["linus".into()],
+                milestone: None,
+                labels: vec!["feature".into()],
+                blocked_by: vec![1, 2, 7],
+                url: "https://example.test/o/r/issues/3".into(),
+            },
+            RawIssue {
+                number: 4,
+                title: "Inversion target".into(),
+                body: "Blocked by #8".into(),
+                state: IssueState::Open,
+                assignees: vec![],
+                milestone: Some("M2".into()),
+                labels: vec!["planning".into()],
+                blocked_by: vec![3, 8],
+                url: "https://example.test/o/r/issues/4".into(),
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn fetch_maps_the_first_graphql_error_to_parse() {
+    let server = MockServer::start().await;
+    mount_graphql_response(
+        &server,
+        json!({
+            "data": null,
+            "errors": [
+                { "message": "first failure" },
+                { "message": "second failure" }
+            ]
+        }),
+    )
+    .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    match error {
+        ProviderError::Parse(message) => assert_eq!(message, "first failure"),
+        other => panic!("expected Parse error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn fetch_prioritizes_the_first_graphql_error_over_malformed_data() {
+    let server = MockServer::start().await;
+    mount_graphql_response(
+        &server,
+        json!({
+            "data": {
+                "repository": {
+                    "issues": {
+                        "nodes": [{ "number": "not a number" }]
+                    }
+                }
+            },
+            "errors": [
+                { "message": "first failure" },
+                { "message": "second failure" }
+            ]
+        }),
+    )
+    .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    match error {
+        ProviderError::Parse(message) => assert_eq!(message, "first failure"),
+        other => panic!("expected Parse error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn fetch_maps_a_malformed_response_shape_to_parse() {
+    let server = MockServer::start().await;
+    mount_graphql_response(&server, json!({ "data": { "repository": null } })).await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    match error {
+        ProviderError::Parse(_) => {}
+        other => panic!("expected Parse error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn fetch_maps_invalid_json_to_parse() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{not json"))
+        .mount(&server)
+        .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    match error {
+        ProviderError::Parse(_) => {}
+        other => panic!("expected Parse error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn fetch_maps_transport_failures_to_http() {
+    let server = MockServer::start().await;
+    let base_uri = server.uri();
+    drop(server);
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &base_uri).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    match error {
+        ProviderError::Http(_) => {}
+        other => panic!("expected Http error, got {other:?}"),
+    }
+}
