@@ -10,14 +10,58 @@ struct Fence {
     length: usize,
 }
 
-fn fence_at_start(line: &str) -> Option<Fence> {
+fn fence_at_start(line: &str, closing: bool) -> Option<Fence> {
+    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+    if indentation > 3 {
+        return None;
+    }
+
+    let line = &line[indentation..];
     let marker = *line.as_bytes().first()?;
     if marker != b'`' && marker != b'~' {
         return None;
     }
 
     let length = line.bytes().take_while(|byte| *byte == marker).count();
-    (length >= 3).then_some(Fence { marker, length })
+    if length < 3 {
+        return None;
+    }
+
+    let suffix = &line[length..];
+    if closing {
+        suffix
+            .bytes()
+            .all(|byte| byte == b' ' || byte == b'\t')
+            .then_some(Fence { marker, length })
+    } else if marker == b'`' && suffix.contains('`') {
+        None
+    } else {
+        Some(Fence { marker, length })
+    }
+}
+
+fn strip_container_prefixes(mut line: &str) -> &str {
+    loop {
+        let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+        if indentation > 3 {
+            return line;
+        }
+
+        let content = &line[indentation..];
+        let Some(marker) = content.as_bytes().first().copied() else {
+            return line;
+        };
+        if marker != b'-' && marker != b'*' && marker != b'>' {
+            return line;
+        }
+
+        let rest = &content[1..];
+        if marker != b'>' && !rest.is_empty() && !rest.as_bytes()[0].is_ascii_whitespace() {
+            return line;
+        }
+
+        line = rest.strip_prefix([' ', '\t']).unwrap_or(rest);
+    }
 }
 
 fn strip_leading_markers(mut line: &str) -> &str {
@@ -43,20 +87,22 @@ pub fn scan(body: &str) -> TextRefs {
     let mut open_fence: Option<Fence> = None;
 
     for raw in body.lines() {
+        let fence_line = strip_container_prefixes(raw);
         let trimmed = raw.trim_start();
-        match (open_fence, fence_at_start(trimmed)) {
-            (None, Some(fence)) => {
+        match open_fence {
+            None if let Some(fence) = fence_at_start(fence_line, false) => {
                 open_fence = Some(fence);
                 continue;
             }
-            (Some(open), Some(close))
-                if close.marker == open.marker && close.length >= open.length =>
-            {
-                open_fence = None;
+            Some(open) => {
+                if fence_at_start(fence_line, true)
+                    .is_some_and(|close| close.marker == open.marker && close.length >= open.length)
+                {
+                    open_fence = None;
+                }
                 continue;
             }
-            (Some(_), _) => continue,
-            (None, None) => {}
+            None => {}
         }
 
         let stripped = strip_leading_markers(trimmed);
@@ -119,6 +165,47 @@ mod tests {
     #[test]
     fn closing_fence_must_be_at_least_as_long_as_opener() {
         let body = "````\nBlocked by #99\n```\nBlocked by #98\n````\nBlocked by #4\n";
+        let refs = scan(body);
+        assert_eq!(refs.blocked_by, vec![4]);
+    }
+
+    #[test]
+    fn ignores_fences_after_quote_and_list_prefixes() {
+        let body = "> ```\n> Blocked by #99\n> ```\n- ~~~~\n- Blocks #98\n- ~~~~\nBlocked by #4\nBlocks #3\n";
+        let refs = scan(body);
+        assert_eq!(refs.blocked_by, vec![4]);
+        assert_eq!(refs.blocks, vec![3]);
+    }
+
+    #[test]
+    fn ignores_fences_after_a_block_quote_marker_without_a_following_space() {
+        let body = ">```\n> Blocked by #99\n>```\nBlocked by #4\n";
+        let refs = scan(body);
+        assert_eq!(refs.blocked_by, vec![4]);
+    }
+
+    #[test]
+    fn does_not_treat_four_space_indented_fence_as_an_opening_fence() {
+        let refs = scan("    ```\nBlocked by #99\n");
+        assert_eq!(refs.blocked_by, vec![99]);
+    }
+
+    #[test]
+    fn does_not_treat_backtick_info_with_backticks_as_an_opening_fence() {
+        let refs = scan("``` rust`example\nBlocked by #99\n");
+        assert_eq!(refs.blocked_by, vec![99]);
+    }
+
+    #[test]
+    fn does_not_close_a_fence_when_non_whitespace_follows_the_marker_run() {
+        let body = "```\nBlocked by #99\n```not-a-close\nBlocked by #98\n```\nBlocked by #4\n";
+        let refs = scan(body);
+        assert_eq!(refs.blocked_by, vec![4]);
+    }
+
+    #[test]
+    fn does_not_close_a_fence_when_an_extra_carriage_return_precedes_crlf() {
+        let body = "```\nBlocked by #99\n```\r\r\nBlocked by #98\n```\nBlocked by #4\n";
         let refs = scan(body);
         assert_eq!(refs.blocked_by, vec![4]);
     }
