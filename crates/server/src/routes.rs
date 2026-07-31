@@ -1,0 +1,102 @@
+use std::sync::Arc;
+
+use axum::{
+    Json, Router,
+    extract::{Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::get,
+};
+use stellr_core::Model;
+use subtle::ConstantTimeEq;
+
+use crate::state::AppState;
+
+const TOKEN_COOKIE: &str = "stellr_token";
+
+pub fn router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/api/model", get(model))
+        .layer(middleware::from_fn_with_state(state.clone(), auth))
+        .with_state(state)
+}
+
+async fn model(State(state): State<Arc<AppState>>) -> Json<Model> {
+    Json(state.hub.borrow().clone())
+}
+
+async fn auth(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
+    let Some(expected) = state.token.as_deref() else {
+        return next.run(request).await;
+    };
+
+    if query_token_is_valid(request.uri().query(), expected) {
+        let mut response = next.run(request).await;
+        let cookie = format!("{TOKEN_COOKIE}={expected}; HttpOnly; SameSite=Strict; Path=/");
+        let Ok(cookie) = HeaderValue::from_str(&cookie) else {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        };
+        response.headers_mut().append(header::SET_COOKIE, cookie);
+        return response;
+    }
+
+    if cookie_token_is_valid(request.headers(), expected)
+        || bearer_token_is_valid(request.headers(), expected)
+    {
+        return next.run(request).await;
+    }
+
+    StatusCode::UNAUTHORIZED.into_response()
+}
+
+fn query_token_is_valid(query: Option<&str>, expected: &str) -> bool {
+    let Some(query) = query else {
+        return false;
+    };
+
+    let mut tokens = url::form_urlencoded::parse(query.as_bytes())
+        .filter_map(|(name, value)| (name == "token").then_some(value));
+    matches!(tokens.next(), Some(token) if token_matches(&token, expected))
+        && tokens.next().is_none()
+}
+
+fn cookie_token_is_valid(headers: &HeaderMap, expected: &str) -> bool {
+    let mut tokens = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|header| header.to_str().ok())
+        .flat_map(|cookies| cookies.split(';'))
+        .filter_map(|cookie| {
+            let (name, value) = cookie.trim().split_once('=')?;
+            (name == TOKEN_COOKIE).then_some(value)
+        });
+
+    matches!(tokens.next(), Some(token) if token_matches(token, expected))
+        && tokens.next().is_none()
+}
+
+fn bearer_token_is_valid(headers: &HeaderMap, expected: &str) -> bool {
+    let mut values = headers
+        .get_all(header::AUTHORIZATION)
+        .iter()
+        .filter_map(|header| header.to_str().ok());
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+
+    let mut parts = value.split_ascii_whitespace();
+    let (Some(scheme), Some(token)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    scheme.eq_ignore_ascii_case("Bearer")
+        && parts.next().is_none()
+        && token_matches(token, expected)
+}
+
+fn token_matches(candidate: &str, expected: &str) -> bool {
+    candidate.len() == expected.len() && bool::from(candidate.as_bytes().ct_eq(expected.as_bytes()))
+}
