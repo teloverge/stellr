@@ -12,19 +12,151 @@ fn repo() -> RepoRef {
 }
 
 fn page(nodes: Value) -> Value {
+    page_with_pagination(nodes, false, None)
+}
+
+fn page_with_pagination(nodes: Value, has_next_page: bool, end_cursor: Option<&str>) -> Value {
     json!({
         "data": {
             "repository": {
                 "issues": {
                     "pageInfo": {
-                        "hasNextPage": true,
-                        "endCursor": "NEXT"
+                        "hasNextPage": has_next_page,
+                        "endCursor": end_cursor
                     },
                     "nodes": nodes
                 }
             }
         }
     })
+}
+
+#[tokio::test]
+async fn fetch_follows_pagination_until_the_repository_is_complete() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_partial_json(json!({
+            "variables": {
+                "owner": "o",
+                "name": "r",
+                "cursor": "CUR1"
+            }
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page(json!([node(
+            1,
+            "Second page",
+            None,
+            "https://example.test/o/r/issues/1",
+            "OPEN",
+            None,
+            &[],
+            None,
+            &[],
+            &[],
+        )]))))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(page_with_pagination(
+                json!([node(
+                    2,
+                    "First page",
+                    None,
+                    "https://example.test/o/r/issues/2",
+                    "OPEN",
+                    None,
+                    &[],
+                    None,
+                    &[],
+                    &[],
+                )]),
+                true,
+                Some("CUR1"),
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let issues = provider.fetch(&repo()).await.unwrap();
+
+    assert_eq!(
+        issues.iter().map(|issue| issue.number).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+}
+
+#[tokio::test]
+async fn fetch_maps_a_rejected_token_to_auth() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({ "message": "Bad credentials" })),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GithubProvider::with_base_uri("rejected".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    match error {
+        ProviderError::Auth(message) => assert_eq!(message, "token rejected"),
+        other => panic!("expected Auth error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn fetch_maps_rate_limit_exhaustion_with_its_reset_time() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(
+            ResponseTemplate::new(403)
+                .insert_header("x-ratelimit-remaining", "0")
+                .insert_header("x-ratelimit-reset", "1753000000")
+                .set_body_json(json!({ "message": "API rate limit exceeded" })),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    assert!(matches!(
+        error,
+        ProviderError::RateLimited {
+            reset_epoch: Some(1_753_000_000)
+        }
+    ));
+}
+
+#[tokio::test]
+async fn fetch_maps_http_429_rate_limit_exhaustion() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("x-ratelimit-remaining", "0")
+                .insert_header("x-ratelimit-reset", "1753000001")
+                .set_body_json(json!({ "message": "secondary rate limit" })),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    assert!(matches!(
+        error,
+        ProviderError::RateLimited {
+            reset_epoch: Some(1_753_000_001)
+        }
+    ));
 }
 
 #[allow(clippy::too_many_arguments)]
