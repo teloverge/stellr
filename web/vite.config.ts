@@ -4,6 +4,9 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [tailwindcss(), svelte()],
+  resolve: {
+    conditions: ['browser'],
+  },
   server: {
     proxy: {
       '/api': {
@@ -17,5 +20,6 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    setupFiles: ['./src/lib/starmap/test-setup.ts'],
   },
 })

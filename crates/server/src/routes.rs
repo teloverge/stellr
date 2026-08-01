@@ -1,8 +1,11 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
-    extract::{Request, State},
+    extract::{
+        Request, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -14,16 +17,81 @@ use subtle::ConstantTimeEq;
 use crate::state::AppState;
 
 const TOKEN_COOKIE: &str = "stellr_token";
+const CONTROL_SEND_DEADLINE: Duration = Duration::from_secs(1);
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/model", get(model))
+        .route("/ws/control", get(control_ws))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
 }
 
 async fn model(State(state): State<Arc<AppState>>) -> Json<Model> {
     Json(state.hub.borrow().clone())
+}
+
+async fn control_ws(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> impl IntoResponse {
+    let receiver = state.hub.subscribe();
+    ws.on_upgrade(move |socket| control_loop(socket, receiver))
+}
+
+async fn control_loop(mut socket: WebSocket, mut receiver: tokio::sync::watch::Receiver<Model>) {
+    if !send_snapshot(&mut socket, &mut receiver).await {
+        return;
+    }
+
+    loop {
+        tokio::select! {
+            changed = receiver.changed() => {
+                if changed.is_err() {
+                    let _ = send_watch_closure(socket.send(Message::Close(None))).await;
+                    return;
+                }
+                if !send_snapshot(&mut socket, &mut receiver).await {
+                    return;
+                }
+            }
+            incoming = socket.recv() => {
+                match incoming {
+                    None | Some(Err(_)) => return,
+                    Some(Ok(Message::Close(_))) => {
+                        // One more read lets tungstenite flush its automatic close reply.
+                        let _ = socket.recv().await;
+                        return;
+                    }
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
+    }
+}
+
+async fn send_snapshot(
+    socket: &mut WebSocket,
+    receiver: &mut tokio::sync::watch::Receiver<Model>,
+) -> bool {
+    let Ok(snapshot) = serde_json::to_string(&*receiver.borrow_and_update()) else {
+        return false;
+    };
+    send_with_deadline(socket.send(Message::Text(snapshot.into()))).await
+}
+
+async fn send_with_deadline<F, E>(send: F) -> bool
+where
+    F: Future<Output = Result<(), E>>,
+{
+    matches!(
+        tokio::time::timeout(CONTROL_SEND_DEADLINE, send).await,
+        Ok(Ok(()))
+    )
+}
+
+async fn send_watch_closure<F, E>(close: F) -> bool
+where
+    F: Future<Output = Result<(), E>>,
+{
+    send_with_deadline(close).await
 }
 
 async fn auth(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
@@ -99,4 +167,21 @@ fn bearer_token_is_valid(headers: &HeaderMap, expected: &str) -> bool {
 
 fn token_matches(candidate: &str, expected: &str) -> bool {
     candidate.len() == expected.len() && bool::from(candidate.as_bytes().ct_eq(expected.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future;
+
+    use super::{send_watch_closure, send_with_deadline};
+
+    #[tokio::test]
+    async fn send_deadline_drops_a_stalled_send() {
+        assert!(!send_with_deadline(future::pending::<Result<(), ()>>()).await);
+    }
+
+    #[tokio::test]
+    async fn watch_closure_close_is_deadline_bounded() {
+        assert!(!send_watch_closure(future::pending::<Result<(), ()>>()).await);
+    }
 }
