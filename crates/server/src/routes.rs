@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc, time::Duration};
 
 use axum::{
     Json, Router,
@@ -17,6 +17,7 @@ use subtle::ConstantTimeEq;
 use crate::state::AppState;
 
 const TOKEN_COOKIE: &str = "stellr_token";
+const CONTROL_SEND_DEADLINE: Duration = Duration::from_secs(1);
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -73,7 +74,17 @@ async fn send_snapshot(
     let Ok(snapshot) = serde_json::to_string(&*receiver.borrow_and_update()) else {
         return false;
     };
-    socket.send(Message::Text(snapshot.into())).await.is_ok()
+    send_with_deadline(socket.send(Message::Text(snapshot.into()))).await
+}
+
+async fn send_with_deadline<F, E>(send: F) -> bool
+where
+    F: Future<Output = Result<(), E>>,
+{
+    matches!(
+        tokio::time::timeout(CONTROL_SEND_DEADLINE, send).await,
+        Ok(Ok(()))
+    )
 }
 
 async fn auth(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
@@ -149,4 +160,16 @@ fn bearer_token_is_valid(headers: &HeaderMap, expected: &str) -> bool {
 
 fn token_matches(candidate: &str, expected: &str) -> bool {
     candidate.len() == expected.len() && bool::from(candidate.as_bytes().ct_eq(expected.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future;
+
+    use super::send_with_deadline;
+
+    #[tokio::test]
+    async fn send_deadline_drops_a_stalled_send() {
+        assert!(!send_with_deadline(future::pending::<Result<(), ()>>()).await);
+    }
 }
