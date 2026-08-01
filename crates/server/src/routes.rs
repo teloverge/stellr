@@ -45,7 +45,7 @@ async fn control_loop(mut socket: WebSocket, mut receiver: tokio::sync::watch::R
         tokio::select! {
             changed = receiver.changed() => {
                 if changed.is_err() {
-                    let _ = socket.send(Message::Close(None)).await;
+                    let _ = send_watch_closure(socket.send(Message::Close(None))).await;
                     return;
                 }
                 if !send_snapshot(&mut socket, &mut receiver).await {
@@ -85,6 +85,13 @@ where
         tokio::time::timeout(CONTROL_SEND_DEADLINE, send).await,
         Ok(Ok(()))
     )
+}
+
+async fn send_watch_closure<F, E>(close: F) -> bool
+where
+    F: Future<Output = Result<(), E>>,
+{
+    send_with_deadline(close).await
 }
 
 async fn auth(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
@@ -166,10 +173,15 @@ fn token_matches(candidate: &str, expected: &str) -> bool {
 mod tests {
     use std::future;
 
-    use super::send_with_deadline;
+    use super::{send_watch_closure, send_with_deadline};
 
     #[tokio::test]
     async fn send_deadline_drops_a_stalled_send() {
         assert!(!send_with_deadline(future::pending::<Result<(), ()>>()).await);
+    }
+
+    #[tokio::test]
+    async fn watch_closure_close_is_deadline_bounded() {
+        assert!(!send_watch_closure(future::pending::<Result<(), ()>>()).await);
     }
 }
