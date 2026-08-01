@@ -30,6 +30,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/spaces/{id}", delete(remove_space))
         .route("/api/spaces/{id}/refresh", post(refresh_space))
         .route("/ws/control", get(control_ws))
+        .fallback(crate::embed::static_handler)
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
 }

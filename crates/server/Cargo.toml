@@ -9,6 +9,8 @@ repository.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 chrono = "0.4"
 directories = "6"
+mime_guess = "2"
+rust-embed = "8"
 serde.workspace = true
 serde_json.workspace = true
 stellr-core = { path = "../core" }

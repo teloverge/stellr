@@ -73,6 +73,49 @@ fn model_with_space(id: &str) -> Model {
     }
 }
 
+#[tokio::test]
+async fn embedded_ui_serves_the_built_index_at_the_root() {
+    let base = serve(state(None)).await;
+
+    let response = reqwest::get(format!("{base}/")).await.unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .unwrap(),
+        "text/html"
+    );
+    assert!(response.text().await.unwrap().contains("<div id=\"app\">"));
+}
+
+#[tokio::test]
+async fn embedded_ui_uses_the_index_for_spa_paths() {
+    let base = serve(state(None)).await;
+
+    let response = reqwest::get(format!("{base}/spaces/o-r")).await.unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .unwrap(),
+        "text/html"
+    );
+    assert!(response.text().await.unwrap().contains("<div id=\"app\">"));
+}
+
+#[tokio::test]
+async fn embedded_ui_does_not_mask_unknown_api_paths() {
+    let base = serve(state(None)).await;
+
+    let response = reqwest::get(format!("{base}/api/unknown")).await.unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
 struct StubProvider(Vec<RawIssue>);
 
 #[async_trait::async_trait]
