@@ -3,18 +3,22 @@ use std::{future::Future, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     extract::{
-        Request, State,
+        Path, Request, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{delete, get, post},
 };
+use serde::{Deserialize, Serialize};
 use stellr_core::Model;
 use subtle::ConstantTimeEq;
 
-use crate::state::AppState;
+use crate::{
+    spaces::{SpaceEntry, detect_repo},
+    state::AppState,
+};
 
 const TOKEN_COOKIE: &str = "stellr_token";
 const CONTROL_SEND_DEADLINE: Duration = Duration::from_secs(1);
@@ -22,9 +26,118 @@ const CONTROL_SEND_DEADLINE: Duration = Duration::from_secs(1);
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/model", get(model))
+        .route("/api/spaces", post(add_space))
+        .route("/api/spaces/{id}", delete(remove_space))
+        .route("/api/spaces/{id}/refresh", post(refresh_space))
         .route("/ws/control", get(control_ws))
         .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
+}
+
+async fn remove_space(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let mut spaces = state.spaces.lock().await;
+    let Some(entry) = spaces
+        .entries()
+        .iter()
+        .find(|entry| entry.id == id)
+        .cloned()
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    spaces.remove(&id);
+    if let Err(error) = spaces.save() {
+        let _ = spaces.add(entry);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not save spaces: {error}"),
+        )
+            .into_response();
+    }
+    drop(spaces);
+    state.refresh.notify_one();
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
+struct AddSpaceRequest {
+    path: Option<std::path::PathBuf>,
+    repo: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AddSpaceResponse {
+    id: String,
+}
+
+async fn add_space(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<AddSpaceRequest>,
+) -> Response {
+    let entry = match (request.path, request.repo) {
+        (Some(path), None) => match detect_repo(&path) {
+            Ok(repo) => SpaceEntry::new(repo, Some(path)),
+            Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
+        },
+        (None, Some(repo)) => match parse_repo_slug(&repo) {
+            Some(repo) => SpaceEntry::new(repo, None),
+            None => {
+                return (StatusCode::BAD_REQUEST, "repo must be in owner/name form")
+                    .into_response();
+            }
+        },
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "provide exactly one of path or repo",
+            )
+                .into_response();
+        }
+    };
+    let id = entry.id.clone();
+    let mut spaces = state.spaces.lock().await;
+    if let Err(error) = spaces.add(entry) {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+    if let Err(error) = spaces.save() {
+        spaces.remove(&id);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not save spaces: {error}"),
+        )
+            .into_response();
+    }
+    drop(spaces);
+
+    Json(AddSpaceResponse { id }).into_response()
+}
+
+async fn refresh_space(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> StatusCode {
+    if !state
+        .spaces
+        .lock()
+        .await
+        .entries()
+        .iter()
+        .any(|entry| entry.id == id)
+    {
+        return StatusCode::NOT_FOUND;
+    }
+    state.refresh.notify_one();
+    StatusCode::OK
+}
+
+fn parse_repo_slug(slug: &str) -> Option<stellr_core::RepoRef> {
+    let mut parts = slug.split('/');
+    let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+        return None;
+    };
+    if owner.is_empty() || name.is_empty() {
+        return None;
+    }
+    Some(stellr_core::RepoRef {
+        owner: owner.into(),
+        name: name.into(),
+    })
 }
 
 async fn model(State(state): State<Arc<AppState>>) -> Json<Model> {

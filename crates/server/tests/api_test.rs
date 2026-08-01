@@ -1,8 +1,20 @@
-use std::sync::Arc;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use futures_util::{SinkExt, StreamExt};
-use stellr_core::{Model, SpaceModel};
-use stellr_server::state::AppState;
+use serde_json::json;
+use stellr_core::{IssueState, Model, Provider, ProviderError, RawIssue, RepoRef, SpaceModel};
+use stellr_github::cache::{Cache, Snapshot};
+use stellr_server::{
+    poll::spawn_poller,
+    spaces::{SpaceEntry, SpaceStore},
+    state::AppState,
+};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 async fn serve(state: Arc<AppState>) -> String {
@@ -31,9 +43,15 @@ async fn serve_until_shutdown(state: Arc<AppState>) -> (String, tokio::sync::one
 
 fn state(token: Option<&str>) -> Arc<AppState> {
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    state_with_hub(hub, token)
+}
+
+fn state_with_hub(hub: tokio::sync::watch::Sender<Model>, token: Option<&str>) -> Arc<AppState> {
     Arc::new(AppState {
         hub,
         token: token.map(str::to_owned),
+        spaces: tokio::sync::Mutex::new(SpaceStore::load(std::path::PathBuf::new())),
+        refresh: Arc::new(tokio::sync::Notify::new()),
     })
 }
 
@@ -53,6 +71,380 @@ fn model_with_space(id: &str) -> Model {
             error: None,
         }],
     }
+}
+
+struct StubProvider(Vec<RawIssue>);
+
+#[async_trait::async_trait]
+impl Provider for StubProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+        Ok(self.0.clone())
+    }
+}
+
+struct FailingProvider;
+
+#[async_trait::async_trait]
+impl Provider for FailingProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+        Err(ProviderError::Http("offline".into()))
+    }
+}
+
+struct SequenceProvider(AtomicUsize);
+
+#[async_trait::async_trait]
+impl Provider for SequenceProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+        if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok(vec![]);
+        }
+        Ok(vec![RawIssue {
+            number: 9,
+            title: "Arrived on the second tick".into(),
+            body: String::new(),
+            state: IssueState::Open,
+            assignees: vec![],
+            milestone: None,
+            labels: vec![],
+            blocked_by: vec![],
+            url: "https://github.com/o/r/issues/9".into(),
+        }])
+    }
+}
+
+#[tokio::test]
+async fn add_repo_space_then_refresh_populates_the_model() {
+    let directory = tempfile::tempdir().unwrap();
+    let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(SpaceStore::load(directory.path().join("spaces.toml"))),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+    });
+    let poller = spawn_poller(
+        state.clone(),
+        Arc::new(StubProvider(vec![RawIssue {
+            number: 1,
+            title: "Ready work".into(),
+            body: String::new(),
+            state: IssueState::Open,
+            assignees: vec![],
+            milestone: None,
+            labels: vec![],
+            blocked_by: vec![],
+            url: "https://github.com/o/r/issues/1".into(),
+        }])),
+        Cache::new(directory.path().join("cache")),
+        Duration::from_secs(60),
+    );
+    tokio::time::timeout(Duration::from_secs(1), receiver.changed())
+        .await
+        .expect("the startup poll should complete")
+        .expect("the model hub should remain open");
+    let base = serve(state).await;
+    let client = reqwest::Client::new();
+
+    let added = client
+        .post(format!("{base}/api/spaces"))
+        .json(&json!({ "repo": "o/r" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(added.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        added.json::<serde_json::Value>().await.unwrap(),
+        json!({ "id": "o-r" })
+    );
+
+    let refreshed = client
+        .post(format!("{base}/api/spaces/o-r/refresh"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refreshed.status(), reqwest::StatusCode::OK);
+
+    let model = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let model = client
+                .get(format!("{base}/api/model"))
+                .send()
+                .await
+                .unwrap()
+                .json::<Model>()
+                .await
+                .unwrap();
+            if model
+                .spaces
+                .first()
+                .is_some_and(|space| space.stars.len() == 1)
+            {
+                break model;
+            }
+        }
+    })
+    .await
+    .expect("refresh should publish the derived model");
+
+    assert_eq!(model.spaces[0].id, "o-r");
+    assert_eq!(model.spaces[0].repo, "o/r");
+    assert_eq!(model.spaces[0].stars[0].number, 1);
+    poller.abort();
+}
+
+#[tokio::test]
+async fn failed_sync_publishes_the_cached_model_as_stale_with_the_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let repo = RepoRef {
+        owner: "o".into(),
+        name: "r".into(),
+    };
+    let cache = Cache::new(directory.path().join("cache"));
+    cache
+        .store(
+            &repo,
+            &Snapshot {
+                issues: vec![RawIssue {
+                    number: 7,
+                    title: "Cached work".into(),
+                    body: String::new(),
+                    state: IssueState::Open,
+                    assignees: vec![],
+                    milestone: None,
+                    labels: vec![],
+                    blocked_by: vec![],
+                    url: "https://github.com/o/r/issues/7".into(),
+                }],
+                synced_at: 1_753_000_000,
+            },
+        )
+        .unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces.add(SpaceEntry::new(repo, None)).unwrap();
+    spaces.save().unwrap();
+    let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+    });
+    let poller = spawn_poller(
+        state.clone(),
+        Arc::new(FailingProvider),
+        cache,
+        Duration::from_secs(60),
+    );
+    let base = serve(state).await;
+    let client = reqwest::Client::new();
+
+    let model = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let model = client
+                .get(format!("{base}/api/model"))
+                .send()
+                .await
+                .unwrap()
+                .json::<Model>()
+                .await
+                .unwrap();
+            if !model.spaces.is_empty() {
+                break model;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("failed sync should still publish the cached model");
+
+    assert_eq!(model.spaces[0].stars[0].number, 7);
+    assert_eq!(model.spaces[0].synced_at, Some(1_753_000_000));
+    assert!(model.spaces[0].stale);
+    assert_eq!(
+        model.spaces[0].error.as_deref(),
+        Some("HTTP request failed: offline")
+    );
+    poller.abort();
+}
+
+#[tokio::test]
+async fn successful_sync_stays_fresh_when_the_cache_cannot_be_written() {
+    let directory = tempfile::tempdir().unwrap();
+    let cache_root = directory.path().join("cache");
+    std::fs::File::create(&cache_root).unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+    });
+    let poller = spawn_poller(
+        state,
+        Arc::new(StubProvider(vec![])),
+        Cache::new(cache_root),
+        Duration::from_secs(60),
+    );
+
+    tokio::time::timeout(Duration::from_secs(1), receiver.changed())
+        .await
+        .expect("the startup poll should complete")
+        .expect("the model hub should remain open");
+    let model = receiver.borrow_and_update().clone();
+
+    assert!(!model.spaces[0].stale);
+    assert_eq!(model.spaces[0].error, None);
+    poller.abort();
+}
+
+#[tokio::test]
+async fn delete_space_removes_the_persisted_entry() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("spaces.toml");
+    let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(SpaceStore::load(file.clone())),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+    });
+    let base = serve(state).await;
+    let client = reqwest::Client::new();
+    assert_eq!(
+        client
+            .post(format!("{base}/api/spaces"))
+            .json(&json!({ "repo": "o/r" }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::OK
+    );
+
+    let deleted = client
+        .delete(format!("{base}/api/spaces/o-r"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(deleted.status(), reqwest::StatusCode::NO_CONTENT);
+    assert!(SpaceStore::load(file).entries().is_empty());
+}
+
+#[tokio::test]
+async fn add_path_space_detects_and_persists_the_github_origin() {
+    let directory = tempfile::tempdir().unwrap();
+    let repo_path = directory.path().join("repo");
+    std::fs::create_dir(&repo_path).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&repo_path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:owner/repository.git",
+            ])
+            .current_dir(&repo_path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let file = directory.path().join("spaces.toml");
+    let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(SpaceStore::load(file.clone())),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+    });
+    let base = serve(state).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/spaces"))
+        .json(&json!({ "path": repo_path }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap(),
+        json!({ "id": "owner-repository" })
+    );
+    let reloaded = SpaceStore::load(file);
+    assert_eq!(reloaded.entries().len(), 1);
+    assert_eq!(reloaded.entries()[0].repo.slug(), "owner/repository");
+    assert_eq!(
+        reloaded.entries()[0].path.as_deref(),
+        Some(repo_path.as_path())
+    );
+}
+
+#[tokio::test]
+async fn poller_repeats_on_the_configured_interval() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+    });
+    let poller = spawn_poller(
+        state.clone(),
+        Arc::new(SequenceProvider(AtomicUsize::new(0))),
+        Cache::new(directory.path().join("cache")),
+        Duration::from_millis(50),
+    );
+
+    let model = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            receiver.changed().await.unwrap();
+            let model = receiver.borrow_and_update().clone();
+            if model
+                .spaces
+                .first()
+                .is_some_and(|space| !space.stars.is_empty())
+            {
+                break model;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the second interval tick should publish the new issue");
+
+    assert_eq!(model.spaces[0].stars[0].number, 9);
+    poller.abort();
 }
 
 #[tokio::test]
@@ -76,11 +468,7 @@ async fn control_socket_sends_current_snapshot_on_connect() {
 #[tokio::test]
 async fn control_socket_reconnect_starts_with_latest_non_empty_snapshot() {
     let (hub, _receiver) = tokio::sync::watch::channel(model_with_space("before-first-connect"));
-    let base = serve(Arc::new(AppState {
-        hub: hub.clone(),
-        token: None,
-    }))
-    .await;
+    let base = serve(state_with_hub(hub.clone(), None)).await;
     let ws_url = control_url(&base);
 
     let (mut first_socket, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
@@ -116,11 +504,7 @@ async fn control_socket_reconnect_starts_with_latest_non_empty_snapshot() {
 #[tokio::test]
 async fn control_socket_sends_fresh_snapshot_on_model_change() {
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
-    let base = serve(Arc::new(AppState {
-        hub: hub.clone(),
-        token: None,
-    }))
-    .await;
+    let base = serve(state_with_hub(hub.clone(), None)).await;
     let ws_url = control_url(&base);
     let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
 
@@ -141,11 +525,7 @@ async fn control_socket_sends_fresh_snapshot_on_model_change() {
 #[tokio::test]
 async fn control_socket_closes_quietly_when_watch_channel_closes() {
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
-    let (base, shutdown) = serve_until_shutdown(Arc::new(AppState {
-        hub: hub.clone(),
-        token: None,
-    }))
-    .await;
+    let (base, shutdown) = serve_until_shutdown(state_with_hub(hub.clone(), None)).await;
     let ws_url = control_url(&base);
     let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
 
@@ -168,11 +548,7 @@ async fn control_socket_closes_quietly_when_watch_channel_closes() {
 #[tokio::test]
 async fn control_socket_ignores_client_data_and_keeps_streaming_snapshots() {
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
-    let base = serve(Arc::new(AppState {
-        hub: hub.clone(),
-        token: None,
-    }))
-    .await;
+    let base = serve(state_with_hub(hub.clone(), None)).await;
     let ws_url = control_url(&base);
     let (mut socket, _) = tokio_tungstenite::connect_async(ws_url).await.unwrap();
 
