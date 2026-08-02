@@ -143,7 +143,7 @@ export function computeLayout(nodes: LayoutNode[]): Record<number, Point> {
       p.y += (p.y / d) * f
     }
   }
-  return placeDirectChildClusters(sorted, pts)
+  return placeDirectChildClusters(sorted, pts, edges)
 }
 
 // A stable signature of a map's *structure* — its ticket numbers and edges, not

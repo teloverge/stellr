@@ -11,6 +11,11 @@ export interface QuadraticCurve {
   bow: number
 }
 
+export interface Segment {
+  start: Point
+  end: Point
+}
+
 export interface MiniEdgeCurveInput {
   edge: WorkflowEdge
   start: Point
@@ -56,4 +61,68 @@ export function miniEdgeCurve({
     end: { ...end },
     bow,
   }
+}
+
+export function quadraticPoint(curve: QuadraticCurve, amount: number): Point {
+  const t = Math.max(0, Math.min(1, amount))
+  const inverse = 1 - t
+  return {
+    x:
+      inverse * inverse * curve.start.x +
+      2 * inverse * t * curve.control.x +
+      t * t * curve.end.x,
+    y:
+      inverse * inverse * curve.start.y +
+      2 * inverse * t * curve.control.y +
+      t * t * curve.end.y,
+  }
+}
+
+export function sampleQuadratic(curve: QuadraticCurve, segments = 16): Point[] {
+  const count = Math.max(1, Math.floor(segments))
+  return Array.from({ length: count + 1 }, (_, index) => quadraticPoint(curve, index / count))
+}
+
+export function pointToSegmentDistance(point: Point, segment: Segment): number {
+  const dx = segment.end.x - segment.start.x
+  const dy = segment.end.y - segment.start.y
+  const lengthSquared = dx * dx + dy * dy
+  if (lengthSquared === 0) return Math.hypot(point.x - segment.start.x, point.y - segment.start.y)
+  const projection = Math.max(
+    0,
+    Math.min(
+      1,
+      ((point.x - segment.start.x) * dx + (point.y - segment.start.y) * dy) / lengthSquared,
+    ),
+  )
+  return Math.hypot(
+    point.x - (segment.start.x + projection * dx),
+    point.y - (segment.start.y + projection * dy),
+  )
+}
+
+export function curveToSegmentClearance(curve: QuadraticCurve, segment: Segment): number {
+  return Math.min(
+    ...sampleQuadratic(curve).map((point) => pointToSegmentDistance(point, segment)),
+  )
+}
+
+function orientation(a: Point, b: Point, c: Point): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+function segmentsCross(left: Segment, right: Segment): boolean {
+  const abC = orientation(left.start, left.end, right.start)
+  const abD = orientation(left.start, left.end, right.end)
+  const cdA = orientation(right.start, right.end, left.start)
+  const cdB = orientation(right.start, right.end, left.end)
+  return abC * abD < 0 && cdA * cdB < 0
+}
+
+export function curveCrossesSegment(curve: QuadraticCurve, segment: Segment): boolean {
+  const points = sampleQuadratic(curve)
+  for (let index = 1; index < points.length; index++) {
+    if (segmentsCross({ start: points[index - 1], end: points[index] }, segment)) return true
+  }
+  return false
 }
