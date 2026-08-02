@@ -12,6 +12,8 @@ import {
 
 export const FIRST_ARC_RADIUS = 92
 export const FIRST_ARC_CAPACITY = 5
+export const SECOND_ARC_RADIUS = 126
+export const SECOND_ARC_CAPACITY = 8
 export const ARC_STEP = Math.PI / 6
 export const MIN_CHILD_CENTER_CLEARANCE = 44
 export const UNRELATED_NODE_CLEARANCE = 42
@@ -29,6 +31,11 @@ interface Candidate {
 interface CurveWithEdge {
   edge: WorkflowEdge
   curve: QuadraticCurve
+}
+
+interface SegmentObstacle {
+  edge: Pick<WorkflowEdge, 'from' | 'to'>
+  segment: Segment
 }
 
 function siblingOrder(children: LayoutNode[]): LayoutNode[] {
@@ -72,15 +79,90 @@ function startingSector(parentNumber: number): number {
   return (Math.imul(parentNumber, 0x9e3779b1) >>> 0) % CANDIDATE_SECTORS
 }
 
-function arcPoints(parent: Point, children: LayoutNode[], sector: number): Record<number, Point> {
+function hierarchyDepth(
+  number: number,
+  byNumber: Map<number, LayoutNode>,
+  cache: Map<number, number | null>,
+  visiting = new Set<number>(),
+): number | null {
+  if (cache.has(number)) return cache.get(number) ?? null
+  if (visiting.has(number)) {
+    cache.set(number, null)
+    return null
+  }
+  const node = byNumber.get(number)
+  if (!node) {
+    cache.set(number, 0)
+    return 0
+  }
+  const parent = node.parentIssue
+  if (parent === null || parent === number || !byNumber.has(parent)) {
+    cache.set(number, 0)
+    return 0
+  }
+
+  visiting.add(number)
+  const parentDepth = hierarchyDepth(parent, byNumber, cache, visiting)
+  visiting.delete(number)
+  const depth = parentDepth === null ? null : parentDepth + 1
+  cache.set(number, depth)
+  return depth
+}
+
+function centeredOffsets(count: number): number[] {
+  return Array.from({ length: count }, (_, index) => (index - (count - 1) / 2) * ARC_STEP)
+}
+
+function staggeredSecondArcOffsets(count: number): number[] {
+  const sideCount = count / 2
+  return [
+    ...Array.from({ length: sideCount }, (_, index) => -(sideCount - index) * ARC_STEP),
+    ...Array.from({ length: sideCount }, (_, index) => (index + 1) * ARC_STEP),
+  ]
+}
+
+function firstArcCount(childCount: number): number {
+  if (childCount <= FIRST_ARC_CAPACITY) return childCount
+  return childCount % 2 === 0 ? FIRST_ARC_CAPACITY - 1 : FIRST_ARC_CAPACITY
+}
+
+function arcPoints(
+  parent: Point,
+  children: LayoutNode[],
+  sector: number,
+  expanded = false,
+): Record<number, Point> {
   const childPoints: Record<number, Point> = {}
   const centerAngle = (sector / CANDIDATE_SECTORS) * Math.PI * 2
+  if (expanded && children.length <= FIRST_ARC_CAPACITY) {
+    const offsets = centeredOffsets(children.length)
+    for (let index = 0; index < offsets.length; index++) {
+      const offset = offsets[index]
+      const angle = centerAngle + offset
+      childPoints[children[index].num] = {
+        x: parent.x + Math.cos(angle) * SECOND_ARC_RADIUS,
+        y: parent.y + Math.sin(angle) * SECOND_ARC_RADIUS,
+      }
+    }
+    return childPoints
+  }
+
+  const firstCount = firstArcCount(children.length)
+  const secondCount = children.length - firstCount
+  const firstOffsets = centeredOffsets(firstCount)
+  const secondOffsets = firstCount % 2 === 0
+    ? staggeredSecondArcOffsets(secondCount)
+    : centeredOffsets(secondCount)
+  const slots = [
+    ...firstOffsets.map((offset) => ({ offset, radius: FIRST_ARC_RADIUS })),
+    ...secondOffsets.map((offset) => ({ offset, radius: SECOND_ARC_RADIUS })),
+  ]
+
   for (let index = 0; index < children.length; index++) {
-    const offset = (index - (children.length - 1) / 2) * ARC_STEP
-    const angle = centerAngle + offset
+    const angle = centerAngle + slots[index].offset
     childPoints[children[index].num] = {
-      x: parent.x + Math.cos(angle) * FIRST_ARC_RADIUS,
-      y: parent.y + Math.sin(angle) * FIRST_ARC_RADIUS,
+      x: parent.x + Math.cos(angle) * slots[index].radius,
+      y: parent.y + Math.sin(angle) * slots[index].radius,
     }
   }
   return childPoints
@@ -88,6 +170,10 @@ function arcPoints(parent: Point, children: LayoutNode[], sector: number): Recor
 
 function distance(left: Point, right: Point): number {
   return Math.hypot(left.x - right.x, left.y - right.y)
+}
+
+function isFinitePoint(point: Point | undefined): point is Point {
+  return point !== undefined && Number.isFinite(point.x) && Number.isFinite(point.y)
 }
 
 function clusterCurves(
@@ -124,7 +210,7 @@ function dependencyObstacles(
   edges: Edge[],
   clusterNumbers: Set<number>,
   points: Record<number, Point>,
-): Array<{ edge: Edge; segment: Segment }> {
+): SegmentObstacle[] {
   return edges.flatMap((edge) => {
     if (clusterNumbers.has(edge.from) && clusterNumbers.has(edge.to)) return []
     const start = points[edge.from]
@@ -146,13 +232,14 @@ function evaluateCandidate(
   parentPoint: Point,
   childPoints: Record<number, Point>,
   currentPoints: Record<number, Point>,
+  placedCurveObstacles: SegmentObstacle[],
 ): Candidate {
   const clusterNumbers = new Set([parentNode.num, ...children.map((child) => child.num)])
   const proposedPoints = { ...currentPoints, ...childPoints }
   const unrelatedPoints = nodes
     .filter((node) => !clusterNumbers.has(node.num))
     .map((node) => proposedPoints[node.num])
-    .filter((point): point is Point => point !== undefined)
+    .filter(isFinitePoint)
   const childPointList = children.map((child) => childPoints[child.num])
   const childClearances: number[] = []
   for (let left = 0; left < childPointList.length; left++) {
@@ -168,7 +255,10 @@ function evaluateCandidate(
   const curveNodeClearances = curves.flatMap(({ curve }) =>
     sampleQuadratic(curve).flatMap((point) => unrelatedPoints.map((other) => distance(point, other))),
   )
-  const obstacles = dependencyObstacles(edges, clusterNumbers, proposedPoints)
+  const obstacles = [
+    ...dependencyObstacles(edges, clusterNumbers, proposedPoints),
+    ...placedCurveObstacles,
+  ]
   const dependencyClearances: number[] = []
   let crossings = 0
   for (const { edge: miniEdge, curve } of curves) {
@@ -225,7 +315,9 @@ export function placeDirectChildClusters(
   ) as Record<number, Point>
   const present = new Set(nodes.map((node) => node.num))
   const byNumber = new Map(nodes.map((node) => [node.num, node]))
+  const depthCache = new Map<number, number | null>()
   const childrenByParent = new Map<number, LayoutNode[]>()
+  const placedCurveObstacles: SegmentObstacle[] = []
 
   for (const node of nodes) {
     const parent = node.parentIssue
@@ -235,29 +327,64 @@ export function placeDirectChildClusters(
     childrenByParent.set(parent, children)
   }
 
-  for (const [parentNumber, children] of [...childrenByParent].sort(
-    ([left], [right]) => left - right,
-  )) {
+  const orderedGroups = [...childrenByParent].flatMap(([parentNumber, children]) => {
+    const depth = hierarchyDepth(parentNumber, byNumber, depthCache)
+    return depth === null ? [] : [{ parentNumber, children, depth }]
+  })
+    .sort((left, right) => left.depth - right.depth || left.parentNumber - right.parentNumber)
+
+  for (const { parentNumber, children } of orderedGroups) {
     const parent = points[parentNumber]
     const parentNode = byNumber.get(parentNumber)
-    if (!parent || !parentNode || children.length === 0 || children.length > FIRST_ARC_CAPACITY) continue
+    if (!isFinitePoint(parent) || !parentNode || children.length === 0) continue
     const ordered = siblingOrder(children)
+      .filter((child) => isFinitePoint(broadPoints[child.num]))
+      .slice(0, FIRST_ARC_CAPACITY + SECOND_ARC_CAPACITY)
+    if (ordered.length === 0) continue
     const start = startingSector(parentNumber)
+    const candidates = (expanded: boolean) =>
+      Array.from({ length: CANDIDATE_SECTORS }, (_, offset) => {
+        const sector = (start + offset) % CANDIDATE_SECTORS
+        return evaluateCandidate(
+          nodes,
+          dependencyEdges,
+          parentNode,
+          ordered,
+          parent,
+          arcPoints(parent, ordered, sector, expanded),
+          points,
+          placedCurveObstacles,
+        )
+      })
+    const compactCandidates = candidates(false)
+    let pool = compactCandidates
+    if (
+      ordered.length <= FIRST_ARC_CAPACITY &&
+      !compactCandidates.some((candidate) => candidate.collisionFree)
+    ) {
+      pool = [...compactCandidates, ...candidates(true)]
+    }
     let selected: Candidate | null = null
-    for (let offset = 0; offset < CANDIDATE_SECTORS; offset++) {
-      const sector = (start + offset) % CANDIDATE_SECTORS
-      const candidate = evaluateCandidate(
-        nodes,
-        dependencyEdges,
+    for (const candidate of pool) {
+      if (isBetter(candidate, selected)) selected = candidate
+    }
+    if (selected) {
+      Object.assign(points, selected.childPoints)
+      for (const { edge, curve } of clusterCurves(
         parentNode,
         ordered,
         parent,
-        arcPoints(parent, ordered, sector),
-        points,
-      )
-      if (isBetter(candidate, selected)) selected = candidate
+        selected.childPoints,
+      )) {
+        const samples = sampleQuadratic(curve)
+        for (let index = 1; index < samples.length; index++) {
+          placedCurveObstacles.push({
+            edge,
+            segment: { start: samples[index - 1], end: samples[index] },
+          })
+        }
+      }
     }
-    if (selected) Object.assign(points, selected.childPoints)
   }
 
   return points

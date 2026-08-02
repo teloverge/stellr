@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Compacted native subissue workflows into deterministic parent-local arcs
+  that avoid unrelated nodes and dependency paths, with bounded overflow,
+  nested-cluster placement, and safe malformed-data fallbacks.
 - Added native GitHub subissue mini-graphs with directed parent-entry,
   sibling-sequence, and child-return arrows; violet dashed incomplete routes
   and rims; resolved completed grammar; and motion only on traversed
