@@ -2457,12 +2457,16 @@ dependencies = [
 name = "stellr-showcase"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "roxmltree",
  "serde",
  "serde_json",
  "stellr-core",
+ "stellr-github",
  "thiserror 2.0.19",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]

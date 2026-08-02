@@ -1,7 +1,12 @@
 //! Release-constellation artifacts for Stellr's README.
 
+mod github_source;
 mod story;
 
+pub use github_source::{
+    GithubReleaseHistorySource, LiveReleaseRequest, ReleaseHistoryError, ReleaseHistorySource,
+    ReleaseWindowStart,
+};
 pub use story::{
     ClosureReason, IssueSnapshot, IssueStatus, LifecycleEvent, LifecycleEventKind,
     MilestoneIdentity, NodeCoordinate, NormalizedLifecycleEvent, PreviousRelease, RecordedIssue,

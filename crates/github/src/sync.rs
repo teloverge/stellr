@@ -43,11 +43,13 @@ query FetchIssues($owner: String!, $name: String!, $cursor: String) {
 }
 "#;
 
-pub struct GithubProvider {
+/// Shared authenticated GraphQL transport with Stellr's typed error mapping.
+#[derive(Clone)]
+pub struct GithubGraphqlClient {
     client: Octocrab,
 }
 
-impl GithubProvider {
+impl GithubGraphqlClient {
     pub fn new(token: String) -> Result<Self, ProviderError> {
         Self::with_base_uri(token, DEFAULT_BASE_URI)
     }
@@ -62,6 +64,74 @@ impl GithubProvider {
             .map_err(|error| ProviderError::Http(error.to_string()))?;
 
         Ok(Self { client })
+    }
+
+    pub async fn post_value<T: Serialize + ?Sized>(
+        &self,
+        request: &T,
+    ) -> Result<Value, ProviderError> {
+        let response = self
+            .client
+            ._post("/graphql", Some(request))
+            .await
+            .map_err(map_octocrab_error)?;
+        if response.status().as_u16() == 401 {
+            return Err(ProviderError::Auth("token rejected".into()));
+        }
+        let status = response.status().as_u16();
+        let rate_limit_exhausted = response
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|value| value.to_str().ok())
+            == Some("0");
+        if matches!(status, 403 | 429) && rate_limit_exhausted {
+            let reset_epoch = response
+                .headers()
+                .get("x-ratelimit-reset")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse().ok());
+            return Err(ProviderError::RateLimited { reset_epoch });
+        }
+        let response = octocrab::map_github_error(response)
+            .await
+            .map_err(map_octocrab_error)?;
+        let value = Value::from_response(response)
+            .await
+            .map_err(map_octocrab_error)?;
+        if let Some(errors) = value.get("errors") {
+            let errors = errors.as_array().ok_or_else(|| {
+                ProviderError::Parse("malformed GraphQL error response".to_owned())
+            })?;
+            if !errors.is_empty() {
+                let messages = errors
+                    .iter()
+                    .map(|error| error.get("message").and_then(Value::as_str))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| {
+                        ProviderError::Parse("malformed GraphQL error response".to_owned())
+                    })?;
+                return Err(ProviderError::Parse(messages[0].to_owned()));
+            }
+        }
+        Ok(value)
+    }
+}
+
+pub struct GithubProvider {
+    client: GithubGraphqlClient,
+}
+
+impl GithubProvider {
+    pub fn new(token: String) -> Result<Self, ProviderError> {
+        Ok(Self {
+            client: GithubGraphqlClient::new(token)?,
+        })
+    }
+
+    pub fn with_base_uri(token: String, base: &str) -> Result<Self, ProviderError> {
+        Ok(Self {
+            client: GithubGraphqlClient::with_base_uri(token, base)?,
+        })
     }
 }
 
@@ -81,41 +151,10 @@ impl Provider for GithubProvider {
                 },
             };
 
-            let response = self
-                .client
-                ._post("/graphql", Some(&request))
-                .await
-                .map_err(map_octocrab_error)?;
-            if response.status().as_u16() == 401 {
-                return Err(ProviderError::Auth("token rejected".into()));
-            }
-            let status = response.status().as_u16();
-            let rate_limit_exhausted = response
-                .headers()
-                .get("x-ratelimit-remaining")
-                .and_then(|value| value.to_str().ok())
-                == Some("0");
-            if matches!(status, 403 | 429) && rate_limit_exhausted {
-                let reset_epoch = response
-                    .headers()
-                    .get("x-ratelimit-reset")
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.parse().ok());
-                return Err(ProviderError::RateLimited { reset_epoch });
-            }
-            let response = octocrab::map_github_error(response)
-                .await
-                .map_err(map_octocrab_error)?;
-            let response = Value::from_response(response)
-                .await
-                .map_err(map_octocrab_error)?;
+            let response = self.client.post_value(&request).await?;
 
             let response: GraphqlEnvelope = serde_json::from_value(response)
                 .map_err(|error| ProviderError::Parse(error.to_string()))?;
-
-            if let Some(error) = response.errors.and_then(|errors| errors.into_iter().next()) {
-                return Err(ProviderError::Parse(error.message));
-            }
 
             let connection = response
                 .data
@@ -232,12 +271,6 @@ struct Variables<'a> {
 #[derive(Deserialize)]
 struct GraphqlEnvelope {
     data: Option<Value>,
-    errors: Option<Vec<GraphqlError>>,
-}
-
-#[derive(Deserialize)]
-struct GraphqlError {
-    message: String,
 }
 
 #[derive(Deserialize)]

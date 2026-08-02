@@ -257,9 +257,108 @@ pub enum StoryBuildError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CurrentIssueState {
+pub(crate) struct ReplayIssueState {
     state: SnapshotState,
     assignees: BTreeSet<String>,
+}
+
+impl ReplayIssueState {
+    pub(crate) fn open() -> Self {
+        Self {
+            state: SnapshotState::Open,
+            assignees: BTreeSet::new(),
+        }
+    }
+
+    pub(crate) fn from_snapshot(snapshot: &IssueSnapshot) -> Self {
+        Self {
+            state: snapshot.state,
+            assignees: snapshot.assignees.iter().cloned().collect(),
+        }
+    }
+
+    pub(crate) fn into_snapshot(self) -> IssueSnapshot {
+        IssueSnapshot {
+            state: self.state,
+            assignees: self.assignees.into_iter().collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LifecycleTransitionError(&'static str);
+
+impl LifecycleTransitionError {
+    pub(crate) fn detail(self) -> &'static str {
+        self.0
+    }
+}
+
+pub(crate) fn apply_lifecycle_event(
+    state: &mut Option<ReplayIssueState>,
+    kind: &LifecycleEventKind,
+) -> Result<(), LifecycleTransitionError> {
+    match kind {
+        LifecycleEventKind::Opened => {
+            if state.is_some() {
+                return Err(LifecycleTransitionError(
+                    "opened event follows an existing issue state",
+                ));
+            }
+            *state = Some(ReplayIssueState::open());
+        }
+        LifecycleEventKind::Closed { reason } => {
+            let state = state.as_mut().ok_or(LifecycleTransitionError(
+                "closed event has no prior issue state",
+            ))?;
+            if state.state != SnapshotState::Open {
+                return Err(LifecycleTransitionError(
+                    "closed event follows a non-open state",
+                ));
+            }
+            state.state = match reason {
+                ClosureReason::Completed => SnapshotState::Closed,
+                ClosureReason::NotPlanned => SnapshotState::ClosedNotPlanned,
+            };
+        }
+        LifecycleEventKind::Reopened => {
+            let state = state.as_mut().ok_or(LifecycleTransitionError(
+                "reopened event has no prior issue state",
+            ))?;
+            if state.state == SnapshotState::Open {
+                return Err(LifecycleTransitionError(
+                    "reopened event follows an open state",
+                ));
+            }
+            state.state = SnapshotState::Open;
+        }
+        LifecycleEventKind::Assigned { login } => {
+            if login.trim().is_empty() {
+                return Err(LifecycleTransitionError(
+                    "assigned event has an empty login",
+                ));
+            }
+            let state = state.as_mut().ok_or(LifecycleTransitionError(
+                "assigned event has no prior issue state",
+            ))?;
+            if !state.assignees.insert(login.clone()) {
+                return Err(LifecycleTransitionError(
+                    "assigned login was already assigned",
+                ));
+            }
+        }
+        LifecycleEventKind::Unassigned { login } => {
+            let state = state.as_mut().ok_or(LifecycleTransitionError(
+                "unassigned event has no prior issue state",
+            ))?;
+            if !state.assignees.remove(login) {
+                return Err(LifecycleTransitionError(
+                    "unassigned login was not assigned",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -548,95 +647,39 @@ fn build_visible_topology(issues: &[RecordedIssue], visible: &BTreeSet<u64>) -> 
     edges
 }
 
-fn starting_states(issues: &[RecordedIssue]) -> BTreeMap<u64, CurrentIssueState> {
+fn starting_states(issues: &[RecordedIssue]) -> BTreeMap<u64, ReplayIssueState> {
     issues
         .iter()
         .filter_map(|issue| match &issue.starting_snapshot {
             StartingSnapshot::NotCreated => None,
-            StartingSnapshot::Existing(snapshot) => Some((issue.number, snapshot.into())),
+            StartingSnapshot::Existing(snapshot) => {
+                Some((issue.number, ReplayIssueState::from_snapshot(snapshot)))
+            }
         })
         .collect()
 }
 
-impl From<&IssueSnapshot> for CurrentIssueState {
-    fn from(snapshot: &IssueSnapshot) -> Self {
-        Self {
-            state: snapshot.state,
-            assignees: snapshot.assignees.iter().cloned().collect(),
-        }
-    }
-}
-
 fn apply_event(
-    states: &mut BTreeMap<u64, CurrentIssueState>,
+    states: &mut BTreeMap<u64, ReplayIssueState>,
     event: &LifecycleEvent,
 ) -> Result<(), StoryBuildError> {
-    let ambiguous = |detail: &str| StoryBuildError::AmbiguousState {
-        provider_event_id: event.provider_event_id.clone(),
-        issue_number: event.issue_number,
-        detail: detail.to_owned(),
-    };
-
-    match &event.kind {
-        LifecycleEventKind::Opened => {
-            if states.contains_key(&event.issue_number) {
-                return Err(ambiguous("opened event follows an existing issue state"));
-            }
-            states.insert(
-                event.issue_number,
-                CurrentIssueState {
-                    state: SnapshotState::Open,
-                    assignees: BTreeSet::new(),
-                },
-            );
-        }
-        LifecycleEventKind::Closed { reason } => {
-            let state = states
-                .get_mut(&event.issue_number)
-                .ok_or_else(|| ambiguous("closed event has no prior issue state"))?;
-            if state.state != SnapshotState::Open {
-                return Err(ambiguous("closed event follows a non-open state"));
-            }
-            state.state = match reason {
-                ClosureReason::Completed => SnapshotState::Closed,
-                ClosureReason::NotPlanned => SnapshotState::ClosedNotPlanned,
-            };
-        }
-        LifecycleEventKind::Reopened => {
-            let state = states
-                .get_mut(&event.issue_number)
-                .ok_or_else(|| ambiguous("reopened event has no prior issue state"))?;
-            if state.state == SnapshotState::Open {
-                return Err(ambiguous("reopened event follows an open state"));
-            }
-            state.state = SnapshotState::Open;
-        }
-        LifecycleEventKind::Assigned { login } => {
-            if login.trim().is_empty() {
-                return Err(ambiguous("assigned event has an empty login"));
-            }
-            let state = states
-                .get_mut(&event.issue_number)
-                .ok_or_else(|| ambiguous("assigned event has no prior issue state"))?;
-            if !state.assignees.insert(login.clone()) {
-                return Err(ambiguous("assigned login was already assigned"));
-            }
-        }
-        LifecycleEventKind::Unassigned { login } => {
-            let state = states
-                .get_mut(&event.issue_number)
-                .ok_or_else(|| ambiguous("unassigned event has no prior issue state"))?;
-            if !state.assignees.remove(login) {
-                return Err(ambiguous("unassigned login was not assigned"));
-            }
-        }
+    let mut state = states.remove(&event.issue_number);
+    if let Err(error) = apply_lifecycle_event(&mut state, &event.kind) {
+        return Err(StoryBuildError::AmbiguousState {
+            provider_event_id: event.provider_event_id.clone(),
+            issue_number: event.issue_number,
+            detail: error.detail().to_owned(),
+        });
+    }
+    if let Some(state) = state {
+        states.insert(event.issue_number, state);
     }
     Ok(())
 }
 
 fn derive_visible_statuses(
     issues: &[RecordedIssue],
-    states: &BTreeMap<u64, CurrentIssueState>,
+    states: &BTreeMap<u64, ReplayIssueState>,
     visible: &BTreeSet<u64>,
 ) -> Vec<IssueStatus> {
     let raw_issues = issues
@@ -675,10 +718,10 @@ fn derive_visible_statuses(
 
 fn verify_final_states(
     issues: &[RecordedIssue],
-    states: &BTreeMap<u64, CurrentIssueState>,
+    states: &BTreeMap<u64, ReplayIssueState>,
 ) -> Result<(), StoryBuildError> {
     for issue in issues {
-        let expected = CurrentIssueState::from(&issue.final_snapshot);
+        let expected = ReplayIssueState::from_snapshot(&issue.final_snapshot);
         if states.get(&issue.number) != Some(&expected) {
             return Err(StoryBuildError::MissingLifecycleEvidence {
                 issue_number: issue.number,

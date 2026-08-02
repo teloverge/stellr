@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a read-only live GitHub release-history source with complete milestone,
+  release, issue, blocker, and lifecycle pagination; explicit first/later release
+  boundaries; inherited typed provider failures; and manifest privacy checks.
 - Added deterministic, auditable release-story manifests with explicit UTC
   boundaries, lifecycle reconstruction through Stellr's core status derivation,
   hidden blocker support, bounded beat grouping, and precise fail-closed
