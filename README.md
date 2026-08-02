@@ -17,6 +17,20 @@ t3code's preview pane, or any browser.
 No code yet; `reference/` holds assets from the reference implementation that
 port verbatim.
 
+## Release constellation compatibility probe
+
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme-showcase/compatibility-probe.png">
+  <img src="docs/assets/readme-showcase/compatibility-probe.svg" alt="Stellr release constellation compatibility probe">
+</picture>
+
+[View the static release constellation](docs/assets/readme-showcase/compatibility-probe.png).
+
+This review-branch compatibility fixture shows three fixed stars moving from
+blocked work to a resolved path. It exists to verify GitHub's animated,
+reduced-motion, and strict-Markdown README delivery paths before the release
+exporter replaces it with a real release story.
+
 ## Lineage & acknowledgements
 
 stellr is a Rust/Tauri port and generalization of

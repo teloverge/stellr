@@ -1,0 +1,170 @@
+//! Release-constellation artifacts for Stellr's README.
+
+use roxmltree::Document;
+use thiserror::Error;
+
+const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+const MAX_SVG_BYTES: usize = 750 * 1024;
+
+/// A reason an SVG cannot be published as a Stellr README artifact.
+#[derive(Debug, Error)]
+pub enum SvgSafetyError {
+    /// The input is too large to be a release-showcase SVG.
+    #[error("SVG is {actual} bytes; the limit is {limit} bytes")]
+    TooLarge { actual: usize, limit: usize },
+    /// The input is not well-formed XML.
+    #[error("SVG XML is invalid: {0}")]
+    InvalidXml(#[from] roxmltree::Error),
+    /// The input uses markup or styling outside the safe publication subset.
+    #[error("SVG contains forbidden {kind}: {detail}")]
+    Forbidden { kind: &'static str, detail: String },
+}
+
+/// Validates the script-free, self-contained subset accepted for README SVGs.
+///
+/// Local fragment references such as `url(#paint)` and `href="#node"` are
+/// allowed. Active elements, event handlers, external resources, CSS imports,
+/// escaped CSS, and transform animation fail closed.
+pub fn validate_svg_safety(svg: &str) -> Result<(), SvgSafetyError> {
+    if svg.len() > MAX_SVG_BYTES {
+        return Err(SvgSafetyError::TooLarge {
+            actual: svg.len(),
+            limit: MAX_SVG_BYTES,
+        });
+    }
+
+    let lowercase = svg.to_ascii_lowercase();
+    if lowercase.contains("<!doctype") {
+        return forbidden("document type", "DOCTYPE declarations are not allowed");
+    }
+
+    let document = Document::parse(svg)?;
+    let root = document.root_element();
+    if !root.tag_name().name().eq_ignore_ascii_case("svg")
+        || root.tag_name().namespace() != Some(SVG_NAMESPACE)
+    {
+        return forbidden("root element", "expected an SVG-namespace <svg> element");
+    }
+
+    for element in document.descendants().filter(roxmltree::Node::is_element) {
+        let tag = element.tag_name();
+        if tag.namespace() != Some(SVG_NAMESPACE) {
+            return forbidden("element namespace", tag.namespace().unwrap_or("none"));
+        }
+
+        let local_name = tag.name().to_ascii_lowercase();
+        if matches!(
+            local_name.as_str(),
+            "script"
+                | "foreignobject"
+                | "animate"
+                | "animatetransform"
+                | "animatemotion"
+                | "set"
+                | "iframe"
+                | "object"
+                | "embed"
+                | "audio"
+                | "video"
+                | "canvas"
+        ) {
+            return forbidden("element", tag.name());
+        }
+
+        for attribute in element.attributes() {
+            let name = attribute.name().to_ascii_lowercase();
+            let value = attribute.value().trim();
+            let value_lowercase = value.to_ascii_lowercase();
+
+            if name.starts_with("on") {
+                return forbidden("event handler", attribute.name());
+            }
+            if name == "base" {
+                return forbidden("base URI", attribute.name());
+            }
+            if value_lowercase.contains("javascript:") {
+                return forbidden("JavaScript URL", attribute.value());
+            }
+            if matches!(name.as_str(), "href" | "src") && !is_local_fragment_reference(value) {
+                return forbidden("external resource", attribute.value());
+            }
+            if name == "style"
+                || value_lowercase.contains("url")
+                || value_lowercase.contains("@import")
+            {
+                validate_css(value)?;
+            }
+        }
+
+        if local_name == "style" {
+            validate_css(element.text().unwrap_or_default())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn is_local_fragment_reference(value: &str) -> bool {
+    value
+        .strip_prefix('#')
+        .is_some_and(|fragment| !fragment.is_empty() && !fragment.chars().any(char::is_whitespace))
+}
+
+fn validate_css(css: &str) -> Result<(), SvgSafetyError> {
+    let lowercase = css.to_ascii_lowercase();
+    for forbidden_token in [
+        "@import",
+        "@font-face",
+        "expression(",
+        "javascript:",
+        "/*",
+        "\\",
+    ] {
+        if lowercase.contains(forbidden_token) {
+            return forbidden("CSS token", forbidden_token);
+        }
+    }
+
+    let mut search = lowercase.as_str();
+    while let Some(position) = search.find("url") {
+        let preceding_is_identifier = position > 0
+            && search[..position]
+                .chars()
+                .next_back()
+                .is_some_and(|character| character.is_ascii_alphanumeric() || character == '-');
+        let after_name = &search[position + 3..];
+        let after_whitespace = after_name.trim_start();
+        if preceding_is_identifier || !after_whitespace.starts_with('(') {
+            search = after_name;
+            continue;
+        }
+
+        let arguments = &after_whitespace[1..];
+        let closing = arguments
+            .find(')')
+            .ok_or_else(|| SvgSafetyError::Forbidden {
+                kind: "CSS URL",
+                detail: "missing closing parenthesis".to_owned(),
+            })?;
+        let raw_target = arguments[..closing].trim();
+        let target = raw_target
+            .strip_prefix(['\'', '"'])
+            .and_then(|unquoted| unquoted.strip_suffix(['\'', '"']))
+            .unwrap_or(raw_target)
+            .trim();
+        if !is_local_fragment_reference(target) {
+            return forbidden("external CSS URL", raw_target);
+        }
+
+        search = &arguments[closing + 1..];
+    }
+
+    Ok(())
+}
+
+fn forbidden<T>(kind: &'static str, detail: impl Into<String>) -> Result<T, SvgSafetyError> {
+    Err(SvgSafetyError::Forbidden {
+        kind,
+        detail: detail.into(),
+    })
+}

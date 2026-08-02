@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added a script-free animated README constellation compatibility probe with a
+  reduced-motion PNG and strict-Markdown fallback path.
 - Compacted native subissue workflows into deterministic parent-local arcs
   that avoid unrelated nodes and dependency paths, with bounded overflow,
   nested-cluster placement, and safe malformed-data fallbacks.
