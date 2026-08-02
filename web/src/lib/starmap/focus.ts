@@ -1,4 +1,5 @@
 import type { Ticket } from './model'
+import { workflowEdges, type WorkflowEdge } from './workflow'
 
 export interface Focus {
   current: number | null
@@ -16,31 +17,60 @@ function isClosed(ticket: Ticket): boolean {
   return ticket.status === 'resolved' || ticket.status === 'out_of_scope'
 }
 
+interface Route {
+  nodes: number[]
+  edges: WorkflowEdge[]
+}
+
+interface SearchStep {
+  nodes: number[]
+  edges: WorkflowEdge[]
+  miniOnly: boolean
+  throughClosed: boolean
+}
+
 function route(
-  start: number,
-  current: number,
+  starts: number[],
+  goals: Set<number>,
   byNumber: Map<number, Ticket>,
-  dependents: Map<number, number[]>,
-): number[] | null {
-  const queue = [start]
-  const visited = new Set([start])
-  const parent = new Map<number, number>()
+  adjacency: Map<number, WorkflowEdge[]>,
+  allowResolvedMiniRoute: boolean,
+): Route | null {
+  const queue: SearchStep[] = starts.map((start) => ({
+    nodes: [start],
+    edges: [],
+    miniOnly: true,
+    throughClosed: false,
+  }))
+  const visited = new Set(starts.map((start) => `${start}|true|false`))
 
   while (queue.length > 0) {
-    const number = queue.shift()!
-    if (number === current) {
-      const path = [number]
-      while (path[0] !== start) path.unshift(parent.get(path[0])!)
-      return path
+    const step = queue.shift()!
+    const number = step.nodes.at(-1)!
+    if (goals.has(number)) {
+      return { nodes: step.nodes, edges: step.edges }
     }
 
-    for (const next of dependents.get(number) ?? []) {
-      if (visited.has(next)) continue
-      const ticket = byNumber.get(next)
-      if (!ticket || (next !== current && isClosed(ticket))) continue
-      visited.add(next)
-      parent.set(next, number)
-      queue.push(next)
+    for (const edge of adjacency.get(number) ?? []) {
+      const ticket = byNumber.get(edge.to)
+      if (!ticket) continue
+      const goal = goals.has(edge.to)
+      const miniEdge = edge.child !== null
+      const miniOnly = step.miniOnly && miniEdge
+      if (step.throughClosed && !miniEdge) continue
+      if (!goal && isClosed(ticket)) {
+        if (!allowResolvedMiniRoute || ticket.status !== 'resolved' || !miniOnly) continue
+      }
+      const throughClosed = step.throughClosed || (!goal && isClosed(ticket))
+      const visit = `${edge.to}|${miniOnly}|${throughClosed}`
+      if (visited.has(visit)) continue
+      visited.add(visit)
+      queue.push({
+        nodes: [...step.nodes, edge.to],
+        edges: [...step.edges, edge],
+        miniOnly,
+        throughClosed,
+      })
     }
   }
 
@@ -56,35 +86,35 @@ export function analyzeFocus(tickets: Ticket[], requestedCurrent: number | null)
     .filter((ticket) => ticket.readyForAgent === true)
     .map((ticket) => ticket.num)
     .sort((a, b) => a - b)
-  const dependents = new Map<number, number[]>()
-
-  for (const ticket of tickets) {
-    for (const blocker of ticket.blockedBy) {
-      const list = dependents.get(blocker) ?? []
-      list.push(ticket.num)
-      dependents.set(blocker, list)
-    }
+  const adjacency = new Map<number, WorkflowEdge[]>()
+  for (const edge of workflowEdges(tickets)) {
+    const outgoing = adjacency.get(edge.from) ?? []
+    outgoing.push(edge)
+    adjacency.set(edge.from, outgoing)
   }
-  for (const list of dependents.values()) list.sort((a, b) => a - b)
 
   const pathNodes = new Set<number>()
   const pathEdges = new Set<string>()
-  const onPath: number[] = []
+  let onPath: number | null = null
 
   if (current !== null) {
-    for (const ready of actionable) {
-      const path = route(ready, current, byNumber, dependents)
-      if (path === null) continue
-      onPath.push(ready)
-      for (const number of path) pathNodes.add(number)
-      for (let index = 1; index < path.length; index++) {
-        pathEdges.add(edgeKey(path[index - 1], path[index]))
-      }
+    const readyGoals = new Set(actionable)
+    let path = route([current], readyGoals, byNumber, adjacency, true)
+    let readyOnPath = path?.nodes.at(-1) ?? null
+    if (path === null) {
+      path = route(actionable, new Set([current]), byNumber, adjacency, false)
+      readyOnPath = path?.nodes[0] ?? null
+    }
+    if (path !== null) {
+      onPath = readyOnPath
+      for (const number of path.nodes) pathNodes.add(number)
+      for (const edge of path.edges) pathEdges.add(edgeKey(edge.from, edge.to))
     }
   }
 
-  const pathReady = new Set(onPath)
-  const ready = [...onPath, ...actionable.filter((number) => !pathReady.has(number))]
+  const ready = onPath === null
+    ? actionable
+    : [onPath, ...actionable.filter((number) => number !== onPath)]
   const emphasized = new Set<number>()
   if (current !== null) emphasized.add(current)
   for (const number of ready) emphasized.add(number)

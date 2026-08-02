@@ -102,6 +102,45 @@ describe('dependency-edge visual treatment', () => {
     return { strokes, fills }
   }
 
+  function sequenceFixture(sourceStatus: Ticket['status'], destinationStatus: Ticket['status']): Ticket[] {
+    return [
+      { num: 16, slug: '16', title: 'parent', type: 'issue', status: 'open', blockedBy: [], parentIssue: null, frontier: false },
+      { num: 37, slug: '37', title: 'source', type: 'task', status: sourceStatus, blockedBy: [], parentIssue: 16, frontier: false },
+      {
+        num: 38,
+        slug: '38',
+        title: 'destination',
+        type: 'task',
+        status: destinationStatus,
+        blockedBy: [37],
+        parentIssue: 16,
+        frontier: destinationStatus === 'frontier',
+        readyForAgent: destinationStatus === 'frontier',
+      },
+    ]
+  }
+
+  function expectParticleMotion(render: { fills: Fill[] }, edgeAlpha: number, edgePhase = 0.27): void {
+    const halos = render.fills.filter((fill) => typeof fill.color === 'string' && fill.color.startsWith('rgba(190,225,200,') && fill.arcs[0]?.radius === 5)
+    const cores = render.fills.filter((fill) => typeof fill.color === 'string' && fill.color.startsWith('rgba(220,255,230,') && fill.arcs[0]?.radius === 2.6)
+    expect(halos).toHaveLength(3)
+    expect(cores).toHaveLength(3)
+    for (let index = 0; index < 3; index++) {
+      const u = (0.1 + index / 3 + edgePhase) % 1
+      const expectedHalo = 0.14 + 0.18 * Math.sin(Math.PI * u)
+      const expectedCore = 0.45 + 0.5 * Math.sin(Math.PI * u)
+      const halo = halos[index]
+      const core = cores[index]
+      const haloAlpha = Number((halo.color as string).slice((halo.color as string).lastIndexOf(',') + 1, -1))
+      const coreAlpha = Number((core.color as string).slice((core.color as string).lastIndexOf(',') + 1, -1))
+      expect(halo.alpha).toBe(edgeAlpha)
+      expect(core.alpha).toBe(edgeAlpha)
+      expect(haloAlpha * halo.alpha).toBeCloseTo(expectedHalo * edgeAlpha)
+      expect(coreAlpha * core.alpha).toBeCloseTo(expectedCore * edgeAlpha)
+      expect(core.arcs[0]).toMatchObject({ x: halo.arcs[0].x, y: halo.arcs[0].y })
+    }
+  }
+
   afterEach(() => {
     HTMLCanvasElement.prototype.getContext = realGetContext
     globalThis.requestAnimationFrame = realRaf
@@ -133,35 +172,44 @@ describe('dependency-edge visual treatment', () => {
       expect(Math.hypot(baseA.x - base.x, baseA.y - base.y)).toBeCloseTo(6.5)
     }
 
-    function expectResolvedMotion(render: { fills: Fill[] }, edgeAlpha: number): void {
-      const halos = render.fills.filter((fill) => typeof fill.color === 'string' && fill.color.startsWith('rgba(190,225,200,') && fill.arcs[0]?.radius === 5)
-      const cores = render.fills.filter((fill) => typeof fill.color === 'string' && fill.color.startsWith('rgba(220,255,230,') && fill.arcs[0]?.radius === 2.6)
-      expect(halos).toHaveLength(3)
-      expect(cores).toHaveLength(3)
-      for (let index = 0; index < 3; index++) {
-        const u = (0.1 + index / 3 + 0.27) % 1
-        const expectedHalo = 0.14 + 0.18 * Math.sin(Math.PI * u)
-        const expectedCore = 0.45 + 0.5 * Math.sin(Math.PI * u)
-        const halo = halos[index]
-        const core = cores[index]
-        const haloAlpha = Number((halo.color as string).slice((halo.color as string).lastIndexOf(',') + 1, -1))
-        const coreAlpha = Number((core.color as string).slice((core.color as string).lastIndexOf(',') + 1, -1))
-        expect(halo.alpha).toBe(edgeAlpha)
-        expect(core.alpha).toBe(edgeAlpha)
-        expect(haloAlpha * halo.alpha).toBeCloseTo(expectedHalo * edgeAlpha)
-        expect(coreAlpha * core.alpha).toBeCloseTo(expectedCore * edgeAlpha)
-        expect(core.arcs[0]).toMatchObject({ x: halo.arcs[0].x, y: halo.arcs[0].y })
-      }
-    }
-
-    expectResolvedMotion(focused, 1)
+    expectParticleMotion(focused, 1)
     // In this frame the only contextual edge is unresolved (3 → 4), so a
     // contextual radius-5/2.6 paint would prove unresolved motion leaked in.
     expect(fills.filter((fill) => fill.alpha === 0.45 && [5, 2.6].includes(fill.arcs[0]?.radius ?? 0))).toEqual([])
 
     // Current issue 4 has no ready-to-current path: both edges are context.
     // This makes the resolved 1 → 2 particle flow itself prove the multiplier.
-    expectResolvedMotion(paint(EDGE_FIXTURE, 4), 0.45)
+    expectParticleMotion(paint(EDGE_FIXTURE, 4), 0.45)
+  })
+
+  it('animates exactly three halo/core pairs on a traversed sequence edge at full path alpha', () => {
+    installFrameHarness()
+
+    expectParticleMotion(paint(sequenceFixture('resolved', 'frontier'), 16), 1, 0.47)
+  })
+
+  it('does not animate a resolved sequence source whose destination remains blocked', () => {
+    installFrameHarness()
+
+    const render = paint(sequenceFixture('resolved', 'blocked'), 16)
+    expect(render.fills.filter((fill) => [5, 2.6].includes(fill.arcs[0]?.radius ?? 0))).toEqual([])
+  })
+
+  it('does not animate an open sequence source whose destination is frontier', () => {
+    installFrameHarness()
+
+    const render = paint(sequenceFixture('open', 'frontier'), 16)
+    expect(render.fills.filter((fill) => [5, 2.6].includes(fill.arcs[0]?.radius ?? 0))).toEqual([])
+  })
+
+  it('multiplies contextual traversed sequence particles by context edge alpha', () => {
+    installFrameHarness()
+    const contextual = [
+      ...sequenceFixture('resolved', 'frontier'),
+      { num: 99, slug: '99', title: 'unrelated current', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: false },
+    ] satisfies Ticket[]
+
+    expectParticleMotion(paint(contextual, 99), 0.45, 0.47)
   })
 
   it('renders lone-child workflow loops as state-aware directed curves with completed motion gated', () => {
