@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added native GitHub subissue mini-graphs with directed parent-entry,
+  sibling-sequence, and child-return arrows; violet dashed incomplete routes
+  and rims; resolved completed grammar; and motion only on traversed
+  completed-to-ready routes.
 - Added the M1 application chrome: complete space add/select/refresh/remove
   controls, visible stale and provider-error state, and restorable hash-routed
   issue detail rendered through sanitized Markdown with responsive docking.
