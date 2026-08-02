@@ -21,8 +21,8 @@ import { computeLayout, structureSignature, TAU } from './layout'
 import { STAR, LABEL, SESSION_HUE, visualState, hexA, type VisualState } from './theme'
 import { GRAMMAR, type SessionState } from './session'
 import { analyzeFocus, type Focus } from './focus'
-import { edgeKey, workflowEdges, type WorkflowEdge } from './workflow'
-import { miniEdgeCurve } from './workflow-geometry'
+import { edgeKey, isMiniWorkflowEdge, workflowEdges, type WorkflowEdge } from './workflow'
+import { writeMiniEdgeCurve, type MutableMiniCurve } from './workflow-geometry'
 import {
   reverseEdgeKeys,
   workflowVisualState,
@@ -250,6 +250,7 @@ export class StarMap {
   #nodes: Node[] = []
   #byNum = new Map<number, Node>()
   #edges: RenderEdge[] = []
+  #miniCurve: MutableMiniCurve = { control: { x: 0, y: 0 }, bow: 0 }
   #sig = ''
   #resolved = new Set<number>()
 
@@ -923,19 +924,23 @@ export class StarMap {
       dx = bx - ax,
       dy = by - ay,
       len = Math.hypot(dx, dy) || 1
-    const mini = e.roles.some((role) => role === 'entry' || role === 'sequence' || role === 'return')
+    const mini = isMiniWorkflowEdge(e)
     const child = e.child === null ? undefined : this.#byNum.get(e.child)
     const parent = child?.parentIssue === null || child?.parentIssue === undefined
       ? undefined
       : this.#byNum.get(child.parentIssue)
     const curve = mini
-      ? miniEdgeCurve({
-          edge: e,
-          start: { x: ax, y: ay },
-          end: { x: bx, y: by },
-          reverseExists: e.reverseExists,
-          parent: parent ? { x: parent._x, y: parent._y } : undefined,
-        })
+      ? writeMiniEdgeCurve(
+          this.#miniCurve,
+          e,
+          ax,
+          ay,
+          bx,
+          by,
+          e.reverseExists,
+          parent?._x,
+          parent?._y,
+        )
       : null
     const nx = -dy / len,
       ny = dx / len,

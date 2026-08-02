@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { miniEdgeCurve, MINI_EDGE_BOW_CAP } from './workflow-geometry'
+import {
+  miniEdgeCurve,
+  MINI_EDGE_BOW_CAP,
+  writeMiniEdgeCurve,
+  type MutableMiniCurve,
+} from './workflow-geometry'
 import type { WorkflowEdge } from './workflow'
 
 const entry: WorkflowEdge = { from: 16, to: 37, roles: ['entry'], child: 37 }
@@ -35,5 +40,14 @@ describe('mini-edge geometry', () => {
     expect(curve.control.x).toBeCloseTo(0)
     expect(curve.control.y).toBeLessThan(90)
     expect(curve.bow).toBeCloseTo(14.4)
+  })
+
+  it('writes renderer geometry into reusable storage without allocating a result', () => {
+    const scratch: MutableMiniCurve = { control: { x: 0, y: 0 }, bow: 0 }
+
+    const result = writeMiniEdgeCurve(scratch, entry, 0, 0, 200, 0, true)
+
+    expect(result).toBe(scratch)
+    expect(scratch).toEqual({ control: { x: 100, y: 28 }, bow: 28 })
   })
 })

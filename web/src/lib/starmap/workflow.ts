@@ -13,6 +13,14 @@ export interface WorkflowEdge {
   child: number | null
 }
 
+export function isMiniWorkflowEdge(edge: Pick<WorkflowEdge, 'roles'>): boolean {
+  return (
+    edge.roles.includes('entry') ||
+    edge.roles.includes('sequence') ||
+    edge.roles.includes('return')
+  )
+}
+
 export function edgeKey(from: number, to: number): string {
   return `${from}>${to}`
 }

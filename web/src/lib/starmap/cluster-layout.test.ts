@@ -254,4 +254,22 @@ describe('compact cluster sector selection', () => {
     expect(cross(5, 7)).toBeGreaterThan(0)
     expect(cross(7, 8)).toBeGreaterThan(0)
   })
+
+  it('keeps every child in a large group within the bounded cluster', () => {
+    const children = Array.from({ length: 14 }, (_, index) => 31 + index)
+    const nodes: LayoutNode[] = [
+      { num: 16, blockedBy: [], parentIssue: null },
+      ...children.map((num) => ({ num, blockedBy: [], parentIssue: 16 })),
+    ]
+    const broadPoints: Record<number, Point> = { 16: { x: 0, y: 0 } }
+    for (const [index, number] of children.entries()) {
+      broadPoints[number] = { x: 1_000 + index * 100, y: 1_000 }
+    }
+
+    const points = placeDirectChildClusters(nodes, broadPoints, [])
+
+    for (const number of children) {
+      expect(Math.hypot(points[number].x, points[number].y)).toBeLessThanOrEqual(126.001)
+    }
+  })
 })

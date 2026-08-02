@@ -11,6 +11,11 @@ export interface QuadraticCurve {
   bow: number
 }
 
+export interface MutableMiniCurve {
+  control: Point
+  bow: number
+}
+
 export interface Segment {
   start: Point
   end: Point
@@ -24,6 +29,56 @@ export interface MiniEdgeCurveInput {
   parent?: Point
 }
 
+export function writeMiniEdgeCurve(
+  output: MutableMiniCurve,
+  edge: WorkflowEdge,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  reverseExists: boolean,
+  parentX?: number,
+  parentY?: number,
+): MutableMiniCurve {
+  const midpointX = (startX + endX) / 2
+  const midpointY = (startY + endY) / 2
+  const deltaX = endX - startX
+  const deltaY = endY - startY
+  const edgeLength = Math.hypot(deltaX, deltaY) || 1
+  const bow = Math.min(MINI_EDGE_BOW_CAP, edgeLength * 0.18)
+
+  let normalX: number
+  let normalY: number
+  if (
+    edge.roles.includes('sequence') &&
+    parentX !== undefined &&
+    parentY !== undefined
+  ) {
+    const towardParentX = parentX - midpointX
+    const towardParentY = parentY - midpointY
+    const length = Math.hypot(towardParentX, towardParentY)
+    if (length > 0) {
+      normalX = towardParentX / length
+      normalY = towardParentY / length
+    } else {
+      normalX = -deltaY / edgeLength
+      normalY = deltaX / edgeLength
+    }
+  } else {
+    const canonicalX = edge.from < edge.to ? deltaX : -deltaX
+    const canonicalY = edge.from < edge.to ? deltaY : -deltaY
+    const canonicalLength = Math.hypot(canonicalX, canonicalY) || 1
+    const side = curveSide(edge, reverseExists)
+    normalX = (-canonicalY / canonicalLength) * side
+    normalY = (canonicalX / canonicalLength) * side
+  }
+
+  output.control.x = midpointX + normalX * bow
+  output.control.y = midpointY + normalY * bow
+  output.bow = bow
+  return output
+}
+
 export function miniEdgeCurve({
   edge,
   start,
@@ -31,35 +86,23 @@ export function miniEdgeCurve({
   reverseExists,
   parent,
 }: MiniEdgeCurveInput): QuadraticCurve {
-  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }
-  const edgeLength = Math.hypot(end.x - start.x, end.y - start.y) || 1
-  const bow = Math.min(MINI_EDGE_BOW_CAP, edgeLength * 0.18)
-
-  let normal: Point
-  if (edge.roles.includes('sequence') && parent) {
-    const towardParent = { x: parent.x - midpoint.x, y: parent.y - midpoint.y }
-    const length = Math.hypot(towardParent.x, towardParent.y)
-    normal =
-      length > 0
-        ? { x: towardParent.x / length, y: towardParent.y / length }
-        : { x: -(end.y - start.y) / edgeLength, y: (end.x - start.x) / edgeLength }
-  } else {
-    const low = edge.from < edge.to ? start : end
-    const high = edge.from < edge.to ? end : start
-    const canonical = { x: high.x - low.x, y: high.y - low.y }
-    const canonicalLength = Math.hypot(canonical.x, canonical.y) || 1
-    const side = curveSide(edge, reverseExists)
-    normal = {
-      x: (-canonical.y / canonicalLength) * side,
-      y: (canonical.x / canonicalLength) * side,
-    }
-  }
+  const mutable = writeMiniEdgeCurve(
+    { control: { x: 0, y: 0 }, bow: 0 },
+    edge,
+    start.x,
+    start.y,
+    end.x,
+    end.y,
+    reverseExists,
+    parent?.x,
+    parent?.y,
+  )
 
   return {
     start: { ...start },
-    control: { x: midpoint.x + normal.x * bow, y: midpoint.y + normal.y * bow },
+    control: mutable.control,
     end: { ...end },
-    bow,
+    bow: mutable.bow,
   }
 }
 

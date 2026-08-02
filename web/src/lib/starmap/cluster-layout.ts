@@ -1,5 +1,5 @@
 import type { Edge, LayoutNode, Point } from './layout'
-import { workflowEdges, type WorkflowEdge } from './workflow'
+import { isMiniWorkflowEdge, workflowEdges, type WorkflowEdge } from './workflow'
 import { reverseEdgeKeys } from './workflow-visual'
 import {
   curveCrossesSegment,
@@ -13,12 +13,12 @@ import {
 export const FIRST_ARC_RADIUS = 92
 export const FIRST_ARC_CAPACITY = 5
 export const SECOND_ARC_RADIUS = 126
-export const SECOND_ARC_CAPACITY = 8
 export const ARC_STEP = Math.PI / 6
 export const MIN_CHILD_CENTER_CLEARANCE = 44
 export const UNRELATED_NODE_CLEARANCE = 42
 export const DEPENDENCY_LINE_CLEARANCE = 18
 export const CANDIDATE_SECTORS = 16
+const SHALLOW_SECOND_ARC_CAPACITY = 8
 
 interface Candidate {
   childPoints: Record<number, Point>
@@ -36,6 +36,16 @@ interface CurveWithEdge {
 interface SegmentObstacle {
   edge: Pick<WorkflowEdge, 'from' | 'to'>
   segment: Segment
+}
+
+interface EvaluationContext {
+  nodes: LayoutNode[]
+  edges: Edge[]
+  parentNode: LayoutNode
+  children: LayoutNode[]
+  parentPoint: Point
+  currentPoints: Record<number, Point>
+  placedCurveObstacles: SegmentObstacle[]
 }
 
 function siblingOrder(children: LayoutNode[]): LayoutNode[] {
@@ -147,6 +157,17 @@ function arcPoints(
     return childPoints
   }
 
+  if (children.length > FIRST_ARC_CAPACITY + SHALLOW_SECOND_ARC_CAPACITY) {
+    for (let index = 0; index < children.length; index++) {
+      const angle = centerAngle + (index / children.length) * Math.PI * 2
+      childPoints[children[index].num] = {
+        x: parent.x + Math.cos(angle) * SECOND_ARC_RADIUS,
+        y: parent.y + Math.sin(angle) * SECOND_ARC_RADIUS,
+      }
+    }
+    return childPoints
+  }
+
   const firstCount = firstArcCount(children.length)
   const secondCount = children.length - firstCount
   const firstOffsets = centeredOffsets(firstCount)
@@ -182,9 +203,7 @@ function clusterCurves(
   parentPoint: Point,
   childPoints: Record<number, Point>,
 ): CurveWithEdge[] {
-  const edges = workflowEdges([parentNode, ...children]).filter((edge) =>
-    edge.roles.some((role) => role === 'entry' || role === 'sequence' || role === 'return'),
-  )
+  const edges = workflowEdges([parentNode, ...children]).filter(isMiniWorkflowEdge)
   const reversed = reverseEdgeKeys(edges)
   const points = { ...childPoints, [parentNode.num]: parentPoint }
   return edges.flatMap((edge) => {
@@ -225,15 +244,18 @@ function minimum(values: number[]): number {
 }
 
 function evaluateCandidate(
-  nodes: LayoutNode[],
-  edges: Edge[],
-  parentNode: LayoutNode,
-  children: LayoutNode[],
-  parentPoint: Point,
+  context: EvaluationContext,
   childPoints: Record<number, Point>,
-  currentPoints: Record<number, Point>,
-  placedCurveObstacles: SegmentObstacle[],
 ): Candidate {
+  const {
+    nodes,
+    edges,
+    parentNode,
+    children,
+    parentPoint,
+    currentPoints,
+    placedCurveObstacles,
+  } = context
   const clusterNumbers = new Set([parentNode.num, ...children.map((child) => child.num)])
   const proposedPoints = { ...currentPoints, ...childPoints }
   const unrelatedPoints = nodes
@@ -263,12 +285,20 @@ function evaluateCandidate(
   let crossings = 0
   for (const { edge: miniEdge, curve } of curves) {
     for (const obstacle of obstacles) {
-      const sharesEndpoint =
-        obstacle.edge.from === miniEdge.from ||
-        obstacle.edge.from === miniEdge.to ||
-        obstacle.edge.to === miniEdge.from ||
-        obstacle.edge.to === miniEdge.to
-      if (sharesEndpoint) continue
+      const sharedNumbers = [miniEdge.from, miniEdge.to].filter(
+        (number) => obstacle.edge.from === number || obstacle.edge.to === number,
+      )
+      const touchesSharedEndpoint = sharedNumbers.some((number) => {
+        const point = proposedPoints[number]
+        return (
+          isFinitePoint(point) &&
+          Math.min(
+            distance(obstacle.segment.start, point),
+            distance(obstacle.segment.end, point),
+          ) < DEPENDENCY_LINE_CLEARANCE
+        )
+      })
+      if (touchesSharedEndpoint) continue
       dependencyClearances.push(curveToSegmentClearance(curve, obstacle.segment))
       if (curveCrossesSegment(curve, obstacle.segment)) crossings++
     }
@@ -290,19 +320,17 @@ function evaluateCandidate(
   }
 }
 
-function finiteClearance(value: number): number {
-  return Number.isFinite(value) ? value : 1_000_000
-}
-
 function isBetter(candidate: Candidate, current: Candidate | null): boolean {
   if (!current) return true
   if (candidate.collisionFree !== current.collisionFree) return candidate.collisionFree
   if (candidate.crossings !== current.crossings) return candidate.crossings < current.crossings
-  const candidateScore =
-    finiteClearance(candidate.nodeClearance) + finiteClearance(candidate.dependencyClearance)
-  const currentScore =
-    finiteClearance(current.nodeClearance) + finiteClearance(current.dependencyClearance)
-  return candidateScore > currentScore
+  const candidateFloor = Math.min(candidate.nodeClearance, candidate.dependencyClearance)
+  const currentFloor = Math.min(current.nodeClearance, current.dependencyClearance)
+  if (candidateFloor !== currentFloor) return candidateFloor > currentFloor
+  return (
+    Math.max(candidate.nodeClearance, candidate.dependencyClearance) >
+    Math.max(current.nodeClearance, current.dependencyClearance)
+  )
 }
 
 export function placeDirectChildClusters(
@@ -337,23 +365,26 @@ export function placeDirectChildClusters(
     const parent = points[parentNumber]
     const parentNode = byNumber.get(parentNumber)
     if (!isFinitePoint(parent) || !parentNode || children.length === 0) continue
-    const ordered = siblingOrder(children)
-      .filter((child) => isFinitePoint(broadPoints[child.num]))
-      .slice(0, FIRST_ARC_CAPACITY + SECOND_ARC_CAPACITY)
+    const ordered = siblingOrder(children).filter((child) =>
+      isFinitePoint(broadPoints[child.num]),
+    )
     if (ordered.length === 0) continue
     const start = startingSector(parentNumber)
+    const evaluationContext: EvaluationContext = {
+      nodes,
+      edges: dependencyEdges,
+      parentNode,
+      children: ordered,
+      parentPoint: parent,
+      currentPoints: points,
+      placedCurveObstacles,
+    }
     const candidates = (expanded: boolean) =>
       Array.from({ length: CANDIDATE_SECTORS }, (_, offset) => {
         const sector = (start + offset) % CANDIDATE_SECTORS
         return evaluateCandidate(
-          nodes,
-          dependencyEdges,
-          parentNode,
-          ordered,
-          parent,
+          evaluationContext,
           arcPoints(parent, ordered, sector, expanded),
-          points,
-          placedCurveObstacles,
         )
       })
     const compactCandidates = candidates(false)
