@@ -173,6 +173,32 @@ describe('App issue routing', () => {
     expect(window.location.hash).toBe('#s=new-space')
   })
 
+  it('keeps a successful add route through repeated pre-add snapshots', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ id: 'new-space' }), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    window.history.replaceState(null, '', '/#s=first&i=11')
+    const { target, socket } = mountApp()
+    socket.emitModel(model)
+    flushSync()
+
+    enter(target.querySelector<HTMLInputElement>('input[name="repo"]')!, 'teloverge/new-space')
+    target.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
+    await settle()
+    expect(window.location.hash).toBe('#s=new-space')
+
+    socket.emitModel(model)
+    flushSync()
+
+    expect(window.location.hash).toBe('#s=new-space')
+  })
+
   it('routes to the following space after successfully removing the active middle space', async () => {
     const fetchRequest = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetchRequest)
@@ -188,6 +214,32 @@ describe('App issue routing', () => {
       '/api/spaces/middle',
       expect.objectContaining({ method: 'DELETE' }),
     )
+    expect(window.location.hash).toBe('#s=last')
+  })
+
+  it('uses pre-removal ordering when the post-removal snapshot arrives before success', async () => {
+    let finishRemove!: (response: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockReturnValue(
+        new Promise((resolve) => {
+          finishRemove = resolve
+        }),
+      ),
+    )
+    window.history.replaceState(null, '', '/#s=middle&i=22')
+    const { target, socket } = mountApp()
+    socket.emitModel(lifecycleModel)
+    flushSync()
+
+    target.querySelector<HTMLButtonElement>('button[aria-label="Remove middle"]')!.click()
+    flushSync()
+    socket.emitModel({ spaces: [space('first', 11), space('last', 33)] })
+    flushSync()
+
+    finishRemove(new Response(null, { status: 204 }))
+    await settle()
+
     expect(window.location.hash).toBe('#s=last')
   })
 
@@ -225,6 +277,27 @@ describe('App issue routing', () => {
 
     target.querySelector<HTMLButtonElement>('button[aria-label="Remove only"]')!.click()
     await settle()
+
+    expect(window.location.hash).toBe('')
+  })
+
+  it('keeps the only-space removal route through repeated pre-removal snapshots', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 })),
+    )
+    window.history.replaceState(null, '', '/#s=only&i=44')
+    const { target, socket } = mountApp()
+    const onlySpaceModel = { spaces: [space('only', 44)] }
+    socket.emitModel(onlySpaceModel)
+    flushSync()
+
+    target.querySelector<HTMLButtonElement>('button[aria-label="Remove only"]')!.click()
+    await settle()
+    expect(window.location.hash).toBe('')
+
+    socket.emitModel(onlySpaceModel)
+    flushSync()
 
     expect(window.location.hash).toBe('')
   })

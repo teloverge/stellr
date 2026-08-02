@@ -1,12 +1,18 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import DetailPane from './lib/DetailPane.svelte'
   import Sidebar from './lib/Sidebar.svelte'
   import StarMap from './lib/StarMap.svelte'
+  import { removeSpace } from './lib/api'
   import { Control, pageIssue, takePageToken } from './lib/control.svelte'
-  import type { Model } from './lib/model'
   import { Route } from './lib/route.svelte'
   import { decideDock, type Dock } from './lib/starmap/dock'
+
+  interface RemovalIntent {
+    id: string
+    fallbackId: string | null
+    succeeded: boolean
+  }
 
   const currentIssue = pageIssue()
   const sessionToken = takePageToken()
@@ -25,44 +31,111 @@
   )
   let workspace: HTMLElement
   let dock = $state<Dock>('right')
-  let reconciledModel = $state.raw<Model | null>(null)
+  let pendingAddedId = $state<string | null>(null)
+  let pendingRemovals = $state.raw<Record<string, RemovalIntent>>({})
 
   $effect(() => {
     const modelSnapshot = control.model
-    if (modelSnapshot === null || modelSnapshot === reconciledModel) return
-    reconciledModel = modelSnapshot
+    if (modelSnapshot === null) return
 
-    const routedSpace =
-      route.space === null
-        ? null
-        : (modelSnapshot.spaces.find((space) => space.id === route.space) ?? null)
-    const fallbackSpace = routedSpace ?? modelSnapshot.spaces[0] ?? null
+    untrack(() => {
+      if (pendingAddedId !== null) {
+        if (modelSnapshot.spaces.some((space) => space.id === pendingAddedId)) {
+          pendingAddedId = null
+        } else if (route.space === pendingAddedId) {
+          return
+        } else {
+          pendingAddedId = null
+        }
+      }
 
-    if (fallbackSpace === null) {
-      if (route.space !== null || route.issue !== null) route.go(null)
-      return
-    }
+      for (const pendingRemoval of Object.values(pendingRemovals)) {
+        const removedSpaceStillPresent = modelSnapshot.spaces.some(
+          (space) => space.id === pendingRemoval.id,
+        )
+        if (!removedSpaceStillPresent && pendingRemoval.succeeded) {
+          clearRemovalIntent(pendingRemoval.id)
+        } else if (
+          route.space === pendingRemoval.id ||
+          (pendingRemoval.succeeded && route.space === pendingRemoval.fallbackId)
+        ) {
+          return
+        }
+      }
 
-    if (route.space !== fallbackSpace.id) {
-      route.go(fallbackSpace.id)
-      return
-    }
+      const routedSpace =
+        route.space === null
+          ? null
+          : (modelSnapshot.spaces.find((space) => space.id === route.space) ?? null)
+      const fallbackSpace = routedSpace ?? modelSnapshot.spaces[0] ?? null
 
-    const routedStar =
-      route.issue === null
-        ? null
-        : (fallbackSpace.stars.find((star) => star.number === route.issue) ?? null)
-    if (route.issue !== null && routedStar === null) {
-      route.go(fallbackSpace.id)
-    }
+      if (fallbackSpace === null) {
+        if (route.space !== null || route.issue !== null) route.go(null)
+        return
+      }
+
+      if (route.space !== fallbackSpace.id) {
+        route.go(fallbackSpace.id)
+        return
+      }
+
+      const routedStar =
+        route.issue === null
+          ? null
+          : (fallbackSpace.stars.find((star) => star.number === route.issue) ?? null)
+      if (route.issue !== null && routedStar === null) {
+        route.go(fallbackSpace.id)
+      }
+    })
   })
 
-  function removedSpace(removedId: string): void {
-    if (route.space !== removedId) return
+  function addedSpace(addedId: string): void {
+    pendingAddedId = addedId
+    route.go(addedId)
+  }
 
-    const removedIndex = spaces.findIndex((space) => space.id === removedId)
-    const fallbackSpace = spaces[removedIndex + 1] ?? spaces[removedIndex - 1] ?? null
-    route.go(fallbackSpace?.id ?? null)
+  function clearRemovalIntent(id: string): void {
+    const nextIntents = { ...pendingRemovals }
+    delete nextIntents[id]
+    pendingRemovals = nextIntents
+  }
+
+  async function requestRemoveSpace(id: string): Promise<Response> {
+    const removedIndex = spaces.findIndex((space) => space.id === id)
+    pendingRemovals = {
+      ...pendingRemovals,
+      [id]: {
+        id,
+        fallbackId:
+          removedIndex < 0
+            ? null
+            : (spaces[removedIndex + 1]?.id ?? spaces[removedIndex - 1]?.id ?? null),
+        succeeded: false,
+      },
+    }
+
+    try {
+      const response = await removeSpace(id)
+      if (!response.ok) clearRemovalIntent(id)
+      return response
+    } catch (error) {
+      clearRemovalIntent(id)
+      throw error
+    }
+  }
+
+  function removedSpace(removedId: string): void {
+    const removalIntent = pendingRemovals[removedId]
+    if (removalIntent === undefined) return
+
+    pendingRemovals = {
+      ...pendingRemovals,
+      [removedId]: { ...removalIntent, succeeded: true },
+    }
+    if (route.space === removedId) route.go(removalIntent.fallbackId)
+    if (control.model?.spaces.every((space) => space.id !== removedId)) {
+      clearRemovalIntent(removedId)
+    }
   }
 
   onMount(() => {
@@ -94,8 +167,9 @@
       activeSpaceId={route.space}
       connectionStatus={control.status}
       select={(spaceId) => route.go(spaceId)}
-      added={(spaceId) => route.go(spaceId)}
+      added={addedSpace}
       removed={removedSpace}
+      removeRequest={requestRemoveSpace}
     />
   </div>
 
