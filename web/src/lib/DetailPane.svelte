@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { safeGithubIssueUrl } from './github-url'
   import { renderIssueMarkdown } from './markdown'
   import type { Star } from './model'
 
   let { star, close }: { star: Star; close: () => void } = $props()
+  const githubUrl = $derived(safeGithubIssueUrl(star.url, star.number))
 </script>
 
 <aside class="detail-pane" aria-label="Issue details">
@@ -49,7 +51,9 @@
     <div class="body">{@html renderIssueMarkdown(star.body)}</div>
   {/if}
 
-  <a href={star.url} target="_blank" rel="noreferrer">Open on GitHub</a>
+  {#if githubUrl}
+    <a href={githubUrl} target="_blank" rel="noopener noreferrer">Open on GitHub</a>
+  {/if}
 </aside>
 
 <style>

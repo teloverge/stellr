@@ -1,9 +1,4 @@
-export interface AddSpaceRequest {
-  path?: string
-  repo?: string
-}
-
-export function addSpace(body: AddSpaceRequest): Promise<Response> {
+export function addSpace(body: { path?: string; repo?: string }): Promise<Response> {
   return fetch('/api/spaces', {
     method: 'POST',
     credentials: 'same-origin',

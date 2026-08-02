@@ -1,14 +1,27 @@
 <script lang="ts">
-  import {
-    addSpace,
-    refreshSpace,
-    removeSpace,
-    type AddSpaceRequest,
-  } from './api'
+  import { addSpace, refreshSpace, removeSpace } from './api'
   import type { SpaceModel } from './model'
 
-  type ConnectionStatus = 'connecting' | 'open' | 'closed'
+  type Status = 'connecting' | 'open' | 'closed'
   type RowAction = 'refresh' | 'remove'
+
+  interface RowMutation {
+    request: (id: string) => Promise<Response>
+    failureLabel: string
+    complete: (id: string) => void
+  }
+
+  interface SidebarProps {
+    spaces: SpaceModel[]
+    activeSpaceId: string | null
+    connectionStatus: Status
+    select: (id: string) => void
+    added: (id: string) => void
+    removed: (id: string) => void
+    addRequest?: typeof addSpace
+    removeRequest?: typeof removeSpace
+    refreshRequest?: typeof refreshSpace
+  }
 
   let {
     spaces,
@@ -20,199 +33,157 @@
     addRequest = addSpace,
     removeRequest = removeSpace,
     refreshRequest = refreshSpace,
-  }: {
-    spaces: SpaceModel[]
-    activeSpaceId: string | null
-    connectionStatus: ConnectionStatus
-    select: (id: string) => void
-    added: (id: string) => void
-    removed: (id: string) => void
-    addRequest?: typeof addSpace
-    removeRequest?: typeof removeSpace
-    refreshRequest?: typeof refreshSpace
-  } = $props()
+  }: SidebarProps = $props()
+
   let path = $state('')
   let repo = $state('')
   let adding = $state(false)
   let addError = $state<string | null>(null)
-  let pendingActions = $state<Record<string, boolean>>({})
-  let rowErrors = $state<Record<string, string | undefined>>({})
-  let canAdd = $derived(
-    !adding && (path.trim().length > 0) !== (repo.trim().length > 0),
-  )
+  let pendingRows = $state<Record<string, Partial<Record<RowAction, boolean>>>>({})
+  let rowErrors = $state<Record<string, string | null>>({})
+  const canAdd = $derived(Boolean(path.trim()) !== Boolean(repo.trim()))
 
-  function syncLabel(timestamp: number | null): string {
-    if (timestamp === null) return 'Never synced'
-    const iso = new Date(timestamp * 1000).toISOString()
-    return `Synced ${iso.slice(0, 16).replace('T', ' ')} UTC`
+  function syncAge(syncedAt: number | null): string {
+    if (syncedAt === null) return 'Never synced'
+
+    const elapsedSeconds = Math.max(0, Math.floor(Date.now() / 1000 - syncedAt))
+    if (elapsedSeconds < 60) return 'Synced just now'
+
+    const minutes = Math.floor(elapsedSeconds / 60)
+    if (minutes < 60) return `Synced ${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`
+
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `Synced ${hours} ${hours === 1 ? 'hour' : 'hours'} ago`
+
+    const days = Math.floor(hours / 24)
+    return `Synced ${days} ${days === 1 ? 'day' : 'days'} ago`
   }
 
-  function errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error)
+  function connectionLabel(status: Status): string {
+    return status[0].toUpperCase() + status.slice(1)
   }
 
-  async function submit(event: SubmitEvent): Promise<void> {
+  async function submitAdd(event: SubmitEvent): Promise<void> {
     event.preventDefault()
-    if (!canAdd) return
-
-    const trimmedPath = path.trim()
-    const trimmedRepo = repo.trim()
-    const body: AddSpaceRequest = trimmedPath ? { path: trimmedPath } : { repo: trimmedRepo }
+    if (!canAdd || adding) return
 
     adding = true
     addError = null
     try {
+      const body = path.trim() ? { path: path.trim() } : { repo: repo.trim() }
       const response = await addRequest(body)
       if (!response.ok) {
         addError = (await response.text()) || `Add failed (${response.status})`
         return
       }
 
-      const payload = (await response.json()) as { id?: unknown }
-      if (typeof payload.id !== 'string' || payload.id.length === 0) {
-        addError = 'Add response did not include a space ID'
-        return
-      }
-
+      const result = (await response.json()) as { id: string }
       path = ''
       repo = ''
-      added(payload.id)
+      added(result.id)
     } catch (error) {
-      addError = errorMessage(error)
+      addError = error instanceof Error ? error.message : String(error)
     } finally {
       adding = false
     }
   }
 
-  function actionKey(id: string, action: RowAction): string {
-    return `${id}:${action}`
+  function rowMutation(action: RowAction): RowMutation {
+    if (action === 'refresh') {
+      return { request: refreshRequest, failureLabel: 'Refresh', complete: () => undefined }
+    }
+
+    return { request: removeRequest, failureLabel: 'Remove', complete: removed }
   }
 
-  function actionPending(id: string, action: RowAction): boolean {
-    return pendingActions[actionKey(id, action)] === true
-  }
+  async function mutateSpace(space: SpaceModel, action: RowAction): Promise<void> {
+    if (pendingRows[space.id]?.[action]) return
 
-  function setActionPending(id: string, action: RowAction, pending: boolean): void {
-    pendingActions = { ...pendingActions, [actionKey(id, action)]: pending }
-  }
-
-  function setRowError(id: string, error?: string): void {
-    rowErrors = { ...rowErrors, [id]: error }
-  }
-
-  async function runRowMutation(
-    id: string,
-    action: RowAction,
-    request: () => Promise<Response>,
-    onSuccess?: () => void,
-  ): Promise<void> {
-    if (actionPending(id, action)) return
-    setActionPending(id, action, true)
-    setRowError(id)
+    const mutation = rowMutation(action)
+    pendingRows[space.id] = { ...pendingRows[space.id], [action]: true }
+    rowErrors[space.id] = null
     try {
-      const response = await request()
+      const response = await mutation.request(space.id)
       if (!response.ok) {
-        const label = action === 'refresh' ? 'Refresh' : 'Remove'
-        setRowError(id, (await response.text()) || `${label} failed (${response.status})`)
+        rowErrors[space.id] =
+          (await response.text()) || `${mutation.failureLabel} failed (${response.status})`
         return
       }
-      onSuccess?.()
+
+      mutation.complete(space.id)
     } catch (error) {
-      setRowError(id, errorMessage(error))
+      rowErrors[space.id] = error instanceof Error ? error.message : String(error)
     } finally {
-      setActionPending(id, action, false)
+      pendingRows[space.id] = { ...pendingRows[space.id], [action]: false }
     }
-  }
-
-  function refresh(id: string): Promise<void> {
-    return runRowMutation(id, 'refresh', () => refreshRequest(id))
-  }
-
-  function remove(id: string): Promise<void> {
-    return runRowMutation(id, 'remove', () => removeRequest(id), () => removed(id))
   }
 </script>
 
-<aside class="sidebar">
+<aside aria-label="Spaces">
   <header>
-    <div>
-      <span class="eyebrow">stellr</span>
-      <h1>Spaces</h1>
-    </div>
-    <span class="connection" data-status={connectionStatus}>
-      {connectionStatus === 'open'
-        ? 'Live'
-        : connectionStatus === 'connecting'
-          ? 'Connecting'
-          : 'Offline'}
-    </span>
+    <h1>Spaces</h1>
+    <p class="connection-status">{connectionLabel(connectionStatus)}</p>
   </header>
 
-  <nav aria-label="Spaces">
+  <form onsubmit={submitAdd}>
+    <label>
+      Local path
+      <input name="path" bind:value={path} disabled={adding} />
+    </label>
+    <span class="or">or</span>
+    <label>
+      GitHub repository
+      <input name="repo" bind:value={repo} disabled={adding} />
+    </label>
+    <button type="submit" disabled={!canAdd || adding}>{adding ? 'Adding…' : 'Add'}</button>
+    {#if addError}<p class="form-error" aria-live="polite">{addError}</p>{/if}
+  </form>
+
+  <nav aria-label="Space list">
     <ul>
       {#each spaces as space (space.id)}
-        <li data-space-row={space.id}>
+        <li class:active={space.id === activeSpaceId} data-space-row={space.id}>
           <button
-            class="space-select"
             type="button"
+            class="space-select"
             data-space-id={space.id}
             aria-current={space.id === activeSpaceId ? 'true' : undefined}
             onclick={() => select(space.id)}
           >
-            <span class="space-heading">
-              <strong>{space.name}</strong>
-              {#if space.stale}<span class="stale">Stale</span>{/if}
-            </span>
-            <span class="repo">{space.repo}</span>
-            <time datetime={space.synced_at === null ? undefined : new Date(space.synced_at * 1000).toISOString()}>
-              {syncLabel(space.synced_at)}
-            </time>
+            <span class="space-name">{space.name}</span>
+            <span class="space-repo">{space.repo}</span>
+            <span class="space-age">{syncAge(space.synced_at)}</span>
+            {#if space.stale}<span class="stale">Stale</span>{/if}
             {#if space.error}<span class="provider-error">{space.error}</span>{/if}
           </button>
           <div class="row-actions">
             <button
               type="button"
-              data-action="refresh"
-              disabled={actionPending(space.id, 'refresh')}
-              onclick={() => refresh(space.id)}
+              aria-label={`Refresh ${space.name}`}
+              disabled={pendingRows[space.id]?.refresh ?? false}
+              onclick={() => mutateSpace(space, 'refresh')}
             >Refresh</button>
             <button
               type="button"
-              data-action="remove"
-              disabled={actionPending(space.id, 'remove')}
-              onclick={() => remove(space.id)}
+              aria-label={`Remove ${space.name}`}
+              disabled={pendingRows[space.id]?.remove ?? false}
+              onclick={() => mutateSpace(space, 'remove')}
             >Remove</button>
           </div>
           {#if rowErrors[space.id]}
-            <p class="mutation-error row-error" data-row-error>{rowErrors[space.id]}</p>
+            <p class="row-error" aria-live="polite">{rowErrors[space.id]}</p>
           {/if}
         </li>
       {/each}
     </ul>
   </nav>
-
-  <form onsubmit={submit}>
-    <h2>Add space</h2>
-    <label>
-      Local path
-      <input name="path" bind:value={path} placeholder="D:\dev\project" />
-    </label>
-    <span class="or">or</span>
-    <label>
-      GitHub repository
-      <input name="repo" bind:value={repo} placeholder="owner/repository" />
-    </label>
-    <button class="add" type="submit" disabled={!canAdd}>{adding ? 'Adding…' : 'Add'}</button>
-    {#if addError}<p class="mutation-error" data-add-error>{addError}</p>{/if}
-  </form>
 </aside>
 
 <style>
-  .sidebar {
+  aside {
     display: flex;
-    flex-direction: column;
-    min-width: 0;
     min-height: 0;
+    flex-direction: column;
     border-right: 1px solid var(--border);
     background: var(--background);
     color: var(--foreground);
@@ -220,98 +191,27 @@
 
   header {
     display: flex;
-    align-items: flex-start;
+    align-items: baseline;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: 1rem;
     padding: 1rem;
     border-bottom: 1px solid var(--border);
   }
 
-  .eyebrow,
-  .connection,
-  .stale {
-    color: var(--muted-foreground);
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+  h1,
+  p {
+    margin: 0;
   }
 
   h1 {
-    margin: 0.15rem 0 0;
-    font-size: 1.1rem;
-  }
-
-  .connection[data-status='open'] {
-    color: var(--primary);
-  }
-
-  nav {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-  }
-
-  ul {
-    list-style: none;
-    margin: 0;
-    padding: 0.5rem;
-  }
-
-  li + li {
-    margin-top: 0.35rem;
-  }
-
-  .space-select {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    width: 100%;
-    padding: 0.7rem;
-    border: 1px solid var(--border);
-    border-radius: 0.45rem;
-    background: var(--background);
-    color: var(--foreground);
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
-  }
-
-  .space-select[aria-current='true'] {
-    border-color: var(--primary);
-    background: var(--muted);
-  }
-
-  .space-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    width: 100%;
-  }
-
-  .repo,
-  time,
-  .provider-error {
-    color: var(--muted-foreground);
-    font-size: 0.75rem;
-  }
-
-  .stale,
-  .provider-error {
-    color: var(--destructive);
+    font-size: 1rem;
   }
 
   form {
     display: grid;
     gap: 0.5rem;
     padding: 1rem;
-    border-top: 1px solid var(--border);
-  }
-
-  form h2 {
-    margin: 0;
-    font-size: 0.9rem;
+    border-bottom: 1px solid var(--border);
   }
 
   label {
@@ -322,72 +222,126 @@
   }
 
   input {
-    box-sizing: border-box;
-    width: 100%;
+    min-width: 0;
     padding: 0.5rem;
     border: 1px solid var(--border);
-    border-radius: 0.35rem;
-    background: var(--background);
     color: var(--foreground);
+    background: var(--muted);
     font: inherit;
+  }
+
+  input:focus-visible,
+  form button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
+  form button {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    color: var(--foreground);
+    background: var(--muted);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  form button:disabled {
+    color: var(--muted-foreground);
+    cursor: not-allowed;
   }
 
   .or {
     color: var(--muted-foreground);
-    font-size: 0.7rem;
-    text-align: center;
-    text-transform: uppercase;
-  }
-
-  .add {
-    display: block;
-    width: 100%;
-    padding: 0.55rem;
-    border: 1px solid var(--primary);
-    border-radius: 0.35rem;
-    background: var(--primary);
-    color: var(--background);
-    cursor: pointer;
+    font-size: 0.75rem;
     text-align: center;
   }
 
-  .add:disabled {
-    border-color: var(--border);
-    background: var(--muted);
-    color: var(--muted-foreground);
-    cursor: not-allowed;
-  }
-
-  .mutation-error {
-    margin: 0;
+  .form-error {
     color: var(--destructive);
     font-size: 0.75rem;
   }
 
-  .row-actions {
+  .connection-status,
+  .space-repo,
+  .space-age {
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+  }
+
+  nav {
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    border-bottom: 1px solid var(--border);
+  }
+
+  li.active {
+    background: var(--muted);
+  }
+
+  .space-select {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.35rem;
-    margin-top: 0.35rem;
+    width: 100%;
+    gap: 0.25rem;
+    padding: 0.75rem 1rem;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .space-select:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+
+  .space-name {
+    font-weight: 600;
+  }
+
+  .row-actions {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0 1rem 0.75rem;
   }
 
   .row-actions button {
-    padding: 0.35rem 0.5rem;
+    padding: 0.25rem 0.5rem;
     border: 1px solid var(--border);
-    border-radius: 0.35rem;
-    background: var(--background);
     color: var(--muted-foreground);
-    cursor: pointer;
+    background: var(--background);
     font: inherit;
-    font-size: 0.7rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .row-actions button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
   .row-actions button:disabled {
-    background: var(--muted);
     cursor: not-allowed;
   }
 
+  .stale,
+  .provider-error,
   .row-error {
-    margin-top: 0.35rem;
+    color: var(--destructive);
+    font-size: 0.75rem;
+  }
+
+  .row-error {
+    padding: 0 1rem 0.75rem;
   }
 </style>

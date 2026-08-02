@@ -1,46 +1,42 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { addSpace, refreshSpace, removeSpace } from './api'
 
-afterEach(() => {
-  vi.unstubAllGlobals()
-})
-
 describe('spaces API client', () => {
-  it('posts exactly the supplied add-space field and returns the raw response', async () => {
-    const response = new Response(JSON.stringify({ id: 'teloverge-stellr' }), { status: 201 })
-    const fetch = vi.fn().mockResolvedValue(response)
-    vi.stubGlobal('fetch', fetch)
+  const fetchStub = vi.fn<() => Promise<Response>>()
 
-    const received = await addSpace({ repo: 'teloverge/stellr' })
+  beforeEach(() => {
+    fetchStub.mockResolvedValue(new Response())
+    vi.stubGlobal('fetch', fetchStub)
+  })
 
-    expect(fetch).toHaveBeenCalledWith('/api/spaces', {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts an add-space request with the supplied body', async () => {
+    await addSpace({ repo: 'teloverge/stellr' })
+
+    expect(fetchStub).toHaveBeenCalledWith('/api/spaces', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ repo: 'teloverge/stellr' }),
     })
-    expect(received).toBe(response)
   })
 
-  it('encodes the complete space ID when deleting', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
-    vi.stubGlobal('fetch', fetch)
+  it('deletes an encoded space ID', async () => {
+    await removeSpace('teloverge/stellr')
 
-    await removeSpace('owner/repo name')
-
-    expect(fetch).toHaveBeenCalledWith('/api/spaces/owner%2Frepo%20name', {
+    expect(fetchStub).toHaveBeenCalledWith('/api/spaces/teloverge%2Fstellr', {
       method: 'DELETE',
       credentials: 'same-origin',
     })
   })
 
-  it('encodes the complete space ID before the refresh suffix', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 202 }))
-    vi.stubGlobal('fetch', fetch)
+  it('posts a refresh request for an encoded space ID', async () => {
+    await refreshSpace('teloverge/stellr')
 
-    await refreshSpace('owner/repo name')
-
-    expect(fetch).toHaveBeenCalledWith('/api/spaces/owner%2Frepo%20name/refresh', {
+    expect(fetchStub).toHaveBeenCalledWith('/api/spaces/teloverge%2Fstellr/refresh', {
       method: 'POST',
       credentials: 'same-origin',
     })

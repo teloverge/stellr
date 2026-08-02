@@ -53,7 +53,7 @@ describe('DetailPane', () => {
 
     const link = target.querySelector<HTMLAnchorElement>('a[href$="/issues/42"]')!
     expect(link.target).toBe('_blank')
-    expect(link.rel).toBe('noreferrer')
+    expect(link.rel).toBe('noopener noreferrer')
 
     target
       .querySelector<HTMLButtonElement>('button[aria-label="Close issue details"]')!
@@ -67,5 +67,16 @@ describe('DetailPane', () => {
     expect(target.textContent).not.toContain('Milestone')
     expect(target.textContent).not.toContain('Labels')
     expect(target.textContent).not.toContain('Assignees')
+  })
+
+  it.each([
+    'javascript:alert(1)',
+    'http://github.com/teloverge/stellr/issues/42',
+    'https://github.com.evil.test/teloverge/stellr/issues/42',
+    'https://github.com/teloverge/stellr/issues/99',
+  ])('omits the outbound link for an unsafe provider URL %s', (url) => {
+    const target = render(issue({ url }))
+
+    expect(target.querySelector('a')).toBeNull()
   })
 })

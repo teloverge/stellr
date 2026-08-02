@@ -9,9 +9,9 @@
   sibling-sequence, and child-return arrows; violet dashed incomplete routes
   and rims; resolved completed grammar; and motion only on traversed
   completed-to-ready routes.
-- Added the M1 application chrome: complete space add/select/refresh/remove
-  controls, visible stale and provider-error state, and restorable hash-routed
-  issue detail rendered through sanitized Markdown with responsive docking.
+- Added a space lifecycle sidebar with stale/offline status, plus routed,
+  responsive, sanitized issue detail, canonical restorable deep links, and safe
+  GitHub navigation from the star map.
 - Strengthened dependency lines, arrows, and resolved-edge motion, and made
   incomplete issue cores hollow while completed issues remain solid.
 - Refocused the star map on the current conversation issue and actionable
