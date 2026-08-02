@@ -110,6 +110,7 @@
 
     return () => {
       observer.disconnect()
+      control.destroy()
       route.destroy()
     }
   })

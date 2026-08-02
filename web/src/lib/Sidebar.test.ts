@@ -209,7 +209,7 @@ describe('Sidebar row actions', () => {
       target.querySelector<HTMLButtonElement>(
         '[data-space-row="teloverge-stellr"] [data-action="remove"]',
       )?.disabled,
-    ).toBe(true)
+    ).toBe(false)
     expect(
       target.querySelector<HTMLButtonElement>('[data-space-row="other"] [data-action="refresh"]')
         ?.disabled,

@@ -5,6 +5,7 @@ import type { Model, SpaceModel, Star } from './lib/model'
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = []
+  closed = false
 
   onclose: ((event: CloseEvent) => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
@@ -14,7 +15,9 @@ class FakeWebSocket {
     FakeWebSocket.instances.push(this)
   }
 
-  close(): void {}
+  close(): void {
+    this.closed = true
+  }
 
   emitModel(model: Model): void {
     this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(model) }))
@@ -98,15 +101,25 @@ const model: Model = {
   spaces: [space('first', 11), space('second', 22)],
 }
 
-function mountApp(): { target: HTMLElement; socket: FakeWebSocket } {
+function mountApp(): { target: HTMLElement; socket: FakeWebSocket; component: object } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  mounted.push(mount(App, { target }))
+  const component = mount(App, { target })
+  mounted.push(component)
   flushSync()
-  return { target, socket: FakeWebSocket.instances[0] }
+  return { target, socket: FakeWebSocket.instances[0], component }
 }
 
 describe('App issue routing', () => {
+  it('closes its control socket when the App is unmounted', async () => {
+    const { socket, component } = mountApp()
+
+    await unmount(component)
+    mounted.splice(mounted.indexOf(component), 1)
+
+    expect(socket.closed).toBe(true)
+  })
+
   it('routes an unaddressed snapshot to its first available space', () => {
     const { target, socket } = mountApp()
 

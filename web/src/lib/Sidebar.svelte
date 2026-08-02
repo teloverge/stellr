@@ -8,6 +8,7 @@
   import type { SpaceModel } from './model'
 
   type ConnectionStatus = 'connecting' | 'open' | 'closed'
+  type RowAction = 'refresh' | 'remove'
 
   let {
     spaces,
@@ -34,7 +35,7 @@
   let repo = $state('')
   let adding = $state(false)
   let addError = $state<string | null>(null)
-  let pendingRows = $state<Record<string, boolean>>({})
+  let pendingActions = $state<Record<string, boolean>>({})
   let rowErrors = $state<Record<string, string | undefined>>({})
   let canAdd = $derived(
     !adding && (path.trim().length > 0) !== (repo.trim().length > 0),
@@ -46,7 +47,7 @@
     return `Synced ${iso.slice(0, 16).replace('T', ' ')} UTC`
   }
 
-  function message(error: unknown): string {
+  function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error)
   }
 
@@ -77,52 +78,58 @@
       repo = ''
       added(payload.id)
     } catch (error) {
-      addError = message(error)
+      addError = errorMessage(error)
     } finally {
       adding = false
     }
   }
 
-  function setRowPending(id: string, pending: boolean): void {
-    pendingRows = { ...pendingRows, [id]: pending }
+  function actionKey(id: string, action: RowAction): string {
+    return `${id}:${action}`
+  }
+
+  function actionPending(id: string, action: RowAction): boolean {
+    return pendingActions[actionKey(id, action)] === true
+  }
+
+  function setActionPending(id: string, action: RowAction, pending: boolean): void {
+    pendingActions = { ...pendingActions, [actionKey(id, action)]: pending }
   }
 
   function setRowError(id: string, error?: string): void {
     rowErrors = { ...rowErrors, [id]: error }
   }
 
-  async function refresh(id: string): Promise<void> {
-    if (pendingRows[id]) return
-    setRowPending(id, true)
+  async function runRowMutation(
+    id: string,
+    action: RowAction,
+    request: () => Promise<Response>,
+    onSuccess?: () => void,
+  ): Promise<void> {
+    if (actionPending(id, action)) return
+    setActionPending(id, action, true)
     setRowError(id)
     try {
-      const response = await refreshRequest(id)
+      const response = await request()
       if (!response.ok) {
-        setRowError(id, (await response.text()) || `Refresh failed (${response.status})`)
+        const label = action === 'refresh' ? 'Refresh' : 'Remove'
+        setRowError(id, (await response.text()) || `${label} failed (${response.status})`)
+        return
       }
+      onSuccess?.()
     } catch (error) {
-      setRowError(id, message(error))
+      setRowError(id, errorMessage(error))
     } finally {
-      setRowPending(id, false)
+      setActionPending(id, action, false)
     }
   }
 
-  async function remove(id: string): Promise<void> {
-    if (pendingRows[id]) return
-    setRowPending(id, true)
-    setRowError(id)
-    try {
-      const response = await removeRequest(id)
-      if (!response.ok) {
-        setRowError(id, (await response.text()) || `Remove failed (${response.status})`)
-        return
-      }
-      removed(id)
-    } catch (error) {
-      setRowError(id, message(error))
-    } finally {
-      setRowPending(id, false)
-    }
+  function refresh(id: string): Promise<void> {
+    return runRowMutation(id, 'refresh', () => refreshRequest(id))
+  }
+
+  function remove(id: string): Promise<void> {
+    return runRowMutation(id, 'remove', () => removeRequest(id), () => removed(id))
   }
 </script>
 
@@ -166,13 +173,13 @@
             <button
               type="button"
               data-action="refresh"
-              disabled={pendingRows[space.id] === true}
+              disabled={actionPending(space.id, 'refresh')}
               onclick={() => refresh(space.id)}
             >Refresh</button>
             <button
               type="button"
               data-action="remove"
-              disabled={pendingRows[space.id] === true}
+              disabled={actionPending(space.id, 'remove')}
               onclick={() => remove(space.id)}
             >Remove</button>
           </div>
@@ -333,13 +340,19 @@
   }
 
   .add {
-    align-items: center;
+    display: block;
+    width: 100%;
+    padding: 0.55rem;
+    border: 1px solid var(--primary);
+    border-radius: 0.35rem;
     background: var(--primary);
     color: var(--background);
+    cursor: pointer;
     text-align: center;
   }
 
   .add:disabled {
+    border-color: var(--border);
     background: var(--muted);
     color: var(--muted-foreground);
     cursor: not-allowed;
