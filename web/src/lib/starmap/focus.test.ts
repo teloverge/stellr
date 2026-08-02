@@ -129,6 +129,6 @@ describe('session focus analysis', () => {
     ]
 
     expect([...analyzeFocus(fullParentCycle, 16).pathEdges]).toEqual(['16>37', '37>38'])
-    expect([...analyzeFocus(fullParentCycle, 16).pathEdges]).toEqual(['16>37', '37>38'])
+    expect([...analyzeFocus([...fullParentCycle].reverse(), 16).pathEdges]).toEqual(['16>37', '37>38'])
   })
 })
