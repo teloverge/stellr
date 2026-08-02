@@ -3,6 +3,13 @@
   import type { SpaceModel } from './model'
 
   type Status = 'connecting' | 'open' | 'closed'
+  type RowAction = 'refresh' | 'remove'
+
+  interface RowMutation {
+    request: (id: string) => Promise<Response>
+    failureLabel: string
+    complete: (id: string) => void
+  }
 
   interface SidebarProps {
     spaces: SpaceModel[]
@@ -32,7 +39,7 @@
   let repo = $state('')
   let adding = $state(false)
   let addError = $state<string | null>(null)
-  let pendingRows = $state<Record<string, boolean>>({})
+  let pendingRows = $state<Record<string, Partial<Record<RowAction, boolean>>>>({})
   let rowErrors = $state<Record<string, string | null>>({})
   const canAdd = $derived(Boolean(path.trim()) !== Boolean(repo.trim()))
 
@@ -81,25 +88,33 @@
     }
   }
 
-  async function mutateSpace(space: SpaceModel, action: 'refresh' | 'remove'): Promise<void> {
-    if (pendingRows[space.id]) return
+  function rowMutation(action: RowAction): RowMutation {
+    if (action === 'refresh') {
+      return { request: refreshRequest, failureLabel: 'Refresh', complete: () => undefined }
+    }
 
-    pendingRows[space.id] = true
+    return { request: removeRequest, failureLabel: 'Remove', complete: removed }
+  }
+
+  async function mutateSpace(space: SpaceModel, action: RowAction): Promise<void> {
+    if (pendingRows[space.id]?.[action]) return
+
+    const mutation = rowMutation(action)
+    pendingRows[space.id] = { ...pendingRows[space.id], [action]: true }
     rowErrors[space.id] = null
     try {
-      const response = await (action === 'refresh' ? refreshRequest : removeRequest)(space.id)
+      const response = await mutation.request(space.id)
       if (!response.ok) {
         rowErrors[space.id] =
-          (await response.text()) ||
-          `${action === 'refresh' ? 'Refresh' : 'Remove'} failed (${response.status})`
+          (await response.text()) || `${mutation.failureLabel} failed (${response.status})`
         return
       }
 
-      if (action === 'remove') removed(space.id)
+      mutation.complete(space.id)
     } catch (error) {
       rowErrors[space.id] = error instanceof Error ? error.message : String(error)
     } finally {
-      pendingRows[space.id] = false
+      pendingRows[space.id] = { ...pendingRows[space.id], [action]: false }
     }
   }
 </script>
@@ -145,13 +160,13 @@
             <button
               type="button"
               aria-label={`Refresh ${space.name}`}
-              disabled={pendingRows[space.id]}
+              disabled={pendingRows[space.id]?.refresh ?? false}
               onclick={() => mutateSpace(space, 'refresh')}
             >Refresh</button>
             <button
               type="button"
               aria-label={`Remove ${space.name}`}
-              disabled={pendingRows[space.id]}
+              disabled={pendingRows[space.id]?.remove ?? false}
               onclick={() => mutateSpace(space, 'remove')}
             >Remove</button>
           </div>

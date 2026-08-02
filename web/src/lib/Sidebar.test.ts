@@ -192,19 +192,26 @@ describe('Sidebar add form', () => {
 })
 
 describe('Sidebar row actions', () => {
-  it('refreshes the selected ID and disables mutations only for the pending row', async () => {
+  it('tracks pending state per row and action while leaving other actions usable', async () => {
     let finishRefresh!: (response: Response) => void
+    let finishRemove!: (response: Response) => void
     const refreshRequest = vi.fn<typeof refreshSpace>().mockReturnValue(
       new Promise((resolve) => {
         finishRefresh = resolve
       }),
     )
+    const removeRequest = vi.fn<typeof removeSpace>().mockReturnValue(
+      new Promise((resolve) => {
+        finishRemove = resolve
+      }),
+    )
+    const removed: string[] = []
     const target = render(
       [
         space(),
         space({ id: 'teloverge/other', repo: 'teloverge/other', name: 'Other' }),
       ],
-      { refreshRequest },
+      { refreshRequest, removeRequest, removed: (id) => removed.push(id) },
     )
     const firstRow = target.querySelector<HTMLElement>('[data-space-row="teloverge/stellr"]')!
     const secondRow = target.querySelector<HTMLElement>('[data-space-row="teloverge/other"]')!
@@ -217,7 +224,7 @@ describe('Sidebar row actions', () => {
       true,
     )
     expect(firstRow.querySelector<HTMLButtonElement>('button[aria-label="Remove Stellr"]')!.disabled).toBe(
-      true,
+      false,
     )
     expect(secondRow.querySelector<HTMLButtonElement>('button[aria-label="Refresh Other"]')!.disabled).toBe(
       false,
@@ -226,9 +233,26 @@ describe('Sidebar row actions', () => {
       false,
     )
 
+    firstRow.querySelector<HTMLButtonElement>('button[aria-label="Remove Stellr"]')!.click()
+    flushSync()
+    expect(removeRequest).toHaveBeenCalledWith('teloverge/stellr')
+    expect(firstRow.querySelector<HTMLButtonElement>('button[aria-label="Remove Stellr"]')!.disabled).toBe(
+      true,
+    )
+
     finishRefresh(new Response(null, { status: 204 }))
     await settle()
     expect(firstRow.querySelector<HTMLButtonElement>('button[aria-label="Refresh Stellr"]')!.disabled).toBe(
+      false,
+    )
+    expect(firstRow.querySelector<HTMLButtonElement>('button[aria-label="Remove Stellr"]')!.disabled).toBe(
+      true,
+    )
+
+    finishRemove(new Response(null, { status: 204 }))
+    await settle()
+    expect(removed).toEqual(['teloverge/stellr'])
+    expect(firstRow.querySelector<HTMLButtonElement>('button[aria-label="Remove Stellr"]')!.disabled).toBe(
       false,
     )
   })

@@ -173,7 +173,7 @@ describe('App issue routing', () => {
     expect(window.location.hash).toBe('#s=new-space')
   })
 
-  it('keeps a successful add route through repeated pre-add snapshots', async () => {
+  it('waits for the authoritative added-space snapshot before rendering its map', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn<typeof fetch>().mockResolvedValue(
@@ -192,11 +192,20 @@ describe('App issue routing', () => {
     target.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
     await settle()
     expect(window.location.hash).toBe('#s=new-space')
+    expect(target.querySelector('.star-map')).toBeNull()
 
     socket.emitModel(model)
     flushSync()
 
     expect(window.location.hash).toBe('#s=new-space')
+    expect(target.querySelector('.star-map')).toBeNull()
+
+    socket.emitModel({ spaces: [...model.spaces, space('new-space', 44)] })
+    flushSync()
+
+    expect(window.location.hash).toBe('#s=new-space')
+    expect(target.querySelector('[data-space-row="new-space"] [aria-current="true"]')).not.toBeNull()
+    expect(target.querySelector('.star-map')).not.toBeNull()
   })
 
   it('routes to the following space after successfully removing the active middle space', async () => {
@@ -362,6 +371,35 @@ describe('App issue routing', () => {
     expect(target.querySelector('[data-space-row="middle"]')?.textContent).toContain(
       'Remove rejected',
     )
+  })
+
+  it('reconciles a failed removal against the newer authoritative snapshot', async () => {
+    let finishRemove!: (response: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockReturnValue(
+        new Promise((resolve) => {
+          finishRemove = resolve
+        }),
+      ),
+    )
+    window.history.replaceState(null, '', '/#s=middle&i=22')
+    const { target, socket } = mountApp()
+    socket.emitModel(lifecycleModel)
+    flushSync()
+
+    target.querySelector<HTMLButtonElement>('button[aria-label="Remove middle"]')!.click()
+    flushSync()
+    socket.emitModel({ spaces: [space('first', 11), space('last', 33)] })
+    flushSync()
+    expect(window.location.hash).toBe('#s=middle&i=22')
+
+    finishRemove(new Response('Remove rejected', { status: 409 }))
+    await settle()
+
+    expect(window.location.hash).toBe('#s=first')
+    expect(target.querySelector('[data-space-row="first"] [aria-current="true"]')).not.toBeNull()
+    expect(target.querySelector('[aria-label="Issue details"]')).toBeNull()
   })
 
   it('keeps a stale cached space navigable with its map, detail, and provider error', () => {

@@ -15,24 +15,47 @@
     succeeded: boolean
   }
 
+  interface ResolvedRoute {
+    space: Model['spaces'][number] | null
+    star: Model['spaces'][number]['stars'][number] | null
+  }
+
+  function resolveRoute(
+    modelSnapshot: Model | null,
+    spaceId: string | null,
+    issueNumber: number | null,
+    allowSpaceFallback = true,
+  ): ResolvedRoute {
+    const spaces = modelSnapshot?.spaces ?? []
+    const routedSpace =
+      spaceId === null ? null : (spaces.find((space) => space.id === spaceId) ?? null)
+    const space = routedSpace ?? (allowSpaceFallback ? spaces[0] ?? null : null)
+    const star =
+      space === null || issueNumber === null
+        ? null
+        : (space.stars.find((candidate) => candidate.number === issueNumber) ?? null)
+
+    return { space, star }
+  }
+
   const currentIssue = pageIssue()
   const sessionToken = takePageToken()
   const control = new Control(sessionToken)
   const route = new Route()
+  let pendingAddedId = $state<string | null>(null)
   const spaces = $derived(control.model?.spaces ?? [])
-  const activeSpace = $derived(
-    (route.space === null ? null : spaces.find((space) => space.id === route.space)) ??
-      spaces[0] ??
-      null,
+  const resolvedRoute = $derived(
+    resolveRoute(
+      control.model,
+      route.space,
+      route.issue,
+      pendingAddedId === null || route.space !== pendingAddedId,
+    ),
   )
-  const activeStar = $derived(
-    activeSpace === null || route.issue === null
-      ? null
-      : (activeSpace.stars.find((star) => star.number === route.issue) ?? null),
-  )
+  const activeSpace = $derived(resolvedRoute.space)
+  const activeStar = $derived(resolvedRoute.star)
   let workspace: HTMLElement
   let dock = $state<Dock>('right')
-  let pendingAddedId = $state<string | null>(null)
   let pendingRemovals = $state.raw<Record<string, RemovalIntent>>({})
 
   function reconcileModel(modelSnapshot: Model): void {
@@ -60,11 +83,8 @@
       }
     }
 
-    const routedSpace =
-      route.space === null
-        ? null
-        : (modelSnapshot.spaces.find((space) => space.id === route.space) ?? null)
-    const fallbackSpace = routedSpace ?? modelSnapshot.spaces[0] ?? null
+    const resolved = resolveRoute(modelSnapshot, route.space, route.issue)
+    const fallbackSpace = resolved.space
 
     if (fallbackSpace === null) {
       if (route.space !== null || route.issue !== null) route.go(null)
@@ -76,11 +96,7 @@
       return
     }
 
-    const routedStar =
-      route.issue === null
-        ? null
-        : (fallbackSpace.stars.find((star) => star.number === route.issue) ?? null)
-    if (route.issue !== null && routedStar === null) {
+    if (route.issue !== null && resolved.star === null) {
       route.go(fallbackSpace.id)
     }
   }
@@ -103,6 +119,11 @@
     pendingRemovals = nextIntents
   }
 
+  function rejectRemovalIntent(id: string): void {
+    clearRemovalIntent(id)
+    if (control.model !== null) reconcileModel(control.model)
+  }
+
   async function requestRemoveSpace(id: string): Promise<Response> {
     const removedIndex = spaces.findIndex((space) => space.id === id)
     pendingRemovals = {
@@ -119,10 +140,10 @@
 
     try {
       const response = await removeSpace(id)
-      if (!response.ok) clearRemovalIntent(id)
+      if (!response.ok) rejectRemovalIntent(id)
       return response
     } catch (error) {
-      clearRemovalIntent(id)
+      rejectRemovalIntent(id)
       throw error
     }
   }
