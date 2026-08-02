@@ -17,7 +17,9 @@
   } = $props()
   let host: HTMLDivElement
   let renderer = $state.raw<Renderer | undefined>(undefined)
-  let selectedSpaceId: string | null = null
+  let synchronizedRenderer: Renderer | undefined
+  let synchronizedSpaceId: string | null = null
+  let synchronizedIssue: number | null = null
 
   $effect(() => {
     const model = toRendererModel(space)
@@ -25,10 +27,18 @@
   })
 
   $effect(() => {
-    const spaceChanged = selectedSpaceId !== space.id
-    selectedSpaceId = space.id
-    if (spaceChanged || selectedIssue === null) renderer?.select(null)
-    if (selectedIssue !== null) renderer?.select(selectedIssue)
+    if (renderer === undefined) return
+
+    const rendererChanged = synchronizedRenderer !== renderer
+    const spaceChanged = synchronizedSpaceId !== space.id
+    const issueChanged = synchronizedIssue !== selectedIssue
+    if (!rendererChanged && !spaceChanged && !issueChanged) return
+
+    synchronizedRenderer = renderer
+    synchronizedSpaceId = space.id
+    synchronizedIssue = selectedIssue
+    if (spaceChanged || selectedIssue === null) renderer.select(null)
+    if (selectedIssue !== null) renderer.select(selectedIssue)
   })
 
   onMount(() => {

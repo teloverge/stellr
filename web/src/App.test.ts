@@ -76,6 +76,7 @@ afterEach(async () => {
 function issue(number: number): Star {
   return {
     number,
+    parent_issue: null,
     title: `Issue ${number}`,
     status: 'frontier',
     blocked_by: [],

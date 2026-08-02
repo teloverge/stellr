@@ -17,6 +17,7 @@ function space(): SpaceModel {
       const number = index + 1
       return {
         number,
+        parent_issue: null,
         title: `Issue ${number}`,
         status,
         blocked_by: status === 'blocked' ? [1] : [],
@@ -32,7 +33,10 @@ function space(): SpaceModel {
 
 describe('toRendererModel', () => {
   it('maps every issue status and directs blocker edges toward the blocked issue', () => {
-    const model = toRendererModel(space())
+    const input = space()
+    input.stars[0].parent_issue = 16
+
+    const model = toRendererModel(input)
 
     expect(model).toHaveLength(5)
     expect(model.map((node) => node.status)).toEqual(statuses)
@@ -41,7 +45,9 @@ describe('toRendererModel', () => {
       slug: '1',
       title: 'Issue 1',
       status: 'frontier',
+      parentIssue: 16,
     })
+    expect(model[1].parentIssue).toBeNull()
     expect(edgesOf(model)).toContainEqual({ from: 1, to: 5 })
   })
 

@@ -54,6 +54,7 @@ async fn fetch_follows_pagination_until_the_repository_is_complete() {
             None,
             &[],
             &[],
+            None,
         )]))))
         .mount(&server)
         .await;
@@ -72,6 +73,7 @@ async fn fetch_follows_pagination_until_the_repository_is_complete() {
                     None,
                     &[],
                     &[],
+                    None,
                 )]),
                 true,
                 Some("CUR1"),
@@ -171,6 +173,7 @@ fn node(
     milestone: Option<&str>,
     labels: &[&str],
     blocked_by: &[u64],
+    parent: Option<u64>,
 ) -> Value {
     json!({
         "number": number,
@@ -197,7 +200,8 @@ fn node(
                 .iter()
                 .map(|number| json!({ "number": number }))
                 .collect::<Vec<_>>()
-        }
+        },
+        "parent": parent.map(|number| json!({ "number": number }))
     })
 }
 
@@ -214,6 +218,7 @@ async fn mount_graphql_response(server: &MockServer, response: Value) {
         .and(body_string_contains(
             "issues(first: 100, after: $cursor, states: [OPEN, CLOSED])",
         ))
+        .and(body_string_contains("parent { number }"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response))
         .mount(server)
         .await;
@@ -236,6 +241,7 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
                 Some("M1"),
                 &["bug", "urgent"],
                 &[],
+                None,
             ),
             node(
                 2,
@@ -248,6 +254,7 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
                 None,
                 &[],
                 &[],
+                None,
             ),
             node(
                 3,
@@ -260,6 +267,7 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
                 None,
                 &["feature"],
                 &[7, 2, 2],
+                Some(16),
             ),
             node(
                 4,
@@ -272,6 +280,7 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
                 Some("M2"),
                 &["planning"],
                 &[3],
+                None,
             ),
         ])),
     )
@@ -280,11 +289,15 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
     let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
     let issues = provider.fetch(&repo()).await.unwrap();
 
+    assert_eq!(issues[0].parent_issue, None);
+    assert_eq!(issues[2].parent_issue, Some(16));
+
     assert_eq!(
         issues,
         vec![
             RawIssue {
                 number: 1,
+                parent_issue: None,
                 title: "Completed".into(),
                 body: "".into(),
                 state: IssueState::Closed,
@@ -296,6 +309,7 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
             },
             RawIssue {
                 number: 2,
+                parent_issue: None,
                 title: "Not planned".into(),
                 body: "".into(),
                 state: IssueState::ClosedNotPlanned,
@@ -307,6 +321,7 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
             },
             RawIssue {
                 number: 3,
+                parent_issue: Some(16),
                 title: "Merged dependencies".into(),
                 body: "Blocked by #1, #2, #7\nBlocked by #1\nBlocks #4, #999".into(),
                 state: IssueState::Open,
@@ -318,6 +333,7 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
             },
             RawIssue {
                 number: 4,
+                parent_issue: None,
                 title: "Inversion target".into(),
                 body: "Blocked by #8".into(),
                 state: IssueState::Open,

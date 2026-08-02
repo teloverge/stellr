@@ -5,19 +5,19 @@
 // seam (ADR 0010), with the tuned constants cribbed directly from the
 // wayfinder-maps renderer to prevent feel-drift.
 //
-// The function is pure and depends only on ticket numbers and their blocked_by
-// edges — never on status. That is the load-bearing property the seam tests
+// The function is pure and depends only on ticket numbers, dependency edges,
+// and parent topology — never on status. That is the load-bearing property the seam tests
 // pin: a model push that changes only a ticket's status can never move a star,
 // because status is not an input to layout at all.
 
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
+import { placeDirectChildClusters } from './cluster-layout'
+import { workflowEdges, type WorkflowNode } from './workflow'
+
 export const TAU = 6.2831853
 
-export interface LayoutNode {
-  num: number
-  blockedBy?: number[]
-}
+export interface LayoutNode extends WorkflowNode {}
 
 export interface Point {
   x: number
@@ -118,7 +118,7 @@ export function computeLayout(nodes: LayoutNode[]): Record<number, Point> {
         b.y -= uy * f
       }
     }
-    // Edge springs: a blocker and its dependent settle toward a rest length, so
+    // Workflow springs settle related tickets toward a rest length, so
     // "what unblocks what" stays mostly monotonic and readable.
     for (const e of edges) {
       const a = pts[e.from],
@@ -143,7 +143,7 @@ export function computeLayout(nodes: LayoutNode[]): Record<number, Point> {
       p.y += (p.y / d) * f
     }
   }
-  return pts
+  return placeDirectChildClusters(sorted, pts, edges)
 }
 
 // A stable signature of a map's *structure* — its ticket numbers and edges, not
@@ -154,8 +154,8 @@ export function structureSignature(nodes: LayoutNode[]): string {
     .map((n) => n.num)
     .sort((a, b) => a - b)
     .join(',')
-  const edges = edgesOf(nodes)
-    .map((e) => `${e.from}>${e.to}`)
+  const edges = workflowEdges(nodes)
+    .map((edge) => `${edge.from}>${edge.to}:${edge.roles.join('+')}`)
     .sort()
     .join(',')
   return `${nums}|${edges}`

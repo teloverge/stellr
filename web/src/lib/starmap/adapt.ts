@@ -9,6 +9,7 @@ export function toRendererModel(space: SpaceModel): Ticket[] {
     type: 'issue',
     status: star.status,
     blockedBy: [...star.blocked_by],
+    parentIssue: star.parent_issue,
     frontier: star.status === 'frontier',
     readyForAgent:
       star.status === 'frontier' &&

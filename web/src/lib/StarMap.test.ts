@@ -32,6 +32,7 @@ function space(number: number): SpaceModel {
     stars: [
       {
         number,
+        parent_issue: null,
         title: `Issue ${number}`,
         status: 'frontier',
         blocked_by: [],
@@ -117,8 +118,7 @@ describe('StarMap wrapper', () => {
     )
   })
 
-  it('selects a routed issue without echoing it as a user selection', () => {
-    const select = vi.spyOn(Renderer.prototype, 'select')
+  it('does not echo a routed selection back through the user-selection callback', () => {
     const target = document.createElement('div')
     document.body.appendChild(target)
     const selected: number[] = []
@@ -134,8 +134,26 @@ describe('StarMap wrapper', () => {
     mounted.push(component)
     flushSync()
 
-    expect(select).toHaveBeenLastCalledWith(42)
     expect(selected).toEqual([])
+  })
+
+  it('clears before restoring the same routed issue when the space changes', () => {
+    const select = vi.spyOn(Renderer.prototype, 'select')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+
+    const component = mount(StarMapTestHost, {
+      target,
+      props: { initialSpace: space(42), initialSelectedIssue: 42 },
+    })
+    mounted.push(component)
+    flushSync()
+
+    select.mockClear()
+    component.updateSpace({ ...space(42), id: 'another-space' })
+    flushSync()
+
+    expect(select.mock.calls).toEqual([[null], [42]])
   })
 
   it('mounts the canvas island and forwards a selected issue number', () => {

@@ -10,7 +10,7 @@ import { GRAMMAR, nonColorSignature, sessionStates, type SessionState } from './
 import type { Map as WMap, Terminal, Ticket } from './model'
 
 function ticket(num: number, status: Ticket['status']): Ticket {
-  return { num, slug: `${num}`, title: `t${num}`, type: 'task', status, blockedBy: [], frontier: false }
+  return { num, slug: `${num}`, title: `t${num}`, type: 'task', status, blockedBy: [], parentIssue: null, frontier: false }
 }
 
 function map(...tickets: Ticket[]): WMap {

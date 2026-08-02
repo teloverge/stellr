@@ -15,6 +15,7 @@ export interface Ticket {
   type: string
   status: TicketStatus
   blockedBy: number[]
+  parentIssue: number | null
   frontier: boolean
   readyForAgent?: boolean
 }

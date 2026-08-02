@@ -167,6 +167,7 @@ impl Provider for SequenceProvider {
         }
         Ok(vec![RawIssue {
             number: 9,
+            parent_issue: None,
             title: "Arrived on the second tick".into(),
             body: String::new(),
             state: IssueState::Open,
@@ -193,6 +194,7 @@ async fn add_repo_space_then_refresh_populates_the_model() {
         state.clone(),
         Arc::new(StubProvider(vec![RawIssue {
             number: 1,
+            parent_issue: None,
             title: "Ready work".into(),
             body: String::new(),
             state: IssueState::Open,
@@ -273,6 +275,7 @@ async fn failed_sync_publishes_the_cached_model_as_stale_with_the_error() {
             &Snapshot {
                 issues: vec![RawIssue {
                     number: 7,
+                    parent_issue: None,
                     title: "Cached work".into(),
                     body: String::new(),
                     state: IssueState::Open,

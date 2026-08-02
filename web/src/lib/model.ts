@@ -2,6 +2,7 @@ export type Status = 'blocked' | 'frontier' | 'claimed' | 'resolved' | 'out_of_s
 
 export interface Star {
   number: number
+  parent_issue: number | null
   title: string
   status: Status
   blocked_by: number[]

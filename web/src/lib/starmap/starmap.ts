@@ -17,10 +17,17 @@
 
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
-import { computeLayout, structureSignature, edgesOf, TAU } from './layout'
+import { computeLayout, structureSignature, TAU } from './layout'
 import { STAR, LABEL, SESSION_HUE, visualState, hexA, type VisualState } from './theme'
 import { GRAMMAR, type SessionState } from './session'
-import { analyzeFocus, edgeKey, type Focus } from './focus'
+import { analyzeFocus, type Focus } from './focus'
+import { edgeKey, isMiniWorkflowEdge, workflowEdges, type WorkflowEdge } from './workflow'
+import { writeMiniEdgeCurve, type MutableMiniCurve } from './workflow-geometry'
+import {
+  reverseEdgeKeys,
+  workflowVisualState,
+  type WorkflowVisualState,
+} from './workflow-visual'
 import type { Ticket } from './model'
 
 export type SelectHandler = (num: number | null) => void
@@ -33,11 +40,19 @@ const DEFAULT_BG = '#05070d'
 const ISSUE_RADIUS_SCALE = 1.25
 const CONTEXT_ALPHA = 0.3
 const CONTEXT_EDGE_ALPHA = 0.45
+const SUBISSUE_RIM = 'rgba(170,145,255,0.82)'
+
+interface RenderEdge extends WorkflowEdge {
+  state: WorkflowVisualState
+  satisfied: boolean
+  reverseExists: boolean
+}
 
 interface Node {
   num: number
   title: string
   type: string
+  parentIssue: number | null
   vstate: VisualState
   // The session overlay riding this star, or null when no session speaks for it
   // (ticket 13). Strictly additive: it never touches layout or the base star.
@@ -234,7 +249,11 @@ export class StarMap {
 
   #nodes: Node[] = []
   #byNum = new Map<number, Node>()
-  #edges: { from: number; to: number; satisfied: boolean }[] = []
+  #edges: RenderEdge[] = []
+  #miniCurve: MutableMiniCurve = { control: { x: 0, y: 0 }, bow: 0 }
+  #miniCurveStart = { x: 0, y: 0 }
+  #miniCurveEnd = { x: 0, y: 0 }
+  #miniCurveParent = { x: 0, y: 0 }
   #sig = ''
   #resolved = new Set<number>()
 
@@ -358,13 +377,14 @@ export class StarMap {
     // memory is exactly what we want kept.
     this.#labelSide.clear()
     this.#sig = sig
-    const pts = computeLayout(tickets)
+    const pts = computeLayout(tickets.map(({ num, blockedBy, parentIssue }) => ({ num, blockedBy, parentIssue })))
     this.#nodes = tickets.map((t) => {
       const p = pts[t.num]
       return {
         num: t.num,
         title: t.title,
         type: t.type,
+        parentIssue: t.parentIssue,
         vstate: visualState(t),
         sstate: sessions[t.num] ?? null,
         x: p.x,
@@ -381,10 +401,14 @@ export class StarMap {
   }
 
   #refreshEdges(tickets: Ticket[]): void {
-    this.#edges = edgesOf(tickets).map((e) => ({
-      from: e.from,
-      to: e.to,
-      satisfied: this.#resolved.has(e.from),
+    const byNum = new Map(tickets.map((ticket) => [ticket.num, ticket]))
+    const edges = workflowEdges(tickets)
+    const reverseEdges = reverseEdgeKeys(edges)
+    this.#edges = edges.map((edge) => ({
+      ...edge,
+      state: workflowVisualState(edge, byNum),
+      satisfied: this.#resolved.has(edge.from),
+      reverseExists: reverseEdges.has(edgeKey(edge.from, edge.to)),
     }))
   }
 
@@ -890,7 +914,7 @@ export class StarMap {
     this.#drawTicker(g)
   }
 
-  #drawEdge(g: CanvasRenderingContext2D, e: { from: number; to: number; satisfied: boolean }): void {
+  #drawEdge(g: CanvasRenderingContext2D, e: RenderEdge): void {
     const a = this.#byNum.get(e.from),
       b = this.#byNum.get(e.to)
     if (!a || !b) return
@@ -903,19 +927,49 @@ export class StarMap {
       dx = bx - ax,
       dy = by - ay,
       len = Math.hypot(dx, dy) || 1
+    const mini = isMiniWorkflowEdge(e)
+    const child = e.child === null ? undefined : this.#byNum.get(e.child)
+    const parent =
+      child?.parentIssue === null || child?.parentIssue === undefined
+        ? undefined
+        : this.#byNum.get(child.parentIssue)
+    let curve: MutableMiniCurve | null = null
+    if (mini) {
+      this.#miniCurveStart.x = ax
+      this.#miniCurveStart.y = ay
+      this.#miniCurveEnd.x = bx
+      this.#miniCurveEnd.y = by
+      if (parent) {
+        this.#miniCurveParent.x = parent._x
+        this.#miniCurveParent.y = parent._y
+      }
+      curve = writeMiniEdgeCurve(
+        this.#miniCurve,
+        e,
+        this.#miniCurveStart,
+        this.#miniCurveEnd,
+        e.reverseExists,
+        parent ? this.#miniCurveParent : undefined,
+      )
+    }
     const nx = -dy / len,
       ny = dx / len,
       bow = Math.min(46, len * 0.13),
-      cx = mx + nx * bow,
-      cy = my + ny * bow
+      cx = curve?.control.x ?? mx + nx * bow,
+      cy = curve?.control.y ?? my + ny * bow
     g.beginPath()
     g.moveTo(ax, ay)
     g.quadraticCurveTo(cx, cy, bx, by)
     g.lineCap = 'round'
-    if (e.satisfied) {
+    const usesResolvedStyle = mini ? e.state !== 'incomplete' : e.satisfied
+    if (usesResolvedStyle) {
       g.strokeStyle = 'rgba(190,225,200,0.82)'
       g.lineWidth = 3
       g.setLineDash([])
+    } else if (mini) {
+      g.strokeStyle = 'rgba(170,145,255,0.78)'
+      g.lineWidth = 2.6
+      g.setLineDash([8, 7])
     } else {
       g.strokeStyle = 'rgba(174,192,218,0.62)'
       g.lineWidth = 2.4
@@ -925,7 +979,7 @@ export class StarMap {
     g.setLineDash([])
     // A satisfied edge (blocker resolved) flows particles blocker→dependent, so
     // the frontier visibly ignites as paths clear (starmap-design.md dec. 5).
-    if (e.satisfied) {
+    if (mini ? e.state === 'traversed' : e.satisfied) {
       for (let k = 0; k < 3; k++) {
         const u = mod(this.#clock * 0.1 + k / 3 + (e.from * 0.13 + e.to * 0.07), 1),
           m = 1 - u
@@ -944,9 +998,11 @@ export class StarMap {
     // Direction arrowhead at the curve's midpoint.
     const midx = 0.25 * ax + 0.5 * cx + 0.25 * bx,
       midy = 0.25 * ay + 0.5 * cy + 0.25 * by
-    const al = Math.hypot(dx, dy) || 1,
-      ux = dx / al,
-      uy = dy / al
+    const tangentX = (cx - ax) + (bx - cx),
+      tangentY = (cy - ay) + (by - cy),
+      al = Math.hypot(tangentX, tangentY) || 1,
+      ux = tangentX / al,
+      uy = tangentY / al
     const ah = 12,
       aw = 6.5,
       px = -uy,
@@ -958,7 +1014,7 @@ export class StarMap {
     g.lineTo(tipx - ux * ah + px * aw, tipy - uy * ah + py * aw)
     g.lineTo(tipx - ux * ah - px * aw, tipy - uy * ah - py * aw)
     g.closePath()
-    g.fillStyle = e.satisfied ? '#d9f3df' : '#c8d5e8'
+    g.fillStyle = usesResolvedStyle ? '#d9f3df' : mini ? '#c7b8ff' : '#c8d5e8'
     g.fill()
   }
 
@@ -983,6 +1039,14 @@ export class StarMap {
     g.fill()
 
     const cr = this.#radius(n)
+    const hasSubissueRim = n.parentIssue !== null && n.vstate !== 'resolved' && n.vstate !== 'out_of_scope'
+    if (hasSubissueRim) {
+      g.strokeStyle = SUBISSUE_RIM
+      g.lineWidth = 1.5
+      g.beginPath()
+      g.arc(x, y, cr + 4, 0, TAU)
+      g.stroke()
+    }
     if (n.vstate === 'resolved') {
       const cg = g.createRadialGradient(x, y, 0, x, y, cr * 1.35)
       cg.addColorStop(0, hexA(c.core, 1))
@@ -1003,6 +1067,14 @@ export class StarMap {
       g.lineWidth = lineWidth
       g.beginPath()
       g.arc(x, y, cr - lineWidth / 2, 0, TAU)
+      g.stroke()
+    }
+
+    if (hasSubissueRim && this.#focus.readySet.has(n.num) && this.#focus.current !== n.num) {
+      g.strokeStyle = hexA(c.core, 0.95)
+      g.lineWidth = 2
+      g.beginPath()
+      g.arc(x, y, cr + 8, 0, TAU)
       g.stroke()
     }
 
@@ -1246,7 +1318,7 @@ export class StarMap {
     const order = [...vis].sort((a, b) => {
       const priority = (n: Node) => {
         if (this.#focus.current === n.num) return 0
-        if (this.#focus.ready.includes(n.num)) return 1
+        if (this.#focus.readySet.has(n.num)) return 1
         if (this.#selected === n.num) return 2
         if (this.#focus.pathNodes.has(n.num)) return 3
         return 4 + LABEL_PRIORITY[n.vstate]
@@ -1259,7 +1331,7 @@ export class StarMap {
     const items: LabelDraw[] = []
     for (const v of order) {
       const isCurrent = this.#focus.current === v.n.num
-      const isReady = this.#focus.ready.includes(v.n.num)
+      const isReady = this.#focus.readySet.has(v.n.num)
       const marker =
         isCurrent && isReady
           ? 'CURRENT / READY \u00b7 '
