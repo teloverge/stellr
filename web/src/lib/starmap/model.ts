@@ -16,6 +16,7 @@ export interface Ticket {
   status: TicketStatus
   blockedBy: number[]
   frontier: boolean
+  readyForAgent?: boolean
 }
 
 export interface Map {

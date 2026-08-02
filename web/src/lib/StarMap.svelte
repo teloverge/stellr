@@ -4,13 +4,21 @@
   import { toRendererModel } from './starmap/adapt'
   import { StarMap as Renderer } from './starmap/starmap'
 
-  let { space, select }: { space: SpaceModel; select?: (issueNumber: number) => void } = $props()
+  let {
+    space,
+    currentIssue = null,
+    select,
+  }: {
+    space: SpaceModel
+    currentIssue?: number | null
+    select?: (issueNumber: number) => void
+  } = $props()
   let host: HTMLDivElement
   let renderer = $state.raw<Renderer | undefined>(undefined)
 
   $effect(() => {
     const model = toRendererModel(space)
-    renderer?.setModel(model)
+    renderer?.setModel(model, {}, currentIssue)
   })
 
   onMount(() => {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use octocrab::Octocrab;
+use octocrab::{FromResponse, Octocrab};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stellr_core::{IssueState, Provider, ProviderError, RawIssue, RepoRef};
@@ -67,40 +67,78 @@ impl GithubProvider {
 #[async_trait::async_trait]
 impl Provider for GithubProvider {
     async fn fetch(&self, repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
-        let request = GraphqlRequest {
-            query: FETCH_ISSUES_QUERY,
-            variables: Variables {
-                owner: &repo.owner,
-                name: &repo.name,
-                cursor: None,
-            },
-        };
+        let mut cursor = None;
+        let mut nodes = Vec::new();
 
-        let response: Value = self
-            .client
-            .post("/graphql", Some(&request))
-            .await
-            .map_err(map_octocrab_error)?;
+        loop {
+            let request = GraphqlRequest {
+                query: FETCH_ISSUES_QUERY,
+                variables: Variables {
+                    owner: &repo.owner,
+                    name: &repo.name,
+                    cursor: cursor.as_deref(),
+                },
+            };
 
-        let response: GraphqlEnvelope = serde_json::from_value(response)
-            .map_err(|error| ProviderError::Parse(error.to_string()))?;
+            let response = self
+                .client
+                ._post("/graphql", Some(&request))
+                .await
+                .map_err(map_octocrab_error)?;
+            if response.status().as_u16() == 401 {
+                return Err(ProviderError::Auth("token rejected".into()));
+            }
+            let status = response.status().as_u16();
+            let rate_limit_exhausted = response
+                .headers()
+                .get("x-ratelimit-remaining")
+                .and_then(|value| value.to_str().ok())
+                == Some("0");
+            if matches!(status, 403 | 429) && rate_limit_exhausted {
+                let reset_epoch = response
+                    .headers()
+                    .get("x-ratelimit-reset")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.parse().ok());
+                return Err(ProviderError::RateLimited { reset_epoch });
+            }
+            let response = octocrab::map_github_error(response)
+                .await
+                .map_err(map_octocrab_error)?;
+            let response = Value::from_response(response)
+                .await
+                .map_err(map_octocrab_error)?;
 
-        if let Some(error) = response.errors.and_then(|errors| errors.into_iter().next()) {
-            return Err(ProviderError::Parse(error.message));
+            let response: GraphqlEnvelope = serde_json::from_value(response)
+                .map_err(|error| ProviderError::Parse(error.to_string()))?;
+
+            if let Some(error) = response.errors.and_then(|errors| errors.into_iter().next()) {
+                return Err(ProviderError::Parse(error.message));
+            }
+
+            let connection = response
+                .data
+                .ok_or_else(|| ProviderError::Parse("missing data.repository.issues".into()))
+                .and_then(|data| {
+                    serde_json::from_value::<GraphqlData>(data)
+                        .map_err(|error| ProviderError::Parse(error.to_string()))
+                })?
+                .repository
+                .map(|repository| repository.issues)
+                .ok_or_else(|| ProviderError::Parse("missing data.repository.issues".into()))?;
+
+            nodes.extend(connection.nodes);
+            if !connection.page_info.has_next_page {
+                break;
+            }
+            cursor = Some(connection.page_info.end_cursor.ok_or_else(|| {
+                ProviderError::Parse("missing end cursor for next issues page".into())
+            })?);
         }
 
-        let nodes = response
-            .data
-            .ok_or_else(|| ProviderError::Parse("missing data.repository.issues".into()))
-            .and_then(|data| {
-                serde_json::from_value::<GraphqlData>(data)
-                    .map_err(|error| ProviderError::Parse(error.to_string()))
-            })?
-            .repository
-            .map(|repository| repository.issues.nodes)
-            .ok_or_else(|| ProviderError::Parse("missing data.repository.issues".into()))?;
-
-        Ok(map_issues(nodes))
+        let mut issues = map_issues(nodes);
+        issues.sort_by_key(|issue| issue.number);
+        Ok(issues)
     }
 }
 
@@ -211,8 +249,17 @@ struct Repository {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct IssueConnection {
+    page_info: PageInfo,
     nodes: Vec<IssueNode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageInfo {
+    has_next_page: bool,
+    end_cursor: Option<String>,
 }
 
 #[derive(Deserialize)]

@@ -44,4 +44,21 @@ describe('toRendererModel', () => {
     })
     expect(edgesOf(model)).toContainEqual({ from: 1, to: 5 })
   })
+
+  it('marks only an unblocked ready-for-agent issue as actionable', () => {
+    const input = space()
+    input.stars[0].labels = ['READY-FOR-AGENT']
+    input.stars[1].status = 'frontier'
+    input.stars[4].labels = ['ready-for-agent']
+
+    const model = toRendererModel(input)
+
+    expect(model.map((ticket) => ticket.readyForAgent)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+    ])
+  })
 })

@@ -381,25 +381,34 @@ describe('the session overlay on the seam', () => {
 // judged by eye (starmap-design.md, Open risk), but the draw path for every
 // session state should at least run, and the one thing the overlay writes as
 // text — the ticker line — is assertable.
-function stubContext(): { ctx: Record<string, unknown>; texts: string[] } {
+function stubContext(): {
+  ctx: Record<string, unknown>
+  texts: string[]
+  rects: Array<{ x: number; y: number; width: number; height: number }>
+} {
   const texts: string[] = []
+  const rects: Array<{ x: number; y: number; width: number; height: number }> = []
   const ctx: Record<string, unknown> = {
     createRadialGradient: () => ({ addColorStop: () => {} }),
     measureText: () => ({ width: 40 }),
     fillText: (s: string) => texts.push(s),
+    fillRect: (x: number, y: number, width: number, height: number) => {
+      rects.push({ x, y, width, height })
+    },
   }
   for (const m of [
-    'setTransform', 'fillRect', 'beginPath', 'arc', 'fill', 'stroke', 'moveTo', 'lineTo',
+    'setTransform', 'beginPath', 'arc', 'fill', 'stroke', 'moveTo', 'lineTo',
     'closePath', 'quadraticCurveTo', 'setLineDash', 'save', 'restore', 'translate', 'scale', 'rotate',
   ]) {
     ctx[m] = () => {}
   }
-  return { ctx, texts }
+  return { ctx, texts, rects }
 }
 
 describe('painting the overlay', () => {
   let frames: FrameRequestCallback[] = []
   let texts: string[] = []
+  let rects: Array<{ x: number; y: number; width: number; height: number }> = []
   const realGetContext = HTMLCanvasElement.prototype.getContext
   const realRaf = globalThis.requestAnimationFrame
 
@@ -407,6 +416,7 @@ describe('painting the overlay', () => {
     frames = []
     const stub = stubContext()
     texts = stub.texts
+    rects = stub.rects
     HTMLCanvasElement.prototype.getContext = (() => stub.ctx) as never
     globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
       frames.push(cb)
@@ -424,6 +434,58 @@ describe('painting the overlay', () => {
     frames = []
     cb?.(0)
   }
+
+  it('paints only the black field when the graph has no issues', () => {
+    const { sm } = mounted()
+    sm.setModel([])
+
+    frame()
+
+    expect(rects).toEqual([{ x: 0, y: 0, width: 1000, height: 700 }])
+  })
+
+  it('names the current conversation issue and actionable blocker path', () => {
+    const { sm } = mounted()
+    sm.setModel(
+      [
+        { num: 8, slug: '8', title: 'Pagination', type: 'issue', status: 'frontier', blockedBy: [], frontier: true, readyForAgent: true },
+        { num: 12, slug: '12', title: 'Spaces', type: 'issue', status: 'blocked', blockedBy: [8], frontier: false },
+        { num: 14, slug: '14', title: 'Embedded UI', type: 'issue', status: 'blocked', blockedBy: [12], frontier: false },
+        { num: 21, slug: '21', title: 'Other ready work', type: 'issue', status: 'frontier', blockedBy: [], frontier: true, readyForAgent: true },
+      ],
+      {},
+      14,
+    )
+
+    frame()
+
+    expect(texts.some((text) => text.startsWith('CURRENT · 14'))).toBe(true)
+    expect(texts.some((text) => text.startsWith('READY · 08'))).toBe(true)
+  })
+
+  it('names an actionable current issue as both current and ready', () => {
+    const { sm } = mounted()
+    sm.setModel(
+      [
+        {
+          num: 8,
+          slug: '8',
+          title: 'Pagination',
+          type: 'issue',
+          status: 'frontier',
+          blockedBy: [],
+          frontier: true,
+          readyForAgent: true,
+        },
+      ],
+      {},
+      8,
+    )
+
+    frame()
+
+    expect(texts.some((text) => text.startsWith('CURRENT / READY · 08'))).toBe(true)
+  })
 
   it('draws every session state without falling over', () => {
     const { sm } = mounted()

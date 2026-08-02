@@ -20,6 +20,7 @@
 import { computeLayout, structureSignature, edgesOf, TAU } from './layout'
 import { STAR, LABEL, SESSION_HUE, visualState, hexA, type VisualState } from './theme'
 import { GRAMMAR, type SessionState } from './session'
+import { analyzeFocus, edgeKey, type Focus } from './focus'
 import type { Ticket } from './model'
 
 export type SelectHandler = (num: number | null) => void
@@ -29,6 +30,9 @@ export type SelectHandler = (num: number | null) => void
 // StarMap.svelte through tokens.ts and handed in at the seam; the renderer
 // itself never reads CSS (ADR 0010).
 const DEFAULT_BG = '#05070d'
+const ISSUE_RADIUS_SCALE = 1.25
+const CONTEXT_ALPHA = 0.3
+const CONTEXT_EDGE_ALPHA = 0.45
 
 interface Node {
   num: number
@@ -52,6 +56,7 @@ interface LabelDraw {
   x: number
   y: number
   fill: string
+  alpha: number
 }
 
 // A screen-space rectangle. Both stars and already-placed labels become one of
@@ -86,9 +91,11 @@ const CULL_MARGIN = 140
 // candidate steps. A label that went above stays above until the below slots
 // are clear by this many steps — so the near-tie that flips frame to frame as
 // the camera eases has to become a decisive win before the label crosses over.
-// One step is one line-height, which is about the smallest margin the eye can
-// still read as a deliberate move rather than a flicker.
-const SIDE_HYSTERESIS = 1
+// Four steps exhaust every same-side candidate before the solver crosses the
+// star. Larger labels need that full search: accepting a near slot across the
+// star while a farther same-side slot is free can make a label cross and return
+// as higher-priority neighbours rearrange during zoom.
+const SIDE_HYSTERESIS = 4
 // Where a label may sit relative to its star, as a signed side.
 const BELOW = 1
 const ABOVE = -1
@@ -208,32 +215,13 @@ function clamp(v: number, a: number, b: number): number {
   return v < a ? a : v > b ? b : v
 }
 
-// A parallax starfield for depth, seeded once so it never reshuffles.
-interface StarLayer {
-  f: number
-  sz: number
-  a: number
-  stars: { x: number; y: number; t: number }[]
-}
-function makeStarfield(): StarLayer[] {
-  const specs = [
-    { f: 0.15, n: 140, sz: 0.7, a: 0.45 },
-    { f: 0.3, n: 80, sz: 1.1, a: 0.65 },
-    { f: 0.5, n: 34, sz: 1.7, a: 0.9 },
-  ]
-  // A tiny inline PRNG so the field is stable without importing layout's stream.
-  let t = 9001 >>> 0
-  const rnd = () => {
-    t += 0x6d2b79f5
-    let r = Math.imul(t ^ (t >>> 15), 1 | t)
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r)
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296
-  }
-  return specs.map((sp) => {
-    const stars = []
-    for (let i = 0; i < sp.n; i++) stars.push({ x: rnd(), y: rnd(), t: rnd() })
-    return { f: sp.f, sz: sp.sz, a: sp.a, stars }
-  })
+function focusSignature(focus: Focus): string {
+  return [
+    focus.current ?? '',
+    focus.ready.join(','),
+    [...focus.pathNodes].join(','),
+    [...focus.pathEdges].join(','),
+  ].join('|')
 }
 
 export class StarMap {
@@ -272,7 +260,7 @@ export class StarMap {
   #tickerText = ''
   #tickerAt = -1e9
 
-  #starfield = makeStarfield()
+  #focus: Focus = analyzeFocus([], null)
   // The solved label layout, held between frames. Rebuilt only when its inputs
   // change (see #drawLabels); `#labelEpoch` is what a model push bumps to say the
   // text or the colours moved under it.
@@ -324,10 +312,17 @@ export class StarMap {
   // derived by the wrapper from the same snapshot. It rides alongside the
   // tickets rather than through a second seam call, so one push is one visual
   // beat: a state change flares its star once and writes one fading ticker line.
-  setModel(tickets: Ticket[], sessions: Record<number, SessionState> = {}): void {
+  setModel(
+    tickets: Ticket[],
+    sessions: Record<number, SessionState> = {},
+    currentIssue: number | null = null,
+  ): void {
     // Titles and statuses can both move under a push, and both feed the label
     // solve — retire the cached one either way.
     this.#labelEpoch++
+    const priorFocus = focusSignature(this.#focus)
+    this.#focus = analyzeFocus(tickets, currentIssue)
+    const focusChanged = priorFocus !== focusSignature(this.#focus)
     const sig = structureSignature(tickets)
     this.#resolved = new Set(tickets.filter((t) => t.status === 'resolved').map((t) => t.num))
 
@@ -349,6 +344,10 @@ export class StarMap {
       }
       if (changed.length) this.#tick(changed.join('   ·   '))
       this.#refreshEdges(tickets)
+      if (focusChanged) {
+        this.#refit(false)
+        this.#settleIfHeadless()
+      }
       return
     }
 
@@ -522,6 +521,10 @@ export class StarMap {
     return { x: n.x * this.#cam.s + this.#cam.x, y: n.y * this.#cam.s + this.#cam.y }
   }
 
+  #radius(n: Node): number {
+    return STAR[n.vstate].r * ISSUE_RADIUS_SCALE
+  }
+
   // Hit-test a screen point and, if it lands on a star, select and emit it — the
   // exact path a click drives. Returns the selected ticket number, or null for a
   // click on empty space (which deselects).
@@ -530,7 +533,7 @@ export class StarMap {
     for (const n of this.#nodes) {
       const px = n._x * this.#cam.s + this.#cam.x
       const py = n._y * this.#cam.s + this.#cam.y
-      const r = Math.max(14, STAR[n.vstate].r * this.#cam.s + 10)
+      const r = Math.max(14, this.#radius(n) * this.#cam.s + 10)
       if (Math.hypot(sx - px, sy - py) < r) hit = n
     }
     const num = hit ? hit.num : null
@@ -702,27 +705,29 @@ export class StarMap {
   // immediately (a fresh map, a resize); otherwise the render loop eases to it.
   #refit(snap: boolean): void {
     if (!this.#nodes.length) return
+    const focused = this.#focus.emphasized.size > 0
+    const fitNodes = focused
+      ? this.#nodes.filter((node) => this.#focus.emphasized.has(node.num))
+      : this.#nodes
+    if (!fitNodes.length) return
     let minx = 1e9,
       miny = 1e9,
       maxx = -1e9,
       maxy = -1e9
-    for (const n of this.#nodes) {
+    for (const n of fitNodes) {
       minx = Math.min(minx, n.x)
       miny = Math.min(miny, n.y)
       maxx = Math.max(maxx, n.x)
       maxy = Math.max(maxy, n.y)
     }
-    const pad = 90
+    const pad = focused ? 150 : 90
     minx -= pad
     miny -= pad
     maxx += pad
     maxy += pad
     const { cx: fcx, cy: fcy, availW, availH } = this.#freeRect()
-    const s = clamp(
-      Math.min(availW / (maxx - minx || 1), availH / (maxy - miny || 1)),
-      0.15,
-      1.4,
-    )
+    const available = Math.min(availW / (maxx - minx || 1), availH / (maxy - miny || 1))
+    const s = focused ? clamp(available * 0.8, 0.15, 1) : clamp(available, 0.15, 1.4)
     const cx = (minx + maxx) / 2,
       cy = (miny + maxy) / 2
     this.#goal.s = s
@@ -861,31 +866,28 @@ export class StarMap {
     g.setTransform(this.#dpr, 0, 0, this.#dpr, 0, 0)
     g.fillStyle = this.#bg
     g.fillRect(0, 0, this.#w, this.#h)
-    this.#drawStarfield(g)
 
     g.save()
     g.translate(this.#cam.x, this.#cam.y)
     g.scale(this.#cam.s, this.#cam.s)
-    for (const e of this.#edges) this.#drawEdge(g, e)
-    for (const n of this.#nodes) this.#drawStar(g, n, this.#clock)
+    const focused = this.#focus.emphasized.size > 0
+    for (const e of this.#edges) {
+      g.save()
+      if (focused && !this.#focus.pathEdges.has(edgeKey(e.from, e.to))) {
+        g.globalAlpha = CONTEXT_EDGE_ALPHA
+      }
+      this.#drawEdge(g, e)
+      g.restore()
+    }
+    for (const n of this.#nodes) {
+      g.save()
+      if (focused && !this.#focus.emphasized.has(n.num)) g.globalAlpha = CONTEXT_ALPHA
+      this.#drawStar(g, n, this.#clock)
+      g.restore()
+    }
     g.restore()
     this.#drawLabels(g)
     this.#drawTicker(g)
-  }
-
-  #drawStarfield(g: CanvasRenderingContext2D): void {
-    const W = this.#w,
-      H = this.#h
-    for (const L of this.#starfield) {
-      for (const s of L.stars) {
-        const x = mod(s.x * W + this.#cam.x * L.f, W)
-        const y = mod(s.y * H + this.#cam.y * L.f, H)
-        g.globalAlpha = L.a * (0.65 + 0.35 * Math.sin(s.t * TAU))
-        g.fillStyle = 'rgba(255,255,255,1)'
-        g.fillRect(x, y, L.sz, L.sz)
-      }
-    }
-    g.globalAlpha = 1
   }
 
   #drawEdge(g: CanvasRenderingContext2D, e: { from: number; to: number; satisfied: boolean }): void {
@@ -909,28 +911,33 @@ export class StarMap {
     g.beginPath()
     g.moveTo(ax, ay)
     g.quadraticCurveTo(cx, cy, bx, by)
+    g.lineCap = 'round'
     if (e.satisfied) {
-      g.strokeStyle = 'rgba(160,192,166,0.62)'
-      g.lineWidth = 1.8
+      g.strokeStyle = 'rgba(190,225,200,0.82)'
+      g.lineWidth = 3
       g.setLineDash([])
     } else {
-      g.strokeStyle = 'rgba(132,146,168,0.34)'
-      g.lineWidth = 1.3
-      g.setLineDash([4, 6])
+      g.strokeStyle = 'rgba(174,192,218,0.62)'
+      g.lineWidth = 2.4
+      g.setLineDash([7, 7])
     }
     g.stroke()
     g.setLineDash([])
     // A satisfied edge (blocker resolved) flows particles blocker→dependent, so
     // the frontier visibly ignites as paths clear (starmap-design.md dec. 5).
     if (e.satisfied) {
-      for (let k = 0; k < 2; k++) {
-        const u = mod(this.#clock * 0.1 + k / 2 + (e.from * 0.13 + e.to * 0.07), 1),
+      for (let k = 0; k < 3; k++) {
+        const u = mod(this.#clock * 0.1 + k / 3 + (e.from * 0.13 + e.to * 0.07), 1),
           m = 1 - u
         const fx = m * m * ax + 2 * m * u * cx + u * u * bx,
           fy = m * m * ay + 2 * m * u * cy + u * u * by
-        g.fillStyle = 'rgba(190,225,200,' + (0.16 + 0.44 * Math.sin(u * Math.PI)) + ')'
+        g.fillStyle = 'rgba(190,225,200,' + (0.14 + 0.18 * Math.sin(u * Math.PI)) + ')'
         g.beginPath()
-        g.arc(fx, fy, 1.7, 0, TAU)
+        g.arc(fx, fy, 5, 0, TAU)
+        g.fill()
+        g.fillStyle = 'rgba(220,255,230,' + (0.45 + 0.5 * Math.sin(u * Math.PI)) + ')'
+        g.beginPath()
+        g.arc(fx, fy, 2.6, 0, TAU)
         g.fill()
       }
     }
@@ -940,8 +947,8 @@ export class StarMap {
     const al = Math.hypot(dx, dy) || 1,
       ux = dx / al,
       uy = dy / al
-    const ah = 7,
-      aw = 3.8,
+    const ah = 12,
+      aw = 6.5,
       px = -uy,
       py = ux,
       tipx = midx + ux * ah * 0.5,
@@ -951,7 +958,7 @@ export class StarMap {
     g.lineTo(tipx - ux * ah + px * aw, tipy - uy * ah + py * aw)
     g.lineTo(tipx - ux * ah - px * aw, tipy - uy * ah - py * aw)
     g.closePath()
-    g.fillStyle = e.satisfied ? '#aecdb6' : '#6f7889'
+    g.fillStyle = e.satisfied ? '#d9f3df' : '#c8d5e8'
     g.fill()
   }
 
@@ -975,22 +982,35 @@ export class StarMap {
     g.arc(x, y, gr, 0, TAU)
     g.fill()
 
-    const cr = c.r
-    const cg = g.createRadialGradient(x, y, 0, x, y, cr * 1.35)
-    cg.addColorStop(0, hexA(c.core, 1))
-    cg.addColorStop(0.6, hexA(c.core, 0.92))
-    cg.addColorStop(0.82, hexA(c.core, 0.45))
-    cg.addColorStop(1, hexA(c.core, 0))
-    g.fillStyle = cg
-    g.beginPath()
-    g.arc(x, y, cr * 1.35, 0, TAU)
-    g.fill()
+    const cr = this.#radius(n)
+    if (n.vstate === 'resolved') {
+      const cg = g.createRadialGradient(x, y, 0, x, y, cr * 1.35)
+      cg.addColorStop(0, hexA(c.core, 1))
+      cg.addColorStop(0.6, hexA(c.core, 0.92))
+      cg.addColorStop(0.82, hexA(c.core, 0.45))
+      cg.addColorStop(1, hexA(c.core, 0))
+      g.fillStyle = cg
+      g.beginPath()
+      g.arc(x, y, cr * 1.35, 0, TAU)
+      g.fill()
+    } else {
+      g.fillStyle = '#000'
+      g.beginPath()
+      g.arc(x, y, cr, 0, TAU)
+      g.fill()
+      const lineWidth = Math.max(2.2, cr * 0.32)
+      g.strokeStyle = hexA(c.core, 0.95)
+      g.lineWidth = lineWidth
+      g.beginPath()
+      g.arc(x, y, cr - lineWidth / 2, 0, TAU)
+      g.stroke()
+    }
 
     if (fl > 0) {
       g.strokeStyle = hexA(c.core, fl * 0.7)
       g.lineWidth = 1.5 + 2 * fl
       g.beginPath()
-      g.arc(x, y, c.r + (1 - fl) * 40, 0, TAU)
+      g.arc(x, y, cr + (1 - fl) * 40, 0, TAU)
       g.stroke()
     }
     // A live claim breathes with two soft rings. A session overlay speaks for
@@ -1000,20 +1020,32 @@ export class StarMap {
       g.strokeStyle = hexA(c.core, 0.45 + 0.25 * beat)
       g.lineWidth = 1.5
       g.beginPath()
-      g.arc(x, y, c.r + 5 + 1.2 * beat, 0, TAU)
+      g.arc(x, y, cr + 5 + 1.2 * beat, 0, TAU)
       g.stroke()
       g.strokeStyle = hexA(c.core, 0.18 + 0.14 * beat)
       g.lineWidth = 1
       g.beginPath()
-      g.arc(x, y, c.r + 11 + 1.8 * beat, 0, TAU)
+      g.arc(x, y, cr + 11 + 1.8 * beat, 0, TAU)
       g.stroke()
     }
-    if (n.sstate) this.#drawSession(g, n, x, y, c.r, t)
+    if (n.sstate) this.#drawSession(g, n, x, y, cr, t)
+    if (this.#focus.current === n.num) {
+      g.strokeStyle = 'rgba(255,255,255,0.95)'
+      g.lineWidth = 2
+      g.beginPath()
+      g.arc(x, y, cr + 8, 0, TAU)
+      g.stroke()
+      g.strokeStyle = 'rgba(255,255,255,0.55)'
+      g.lineWidth = 1
+      g.beginPath()
+      g.arc(x, y, cr + 13, 0, TAU)
+      g.stroke()
+    }
     if (this.#selected === n.num) {
       g.strokeStyle = 'rgba(255,255,255,0.85)'
       g.lineWidth = 1.5
       g.beginPath()
-      g.arc(x, y, c.r + 13, 0, TAU)
+      g.arc(x, y, cr + (this.#focus.current === n.num ? 18 : 13), 0, TAU)
       g.stroke()
     }
   }
@@ -1118,7 +1150,7 @@ export class StarMap {
   // re-solving the same pose reached a different way may legitimately answer
   // differently, and only the newest answer is ever held.
   #drawLabels(g: CanvasRenderingContext2D): void {
-    if (this.#cam.s < 0.22) return
+    if (this.#cam.s < 0.22 && this.#focus.emphasized.size === 0) return
     // The viewport belongs in the key alongside the pose: the solve culls to it
     // (see `vis` below), so a resize that happened to leave the camera where it
     // was would otherwise keep placing labels against the old edges.
@@ -1144,9 +1176,11 @@ export class StarMap {
     g.shadowColor = 'rgba(0,0,0,0.85)'
     g.shadowBlur = 4
     for (const it of cache.items) {
+      g.globalAlpha = it.alpha
       g.fillStyle = it.fill
       g.fillText(it.text, it.x, it.y)
     }
+    g.globalAlpha = 1
     g.shadowBlur = 0
   }
 
@@ -1176,7 +1210,7 @@ export class StarMap {
   ): { key: string; fs: number; items: LabelDraw[] } {
     const numOnly = this.#cam.s < TITLE_MIN_SCALE
     const budget = titleBudget(this.#cam.s)
-    const fs = clamp(11 * Math.pow(this.#cam.s, 0.3), 8, 13)
+    const fs = clamp(13 * Math.pow(this.#cam.s, 0.3), 10, 16)
     // measureText reads the context's current font, so set it before measuring.
     g.font = fs.toFixed(1) + 'px ui-sans-serif,system-ui,sans-serif'
     const s = this.#cam.s
@@ -1194,10 +1228,11 @@ export class StarMap {
       const sy = n.y * s + this.#cam.y
       if (sx < -CULL_MARGIN || sx > this.#w + CULL_MARGIN) continue
       if (sy < -CULL_MARGIN || sy > this.#h + CULL_MARGIN) continue
-      const c = STAR[n.vstate]
-      let r = c.r + 2
-      if (n.sstate) r = c.r + 15
-      if (this.#selected === n.num) r = Math.max(r, c.r + 14)
+      const core = this.#radius(n)
+      let r = core + 2
+      if (n.sstate) r = core + 15
+      if (this.#focus.current === n.num) r = Math.max(r, core + 14)
+      if (this.#selected === n.num) r = Math.max(r, core + 19)
       vis.push({ n, sx, sy, rad: r * s })
     }
 
@@ -1209,15 +1244,32 @@ export class StarMap {
     }))
 
     const order = [...vis].sort((a, b) => {
-      const pa = this.#selected === a.n.num ? -1 : LABEL_PRIORITY[a.n.vstate]
-      const pb = this.#selected === b.n.num ? -1 : LABEL_PRIORITY[b.n.vstate]
+      const priority = (n: Node) => {
+        if (this.#focus.current === n.num) return 0
+        if (this.#focus.ready.includes(n.num)) return 1
+        if (this.#selected === n.num) return 2
+        if (this.#focus.pathNodes.has(n.num)) return 3
+        return 4 + LABEL_PRIORITY[n.vstate]
+      }
+      const pa = priority(a.n)
+      const pb = priority(b.n)
       return pa - pb || a.n.num - b.n.num
     })
 
     const items: LabelDraw[] = []
     for (const v of order) {
-      let text = (v.n.num < 10 ? '0' : '') + v.n.num
-      if (!numOnly) text += '  ' + clipTitle(v.n.title, budget)
+      const isCurrent = this.#focus.current === v.n.num
+      const isReady = this.#focus.ready.includes(v.n.num)
+      const marker =
+        isCurrent && isReady
+          ? 'CURRENT / READY \u00b7 '
+          : isCurrent
+            ? 'CURRENT \u00b7 '
+            : isReady
+              ? 'READY \u00b7 '
+              : ''
+      let text = marker + (v.n.num < 10 ? '0' : '') + v.n.num
+      if (!numOnly || marker) text += '  ' + clipTitle(v.n.title, budget)
       const w = g.measureText(text).width
 
       // Every candidate is centred on the star and differs only in how far above
@@ -1229,9 +1281,10 @@ export class StarMap {
           : v.sy - v.rad - gap - fs * 0.22 - k * step
 
       // The remembered side goes first at every distance, and the other side
-      // enters SIDE_HYSTERESIS steps late — so with a band of 1 the order runs
-      // kept0, kept1, other0, kept2, other1, kept3, other2, other3. A label with
-      // no history prefers below, which is where the solver has always started.
+      // enters SIDE_HYSTERESIS steps late. With the full four-step band the
+      // order is kept0..kept3, then other0..other3: crossing the star is allowed
+      // only after every slot on the current side is unavailable. A label with
+      // no history prefers below, where the solver has always begun.
       const kept = this.#labelSide.get(v.n.num) ?? BELOW
       const other: Side = kept === BELOW ? ABOVE : BELOW
       const cands: { y: number; side: Side }[] = []
@@ -1258,7 +1311,16 @@ export class StarMap {
         }
         if (!ok) continue
         obstacles.push(box)
-        items.push({ text, x: v.sx, y: c.y, fill: LABEL[v.n.vstate] })
+        items.push({
+          text,
+          x: v.sx,
+          y: c.y,
+          fill: LABEL[v.n.vstate],
+          alpha:
+            this.#focus.emphasized.size === 0 || this.#focus.emphasized.has(v.n.num)
+              ? 1
+              : CONTEXT_ALPHA,
+        })
         this.#labelSide.set(v.n.num, c.side)
         break
       }

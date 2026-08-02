@@ -10,5 +10,17 @@ name = "stellr"
 path = "src/main.rs"
 
 [dependencies]
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.3"
 serde.workspace = true
+stellr-core = { path = "../core" }
+stellr-github = { path = "../github" }
+stellr-server = { path = "../server" }
 thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+reqwest = "0.12"
+tempfile = "3"
+tokio.workspace = true
