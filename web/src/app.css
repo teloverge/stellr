@@ -16,3 +16,68 @@ body {
   color: var(--foreground);
   background: var(--background);
 }
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: clamp(14rem, 22vw, 20rem) minmax(0, 1fr);
+  width: 100%;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace.detail-right {
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+}
+
+.workspace.detail-bottom {
+  grid-template-rows: minmax(0, 1fr) minmax(14rem, 42dvh);
+}
+
+.map-region,
+.detail-region {
+  min-width: 0;
+  min-height: 0;
+}
+
+.map-region {
+  position: relative;
+}
+
+.detail-right .detail-region {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.detail-bottom .detail-region {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+@media (max-width: 48rem) {
+  .app-shell {
+    grid-template-columns: minmax(11rem, 38vw) minmax(0, 1fr);
+  }
+}

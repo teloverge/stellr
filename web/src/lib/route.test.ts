@@ -43,4 +43,14 @@ describe('issue route', () => {
 
     expect({ space: route.space, issue: route.issue }).toEqual({ space: 'o-r', issue: 12 })
   })
+
+  it('updates reactive state immediately for programmatic navigation', () => {
+    const route = new Route(window)
+
+    route.go('second', 22)
+
+    expect(window.location.hash).toBe('#s=second&i=22')
+    expect({ space: route.space, issue: route.issue }).toEqual({ space: 'second', issue: 22 })
+    route.destroy()
+  })
 })
