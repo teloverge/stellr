@@ -17,12 +17,19 @@
   const availableSpaces = $derived(
     spaces.filter((space) => !pendingRemovedSpaces.includes(space.id)),
   )
+  const waitingForAddedSpace = $derived(
+    pendingAddedSpace !== null &&
+      route.space === pendingAddedSpace &&
+      !spaces.some((space) => space.id === pendingAddedSpace),
+  )
   const activeSpace = $derived(
-    (route.space === null
+    waitingForAddedSpace
       ? null
-      : availableSpaces.find((space) => space.id === route.space)) ??
-      availableSpaces[0] ??
-      null,
+      : ((route.space === null
+          ? null
+          : availableSpaces.find((space) => space.id === route.space)) ??
+        availableSpaces[0] ??
+        null),
   )
   const activeStar = $derived(
     activeSpace === null || route.issue === null
@@ -46,13 +53,7 @@
       pendingRemovedSpaces = pendingStillPresent
     }
 
-    if (
-      pendingAddedSpace !== null &&
-      route.space === pendingAddedSpace &&
-      !spaces.some((space) => space.id === pendingAddedSpace)
-    ) {
-      return
-    }
+    if (waitingForAddedSpace) return
 
     if (activeSpace === null) {
       if (route.space !== null || route.issue !== null) route.go(null)
@@ -137,8 +138,11 @@
         <StarMap
           space={activeSpace}
           {currentIssue}
+          selectedIssue={activeStar?.number ?? null}
           select={(issueNumber) => route.go(activeSpace.id, issueNumber)}
         />
+      {:else if waitingForAddedSpace}
+        <p class="empty-state">Waiting for {pendingAddedSpace} to sync…</p>
       {:else if control.model === null}
         <p class="empty-state">Connecting to stellr…</p>
       {:else}

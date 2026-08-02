@@ -246,8 +246,25 @@ describe('dependency-edge visual treatment', () => {
       const base = { x: (baseA.x + baseB.x) / 2, y: (baseA.y + baseB.y) / 2 }
       const stroke = violetStrokes[index]
       const start = stroke.points[0]
+      const control = stroke.curves[0].control
       const end = stroke.curves[0].end
       expect((tip.x - base.x) * (end.x - start.x) + (tip.y - base.y) * (end.y - start.y)).toBeGreaterThan(0)
+
+      const arrowLength = Math.hypot(tip.x - base.x, tip.y - base.y)
+      const tangent = {
+        x: control.x - start.x + (end.x - control.x),
+        y: control.y - start.y + (end.y - control.y),
+      }
+      const tangentLength = Math.hypot(tangent.x, tangent.y)
+      const cross = Math.abs(
+        ((tip.x - base.x) / arrowLength) * (tangent.y / tangentLength) -
+          ((tip.y - base.y) / arrowLength) * (tangent.x / tangentLength),
+      )
+      const dot =
+        ((tip.x - base.x) / arrowLength) * (tangent.x / tangentLength) +
+        ((tip.y - base.y) / arrowLength) * (tangent.y / tangentLength)
+      const angle = Math.atan2(cross, dot)
+      expect(angle).toBeLessThan(0.01)
     }
 
     const completed = paintChild('resolved')

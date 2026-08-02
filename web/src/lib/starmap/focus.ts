@@ -1,16 +1,13 @@
 import type { Ticket } from './model'
-import { workflowEdges, type WorkflowEdge } from './workflow'
+import { edgeKey, workflowEdges, type WorkflowEdge } from './workflow'
 
 export interface Focus {
   current: number | null
   ready: number[]
+  readySet: Set<number>
   pathNodes: Set<number>
   pathEdges: Set<string>
   emphasized: Set<number>
-}
-
-export function edgeKey(from: number, to: number): string {
-  return `${from}>${to}`
 }
 
 function isClosed(ticket: Ticket): boolean {
@@ -115,10 +112,11 @@ export function analyzeFocus(tickets: Ticket[], requestedCurrent: number | null)
   const ready = onPath === null
     ? actionable
     : [onPath, ...actionable.filter((number) => number !== onPath)]
+  const readySet = new Set(ready)
   const emphasized = new Set<number>()
   if (current !== null) emphasized.add(current)
   for (const number of ready) emphasized.add(number)
   for (const number of pathNodes) emphasized.add(number)
 
-  return { current, ready, pathNodes, pathEdges, emphasized }
+  return { current, ready, readySet, pathNodes, pathEdges, emphasized }
 }

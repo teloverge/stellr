@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 import App from './App.svelte'
 import type { Model, SpaceModel, Star } from './lib/model'
+import { StarMap as Renderer } from './lib/starmap/starmap'
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = []
@@ -67,6 +68,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
   window.history.replaceState(null, '', '/')
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   if (clientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidth)
   if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
 })
@@ -132,14 +134,21 @@ describe('App issue routing', () => {
   })
 
   it('restores a valid deep link after the snapshot arrives', () => {
+    const select = vi.spyOn(Renderer.prototype, 'select')
     window.history.replaceState(null, '', '/#s=second&i=22')
     const { target, socket } = mountApp()
 
     socket.emitModel(model)
     flushSync()
 
+    expect(select).toHaveBeenLastCalledWith(22)
     expect(target.querySelector('[aria-label="Issue details"]')?.textContent).toContain('#22')
     expect(target.textContent).toContain('Detail for Issue 22')
+
+    socket.emitModel({ spaces: [space('first', 11), { ...space('second', 22), name: 'renamed' }] })
+    flushSync()
+
+    expect(select).toHaveBeenLastCalledWith(22)
   })
 
   it('clears an unknown issue while preserving the routed space', () => {
@@ -154,6 +163,7 @@ describe('App issue routing', () => {
   })
 
   it('opens and closes selected issue detail without remounting the map canvas', () => {
+    const select = vi.spyOn(Renderer.prototype, 'select')
     const { target, socket } = mountApp()
     socket.emitModel(model)
     flushSync()
@@ -170,12 +180,14 @@ describe('App issue routing', () => {
     expect(target.querySelector('[aria-label="Issue details"]')?.textContent).toContain('#11')
     expect(target.querySelector('canvas')).toBe(canvas)
 
+    select.mockClear()
     target
       .querySelector<HTMLButtonElement>('button[aria-label="Close issue details"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
     window.dispatchEvent(new HashChangeEvent('hashchange'))
     flushSync()
 
+    expect(select).toHaveBeenLastCalledWith(null)
     expect(window.location.hash).toBe('#s=first')
     expect(target.querySelector('[aria-label="Issue details"]')).toBeNull()
     expect(target.querySelector('canvas')).toBe(canvas)
@@ -200,19 +212,23 @@ describe('App issue routing', () => {
 
 describe('App space lifecycle', () => {
   it('routes Sidebar selection to that space without carrying an issue', () => {
+    const select = vi.spyOn(Renderer.prototype, 'select')
     window.history.replaceState(null, '', '/#s=first&i=11')
     const { target, socket } = mountApp()
-    socket.emitModel(model)
+    socket.emitModel({ spaces: [space('first', 11), space('second', 11)] })
     flushSync()
 
+    select.mockClear()
     target
       .querySelector<HTMLButtonElement>('button[data-space-id="second"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
 
     expect(window.location.hash).toBe('#s=second')
+    expect(select).toHaveBeenLastCalledWith(null)
   })
 
-  it('keeps a successfully added space selected while its snapshot is pending', async () => {
+  it('waits without rendering a fallback map until an added space reaches the snapshot', async () => {
     window.history.replaceState(null, '', '/#s=first&i=11')
     vi.stubGlobal(
       'fetch',
@@ -236,7 +252,17 @@ describe('App space lifecycle', () => {
     await vi.waitFor(() => expect(window.location.hash).toBe('#s=new-space'))
     window.dispatchEvent(new HashChangeEvent('hashchange'))
     flushSync()
+
     expect(window.location.hash).toBe('#s=new-space')
+    expect(target.querySelector('canvas')).toBeNull()
+    expect(target.textContent).toContain('Waiting for new-space to sync')
+
+    socket.emitModel({ spaces: [...model.spaces, space('new-space', 33)] })
+    flushSync()
+
+    expect(window.location.hash).toBe('#s=new-space')
+    expect(target.querySelector('canvas')).not.toBeNull()
+    expect(target.textContent).not.toContain('Waiting for new-space to sync')
   })
 
   it.each([

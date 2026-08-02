@@ -13,6 +13,10 @@ export interface WorkflowEdge {
   child: number | null
 }
 
+export function edgeKey(from: number, to: number): string {
+  return `${from}>${to}`
+}
+
 const ROLE_ORDER: WorkflowRole[] = ['dependency', 'entry', 'sequence', 'return']
 
 export function workflowEdges(nodes: WorkflowNode[]): WorkflowEdge[] {
@@ -20,7 +24,7 @@ export function workflowEdges(nodes: WorkflowNode[]): WorkflowEdge[] {
   const edges = new Map<string, WorkflowEdge>()
 
   function addEdge(from: number, to: number, role: WorkflowRole, child: number | null): void {
-    const key = `${from}>${to}`
+    const key = edgeKey(from, to)
     const current = edges.get(key)
     if (current) {
       if (!current.roles.includes(role)) current.roles.push(role)

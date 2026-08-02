@@ -20,9 +20,14 @@
 import { computeLayout, structureSignature, TAU } from './layout'
 import { STAR, LABEL, SESSION_HUE, visualState, hexA, type VisualState } from './theme'
 import { GRAMMAR, type SessionState } from './session'
-import { analyzeFocus, edgeKey, type Focus } from './focus'
-import { workflowEdges, type WorkflowEdge } from './workflow'
-import { curveSide, workflowVisualState, type WorkflowVisualState } from './workflow-visual'
+import { analyzeFocus, type Focus } from './focus'
+import { edgeKey, workflowEdges, type WorkflowEdge } from './workflow'
+import {
+  curveSide,
+  reverseEdgeKeys,
+  workflowVisualState,
+  type WorkflowVisualState,
+} from './workflow-visual'
 import type { Ticket } from './model'
 
 export type SelectHandler = (num: number | null) => void
@@ -40,6 +45,7 @@ const SUBISSUE_RIM = 'rgba(170,145,255,0.82)'
 interface RenderEdge extends WorkflowEdge {
   state: WorkflowVisualState
   satisfied: boolean
+  reverseExists: boolean
 }
 
 interface Node {
@@ -392,10 +398,13 @@ export class StarMap {
 
   #refreshEdges(tickets: Ticket[]): void {
     const byNum = new Map(tickets.map((ticket) => [ticket.num, ticket]))
-    this.#edges = workflowEdges(tickets).map((edge) => ({
+    const edges = workflowEdges(tickets)
+    const reverseEdges = reverseEdgeKeys(edges)
+    this.#edges = edges.map((edge) => ({
       ...edge,
       state: workflowVisualState(edge, byNum),
       satisfied: this.#resolved.has(edge.from),
+      reverseExists: reverseEdges.has(edgeKey(edge.from, edge.to)),
     }))
   }
 
@@ -887,8 +896,7 @@ export class StarMap {
       if (focused && !this.#focus.pathEdges.has(edgeKey(e.from, e.to))) {
         g.globalAlpha = CONTEXT_EDGE_ALPHA
       }
-      const reverseExists = this.#edges.some((other) => other.from === e.to && other.to === e.from)
-      this.#drawEdge(g, e, reverseExists)
+      this.#drawEdge(g, e)
       g.restore()
     }
     for (const n of this.#nodes) {
@@ -902,7 +910,7 @@ export class StarMap {
     this.#drawTicker(g)
   }
 
-  #drawEdge(g: CanvasRenderingContext2D, e: RenderEdge, reverseExists: boolean): void {
+  #drawEdge(g: CanvasRenderingContext2D, e: RenderEdge): void {
     const a = this.#byNum.get(e.from),
       b = this.#byNum.get(e.to)
     if (!a || !b) return
@@ -921,7 +929,7 @@ export class StarMap {
       canonicalDx = high._x - low._x,
       canonicalDy = high._y - low._y,
       canonicalLen = Math.hypot(canonicalDx, canonicalDy) || 1,
-      side = curveSide(e, reverseExists),
+      side = curveSide(e, e.reverseExists),
       nx = mini ? (-canonicalDy / canonicalLen) * side : -dy / len,
       ny = mini ? (canonicalDx / canonicalLen) * side : dx / len,
       bow = Math.min(46, len * 0.13),
@@ -1040,7 +1048,7 @@ export class StarMap {
       g.stroke()
     }
 
-    if (hasSubissueRim && this.#focus.ready.includes(n.num) && this.#focus.current !== n.num) {
+    if (hasSubissueRim && this.#focus.readySet.has(n.num) && this.#focus.current !== n.num) {
       g.strokeStyle = hexA(c.core, 0.95)
       g.lineWidth = 2
       g.beginPath()
@@ -1288,7 +1296,7 @@ export class StarMap {
     const order = [...vis].sort((a, b) => {
       const priority = (n: Node) => {
         if (this.#focus.current === n.num) return 0
-        if (this.#focus.ready.includes(n.num)) return 1
+        if (this.#focus.readySet.has(n.num)) return 1
         if (this.#selected === n.num) return 2
         if (this.#focus.pathNodes.has(n.num)) return 3
         return 4 + LABEL_PRIORITY[n.vstate]
@@ -1301,7 +1309,7 @@ export class StarMap {
     const items: LabelDraw[] = []
     for (const v of order) {
       const isCurrent = this.#focus.current === v.n.num
-      const isReady = this.#focus.ready.includes(v.n.num)
+      const isReady = this.#focus.readySet.has(v.n.num)
       const marker =
         isCurrent && isReady
           ? 'CURRENT / READY \u00b7 '

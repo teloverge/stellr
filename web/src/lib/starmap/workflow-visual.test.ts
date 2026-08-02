@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Ticket } from './model'
 import type { WorkflowEdge } from './workflow'
-import { curveSide, workflowVisualState } from './workflow-visual'
+import { curveSide, reverseEdgeKeys, workflowVisualState } from './workflow-visual'
 
 function ticket(num: number, status: Ticket['status']): Ticket {
   return {
@@ -53,5 +53,14 @@ describe('workflow visual policy', () => {
     expect(curveSide(entry, true)).toBe(1)
     expect(curveSide(returned, true)).toBe(-1)
     expect(curveSide({ from: 37, to: 38, roles: ['sequence'], child: 38 }, false)).toBe(1)
+  })
+
+  it('indexes reverse partners once for constant-time render lookup', () => {
+    const edges: WorkflowEdge[] = [
+      { from: 16, to: 37, roles: ['entry'], child: 37 },
+      { from: 37, to: 16, roles: ['return'], child: 37 },
+      { from: 37, to: 38, roles: ['sequence'], child: 38 },
+    ]
+    expect(reverseEdgeKeys(edges)).toEqual(new Set(['16>37', '37>16']))
   })
 })

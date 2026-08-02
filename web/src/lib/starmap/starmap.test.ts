@@ -146,7 +146,11 @@ describe('the island seam', () => {
       expect(sm.positions()).toEqual(positions)
       expect(recompute).toHaveBeenCalledTimes(1)
 
-      sm.setModel(initial.map((ticket) => (ticket.num === 3 ? { ...ticket, parentIssue: 1 } : ticket)))
+      sm.setModel(
+        fixture({ 3: 'claimed' }).map((ticket) =>
+          ticket.num === 3 ? { ...ticket, parentIssue: 1 } : ticket,
+        ),
+      )
       expect(recompute).toHaveBeenCalledTimes(2)
     } finally {
       recompute.mockRestore()

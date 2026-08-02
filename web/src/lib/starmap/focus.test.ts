@@ -71,6 +71,17 @@ describe('session focus analysis', () => {
     expect([...focus.emphasized]).toEqual([8, 21])
   })
 
+  it('refreshes constant-time ready membership with each analyzed snapshot', () => {
+    const first = analyzeFocus(
+      [ticket(21, 'frontier', [], true), ticket(8, 'frontier', [], true)],
+      null,
+    )
+    const next = analyzeFocus([ticket(21, 'frontier', [], true)], null)
+
+    expect(first).toMatchObject({ readySet: new Set([8, 21]) })
+    expect(next).toMatchObject({ readySet: new Set([21]) })
+  })
+
   it('marks an actionable current issue as both current and ready', () => {
     const focus = analyzeFocus([ticket(8, 'frontier', [], true)], 8)
 
