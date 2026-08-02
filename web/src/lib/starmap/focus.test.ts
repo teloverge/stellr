@@ -15,6 +15,7 @@ function ticket(
     type: 'issue',
     status,
     blockedBy,
+    parentIssue: null,
     frontier: status === 'frontier',
     readyForAgent,
   }

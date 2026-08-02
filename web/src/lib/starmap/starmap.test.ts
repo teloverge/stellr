@@ -30,6 +30,7 @@ function fixture(overrides: Partial<Record<number, Ticket['status']>> = {}): Tic
     type: 'task',
     status: overrides[num] ?? 'open',
     blockedBy,
+    parentIssue: null,
     frontier: overrides[num] === undefined && blockedBy.length === 0,
   }))
 }
@@ -97,11 +98,11 @@ describe('the island seam', () => {
     // open→frontier, open→blocked, claimed, resolved, out_of_scope — one push
     // carrying all five, and every star present in the model.
     sm.setModel([
-      { num: 1, slug: '1', title: 'frontier', type: 'task', status: 'open', frontier: true, blockedBy: [] },
-      { num: 2, slug: '2', title: 'blocked', type: 'task', status: 'open', frontier: false, blockedBy: [1] },
-      { num: 3, slug: '3', title: 'claimed', type: 'task', status: 'claimed', frontier: false, blockedBy: [] },
-      { num: 4, slug: '4', title: 'resolved', type: 'task', status: 'resolved', frontier: false, blockedBy: [] },
-      { num: 5, slug: '5', title: 'oos', type: 'task', status: 'out_of_scope', frontier: false, blockedBy: [] },
+      { num: 1, slug: '1', title: 'frontier', type: 'task', status: 'open', frontier: true, blockedBy: [], parentIssue: null },
+      { num: 2, slug: '2', title: 'blocked', type: 'task', status: 'open', frontier: false, blockedBy: [1], parentIssue: null },
+      { num: 3, slug: '3', title: 'claimed', type: 'task', status: 'claimed', frontier: false, blockedBy: [], parentIssue: null },
+      { num: 4, slug: '4', title: 'resolved', type: 'task', status: 'resolved', frontier: false, blockedBy: [], parentIssue: null },
+      { num: 5, slug: '5', title: 'oos', type: 'task', status: 'out_of_scope', frontier: false, blockedBy: [], parentIssue: null },
     ])
     expect(Object.keys(sm.positions()).sort()).toEqual(['1', '2', '3', '4', '5'])
   })
@@ -448,10 +449,10 @@ describe('painting the overlay', () => {
     const { sm } = mounted()
     sm.setModel(
       [
-        { num: 8, slug: '8', title: 'Pagination', type: 'issue', status: 'frontier', blockedBy: [], frontier: true, readyForAgent: true },
-        { num: 12, slug: '12', title: 'Spaces', type: 'issue', status: 'blocked', blockedBy: [8], frontier: false },
-        { num: 14, slug: '14', title: 'Embedded UI', type: 'issue', status: 'blocked', blockedBy: [12], frontier: false },
-        { num: 21, slug: '21', title: 'Other ready work', type: 'issue', status: 'frontier', blockedBy: [], frontier: true, readyForAgent: true },
+        { num: 8, slug: '8', title: 'Pagination', type: 'issue', status: 'frontier', blockedBy: [], parentIssue: null, frontier: true, readyForAgent: true },
+        { num: 12, slug: '12', title: 'Spaces', type: 'issue', status: 'blocked', blockedBy: [8], parentIssue: null, frontier: false },
+        { num: 14, slug: '14', title: 'Embedded UI', type: 'issue', status: 'blocked', blockedBy: [12], parentIssue: null, frontier: false },
+        { num: 21, slug: '21', title: 'Other ready work', type: 'issue', status: 'frontier', blockedBy: [], parentIssue: null, frontier: true, readyForAgent: true },
       ],
       {},
       14,
@@ -474,6 +475,7 @@ describe('painting the overlay', () => {
           type: 'issue',
           status: 'frontier',
           blockedBy: [],
+          parentIssue: null,
           frontier: true,
           readyForAgent: true,
         },
@@ -551,7 +553,7 @@ describe('label placement', () => {
   // title, which is exactly where a vertical-only stack runs out of slots and
   // starts dropping labels onto stars.
   const CROWDED: Ticket[] = [
-    { num: 1, slug: '1', title: 'The root everything hangs from', type: 'task', status: 'open', blockedBy: [], frontier: true },
+    { num: 1, slug: '1', title: 'The root everything hangs from', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true },
     ...Array.from({ length: 12 }, (_, i) => ({
       num: i + 2,
       slug: `${i + 2}`,
@@ -559,6 +561,7 @@ describe('label placement', () => {
       type: 'task',
       status: 'open' as const,
       blockedBy: [1],
+      parentIssue: null,
       frontier: false,
     })),
   ]

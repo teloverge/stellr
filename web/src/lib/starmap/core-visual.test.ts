@@ -15,6 +15,7 @@ const RESOLVED: Ticket = {
   status: 'resolved',
   frontier: false,
   blockedBy: [],
+  parentIssue: null,
 }
 const FRONTIER: Ticket = {
   num: 2,
@@ -24,6 +25,7 @@ const FRONTIER: Ticket = {
   status: 'open',
   frontier: true,
   blockedBy: [],
+  parentIssue: null,
 }
 const CLAIMED: Ticket = {
   num: 3,
@@ -33,6 +35,7 @@ const CLAIMED: Ticket = {
   status: 'claimed',
   frontier: false,
   blockedBy: [],
+  parentIssue: null,
 }
 const BLOCKED: Ticket = {
   num: 4,
@@ -42,6 +45,7 @@ const BLOCKED: Ticket = {
   status: 'open',
   frontier: false,
   blockedBy: [1],
+  parentIssue: null,
 }
 const OUT_OF_SCOPE: Ticket = {
   num: 5,
@@ -51,6 +55,7 @@ const OUT_OF_SCOPE: Ticket = {
   status: 'out_of_scope',
   frontier: false,
   blockedBy: [],
+  parentIssue: null,
 }
 
 function recordingContext(): {

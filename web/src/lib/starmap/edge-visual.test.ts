@@ -49,10 +49,10 @@ function recordingContext(): { ctx: Record<string, unknown>; strokes: Stroke[]; 
 }
 
 const EDGE_FIXTURE: Ticket[] = [
-  { num: 1, slug: '1', title: 'resolved blocker', type: 'task', status: 'resolved', blockedBy: [], frontier: false, readyForAgent: true },
-  { num: 2, slug: '2', title: 'focused dependent', type: 'task', status: 'open', blockedBy: [1], frontier: false },
-  { num: 3, slug: '3', title: 'unresolved blocker', type: 'task', status: 'open', blockedBy: [], frontier: true },
-  { num: 4, slug: '4', title: 'context dependent', type: 'task', status: 'open', blockedBy: [3], frontier: false },
+  { num: 1, slug: '1', title: 'resolved blocker', type: 'task', status: 'resolved', blockedBy: [], parentIssue: null, frontier: false, readyForAgent: true },
+  { num: 2, slug: '2', title: 'focused dependent', type: 'task', status: 'open', blockedBy: [1], parentIssue: null, frontier: false },
+  { num: 3, slug: '3', title: 'unresolved blocker', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true },
+  { num: 4, slug: '4', title: 'context dependent', type: 'task', status: 'open', blockedBy: [3], parentIssue: null, frontier: false },
 ]
 
 describe('dependency-edge visual treatment', () => {
