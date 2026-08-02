@@ -1,12 +1,14 @@
 //! Release-constellation artifacts for Stellr's README.
 
 mod github_source;
+mod preview;
 mod story;
 
 pub use github_source::{
     GithubReleaseHistorySource, LiveReleaseRequest, ReleaseHistoryError, ReleaseHistorySource,
     ReleaseWindowStart,
 };
+pub use preview::{PreviewRenderError, StaticPreview, render_static_preview};
 pub use story::{
     ClosureReason, IssueSnapshot, IssueStatus, LifecycleEvent, LifecycleEventKind,
     MilestoneIdentity, NodeCoordinate, NormalizedLifecycleEvent, PreviousRelease, RecordedIssue,
@@ -18,7 +20,7 @@ use roxmltree::Document;
 use thiserror::Error;
 
 const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
-const MAX_SVG_BYTES: usize = 750 * 1024;
+pub(crate) const MAX_SVG_BYTES: usize = 750 * 1024;
 
 /// A reason an SVG cannot be published as a Stellr README artifact.
 #[derive(Debug, Error)]

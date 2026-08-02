@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added deterministic final-scene release previews with a safe 1200-by-675 SVG,
+  matching 1600-by-900 PNG, canonical manifest, self-contained review page,
+  bounded accessible labels, fixed asset budgets, and a bundled raster font.
 - Added a read-only live GitHub release-history source with complete milestone,
   release, issue, blocker, and lifecycle pagination; explicit first/later release
   boundaries; inherited typed provider failures; and manifest privacy checks.

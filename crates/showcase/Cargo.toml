@@ -9,12 +9,15 @@ repository.workspace = true
 async-trait.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
 roxmltree = "0.21"
+resvg = { version = "0.47", default-features = false, features = ["text"] }
 serde.workspace = true
 serde_json.workspace = true
 stellr-core = { path = "../core" }
 stellr-github = { path = "../github" }
 thiserror.workspace = true
+unicode-segmentation = "1.13"
 
 [dev-dependencies]
+sha2 = "0.10"
 tokio.workspace = true
 wiremock = "0.6"
