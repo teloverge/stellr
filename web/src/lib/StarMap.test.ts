@@ -137,6 +137,25 @@ describe('StarMap wrapper', () => {
     expect(selected).toEqual([])
   })
 
+  it('clears before restoring the same routed issue when the space changes', () => {
+    const select = vi.spyOn(Renderer.prototype, 'select')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+
+    const component = mount(StarMapTestHost, {
+      target,
+      props: { initialSpace: space(42), initialSelectedIssue: 42 },
+    })
+    mounted.push(component)
+    flushSync()
+
+    select.mockClear()
+    component.updateSpace({ ...space(42), id: 'another-space' })
+    flushSync()
+
+    expect(select.mock.calls).toEqual([[null], [42]])
+  })
+
   it('mounts the canvas island and forwards a selected issue number', () => {
     const target = document.createElement('div')
     document.body.appendChild(target)

@@ -145,10 +145,11 @@ describe('App issue routing', () => {
     expect(target.querySelector('[aria-label="Issue details"]')?.textContent).toContain('#22')
     expect(target.textContent).toContain('Detail for Issue 22')
 
+    select.mockClear()
     socket.emitModel({ spaces: [space('first', 11), { ...space('second', 22), name: 'renamed' }] })
     flushSync()
 
-    expect(select).toHaveBeenLastCalledWith(22)
+    expect(select).not.toHaveBeenCalled()
   })
 
   it('clears an unknown issue while preserving the routed space', () => {
