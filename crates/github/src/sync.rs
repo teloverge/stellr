@@ -31,6 +31,7 @@ query FetchIssues($owner: String!, $name: String!, $cursor: String) {
         labels(first: 20) {
           nodes { name }
         }
+        parent { number }
         blockedBy(first: 50) {
           nodes {
             ... on Issue { number }
@@ -169,6 +170,7 @@ fn map_issues(nodes: Vec<IssueNode>) -> Vec<RawIssue> {
         inversions.extend(refs.blocks.into_iter().map(|target| (node.number, target)));
         issues.push(RawIssue {
             number: node.number,
+            parent_issue: node.parent.map(|parent| parent.number),
             title: node.title,
             body,
             state: match node.state {
@@ -274,6 +276,7 @@ struct IssueNode {
     assignees: AssigneeConnection,
     milestone: Option<Milestone>,
     labels: LabelConnection,
+    parent: Option<ParentIssue>,
     blocked_by: BlockedByConnection,
 }
 
@@ -307,6 +310,11 @@ struct LabelConnection {
 #[derive(Deserialize)]
 struct Label {
     name: String,
+}
+
+#[derive(Deserialize)]
+struct ParentIssue {
+    number: u64,
 }
 
 #[derive(Deserialize)]

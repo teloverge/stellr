@@ -17,6 +17,7 @@ function space(): SpaceModel {
       const number = index + 1
       return {
         number,
+        parent_issue: null,
         title: `Issue ${number}`,
         status,
         blocked_by: status === 'blocked' ? [1] : [],

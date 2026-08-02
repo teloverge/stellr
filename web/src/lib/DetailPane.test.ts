@@ -15,6 +15,7 @@ afterEach(async () => {
 function issue(overrides: Partial<Star> = {}): Star {
   return {
     number: 42,
+    parent_issue: null,
     title: 'Fix the thing',
     status: 'frontier',
     blocked_by: [],

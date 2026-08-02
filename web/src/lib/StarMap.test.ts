@@ -32,6 +32,7 @@ function space(number: number): SpaceModel {
     stars: [
       {
         number,
+        parent_issue: null,
         title: `Issue ${number}`,
         status: 'frontier',
         blocked_by: [],
