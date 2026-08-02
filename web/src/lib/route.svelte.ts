@@ -46,6 +46,7 @@ export class Route {
 
   go(space: string | null, issue: number | null = null): void {
     this.#target.location.hash = formatRouteHash(space, issue)
+    this.#apply(this.#target.location.hash)
   }
 
   destroy(): void {

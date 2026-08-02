@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 import App from './App.svelte'
 import type { Model, SpaceModel, Star } from './lib/model'
+import { StarMap as Renderer } from './lib/starmap/starmap'
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = []
+  closed = false
 
   onclose: ((event: CloseEvent) => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
@@ -14,7 +16,9 @@ class FakeWebSocket {
     FakeWebSocket.instances.push(this)
   }
 
-  close(): void {}
+  close(): void {
+    this.closed = true
+  }
 
   emitModel(model: Model): void {
     this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(model) }))
@@ -64,6 +68,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
   window.history.replaceState(null, '', '/')
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   if (clientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidth)
   if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
 })
@@ -98,15 +103,25 @@ const model: Model = {
   spaces: [space('first', 11), space('second', 22)],
 }
 
-function mountApp(): { target: HTMLElement; socket: FakeWebSocket } {
+function mountApp(): { target: HTMLElement; socket: FakeWebSocket; component: object } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  mounted.push(mount(App, { target }))
+  const component = mount(App, { target })
+  mounted.push(component)
   flushSync()
-  return { target, socket: FakeWebSocket.instances[0] }
+  return { target, socket: FakeWebSocket.instances[0], component }
 }
 
 describe('App issue routing', () => {
+  it('closes its control socket when the App is unmounted', async () => {
+    const { socket, component } = mountApp()
+
+    await unmount(component)
+    mounted.splice(mounted.indexOf(component), 1)
+
+    expect(socket.closed).toBe(true)
+  })
+
   it('routes an unaddressed snapshot to its first available space', () => {
     const { target, socket } = mountApp()
 
@@ -118,12 +133,14 @@ describe('App issue routing', () => {
   })
 
   it('restores a valid deep link after the snapshot arrives', () => {
+    const select = vi.spyOn(Renderer.prototype, 'select')
     window.history.replaceState(null, '', '/#s=second&i=22')
     const { target, socket } = mountApp()
 
     socket.emitModel(model)
     flushSync()
 
+    expect(select).toHaveBeenLastCalledWith(22)
     expect(target.querySelector('[aria-label="Issue details"]')?.textContent).toContain('#22')
     expect(target.textContent).toContain('Detail for Issue 22')
   })

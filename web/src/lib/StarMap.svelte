@@ -7,18 +7,28 @@
   let {
     space,
     currentIssue = null,
+    selectedIssue = null,
     select,
   }: {
     space: SpaceModel
     currentIssue?: number | null
+    selectedIssue?: number | null
     select?: (issueNumber: number) => void
   } = $props()
   let host: HTMLDivElement
   let renderer = $state.raw<Renderer | undefined>(undefined)
+  let selectedSpaceId: string | null = null
 
   $effect(() => {
     const model = toRendererModel(space)
     renderer?.setModel(model, {}, currentIssue)
+  })
+
+  $effect(() => {
+    const spaceChanged = selectedSpaceId !== space.id
+    selectedSpaceId = space.id
+    if (spaceChanged || selectedIssue === null) renderer?.select(null)
+    if (selectedIssue !== null) renderer?.select(selectedIssue)
   })
 
   onMount(() => {
@@ -27,7 +37,7 @@
     renderer.setBackground(background)
     renderer.mount(host)
     renderer.onSelect((issueNumber) => {
-      if (issueNumber !== null) select?.(issueNumber)
+      if (issueNumber !== null && issueNumber !== selectedIssue) select?.(issueNumber)
     })
 
     return () => {

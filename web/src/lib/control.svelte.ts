@@ -69,6 +69,21 @@ export class Control {
     this.#open(nextUrl)
   }
 
+  destroy(): void {
+    this.#url = null
+    this.#clearReconnect()
+
+    const socket = this.#socket
+    this.#socket = null
+    if (socket !== null) {
+      socket.onopen = null
+      socket.onmessage = null
+      socket.onclose = null
+      socket.close()
+    }
+    this.status = 'closed'
+  }
+
   #clearReconnect(): void {
     if (this.#reconnectTimer !== null) {
       clearTimeout(this.#reconnectTimer)

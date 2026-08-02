@@ -58,6 +58,7 @@
 
     return () => {
       observer.disconnect()
+      control.destroy()
       route.destroy()
     }
   })
@@ -74,6 +75,7 @@
       <StarMap
         space={activeSpace}
         {currentIssue}
+        selectedIssue={activeStar?.number ?? null}
         select={(issueNumber) => route.go(activeSpace.id, issueNumber)}
       />
     {:else}
