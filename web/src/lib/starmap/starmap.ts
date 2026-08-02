@@ -358,7 +358,7 @@ export class StarMap {
     // memory is exactly what we want kept.
     this.#labelSide.clear()
     this.#sig = sig
-    const pts = computeLayout(tickets)
+    const pts = computeLayout(tickets.map(({ num, blockedBy, parentIssue }) => ({ num, blockedBy, parentIssue })))
     this.#nodes = tickets.map((t) => {
       const p = pts[t.num]
       return {

@@ -9,6 +9,7 @@
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { StarMap, titleBudget, clipTitle } from './starmap'
+import * as layout from './layout'
 import { computeLayout, structureSignature } from './layout'
 import { GRAMMAR, nonColorSignature, type SessionState } from './session'
 import type { Ticket } from './model'
@@ -131,6 +132,25 @@ describe('the island seam', () => {
     // And re-pushing the five-node map restores exactly the original positions.
     sm.setModel(fixture())
     expect(sm.positions()).toEqual(five)
+  })
+
+  it('retains coordinates for status-only pushes and recomputes once for a parent relationship', () => {
+    const recompute = vi.spyOn(layout, 'computeLayout')
+    try {
+      const initial = fixture()
+      sm.setModel(initial)
+      const positions = sm.positions()
+      expect(recompute).toHaveBeenCalledTimes(1)
+
+      sm.setModel(fixture({ 3: 'claimed' }))
+      expect(sm.positions()).toEqual(positions)
+      expect(recompute).toHaveBeenCalledTimes(1)
+
+      sm.setModel(initial.map((ticket) => (ticket.num === 3 ? { ...ticket, parentIssue: 1 } : ticket)))
+      expect(recompute).toHaveBeenCalledTimes(2)
+    } finally {
+      recompute.mockRestore()
+    }
   })
 
   it('emits selection when a star is clicked, and deselection on empty space', () => {
