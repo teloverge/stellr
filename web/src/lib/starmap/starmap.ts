@@ -17,10 +17,12 @@
 
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
-import { computeLayout, structureSignature, edgesOf, TAU } from './layout'
+import { computeLayout, structureSignature, TAU } from './layout'
 import { STAR, LABEL, SESSION_HUE, visualState, hexA, type VisualState } from './theme'
 import { GRAMMAR, type SessionState } from './session'
 import { analyzeFocus, edgeKey, type Focus } from './focus'
+import { workflowEdges, type WorkflowEdge } from './workflow'
+import { curveSide, workflowVisualState, type WorkflowVisualState } from './workflow-visual'
 import type { Ticket } from './model'
 
 export type SelectHandler = (num: number | null) => void
@@ -33,11 +35,18 @@ const DEFAULT_BG = '#05070d'
 const ISSUE_RADIUS_SCALE = 1.25
 const CONTEXT_ALPHA = 0.3
 const CONTEXT_EDGE_ALPHA = 0.45
+const SUBISSUE_RIM = 'rgba(170,145,255,0.82)'
+
+interface RenderEdge extends WorkflowEdge {
+  state: WorkflowVisualState
+  satisfied: boolean
+}
 
 interface Node {
   num: number
   title: string
   type: string
+  parentIssue: number | null
   vstate: VisualState
   // The session overlay riding this star, or null when no session speaks for it
   // (ticket 13). Strictly additive: it never touches layout or the base star.
@@ -234,7 +243,7 @@ export class StarMap {
 
   #nodes: Node[] = []
   #byNum = new Map<number, Node>()
-  #edges: { from: number; to: number; satisfied: boolean }[] = []
+  #edges: RenderEdge[] = []
   #sig = ''
   #resolved = new Set<number>()
 
@@ -365,6 +374,7 @@ export class StarMap {
         num: t.num,
         title: t.title,
         type: t.type,
+        parentIssue: t.parentIssue,
         vstate: visualState(t),
         sstate: sessions[t.num] ?? null,
         x: p.x,
@@ -381,10 +391,11 @@ export class StarMap {
   }
 
   #refreshEdges(tickets: Ticket[]): void {
-    this.#edges = edgesOf(tickets).map((e) => ({
-      from: e.from,
-      to: e.to,
-      satisfied: this.#resolved.has(e.from),
+    const byNum = new Map(tickets.map((ticket) => [ticket.num, ticket]))
+    this.#edges = workflowEdges(tickets).map((edge) => ({
+      ...edge,
+      state: workflowVisualState(edge, byNum),
+      satisfied: this.#resolved.has(edge.from),
     }))
   }
 
@@ -876,7 +887,8 @@ export class StarMap {
       if (focused && !this.#focus.pathEdges.has(edgeKey(e.from, e.to))) {
         g.globalAlpha = CONTEXT_EDGE_ALPHA
       }
-      this.#drawEdge(g, e)
+      const reverseExists = this.#edges.some((other) => other.from === e.to && other.to === e.from)
+      this.#drawEdge(g, e, reverseExists)
       g.restore()
     }
     for (const n of this.#nodes) {
@@ -890,7 +902,7 @@ export class StarMap {
     this.#drawTicker(g)
   }
 
-  #drawEdge(g: CanvasRenderingContext2D, e: { from: number; to: number; satisfied: boolean }): void {
+  #drawEdge(g: CanvasRenderingContext2D, e: RenderEdge, reverseExists: boolean): void {
     const a = this.#byNum.get(e.from),
       b = this.#byNum.get(e.to)
     if (!a || !b) return
@@ -903,8 +915,15 @@ export class StarMap {
       dx = bx - ax,
       dy = by - ay,
       len = Math.hypot(dx, dy) || 1
-    const nx = -dy / len,
-      ny = dx / len,
+    const mini = e.roles.some((role) => role === 'entry' || role === 'sequence' || role === 'return')
+    const low = this.#byNum.get(Math.min(e.from, e.to))!,
+      high = this.#byNum.get(Math.max(e.from, e.to))!,
+      canonicalDx = high._x - low._x,
+      canonicalDy = high._y - low._y,
+      canonicalLen = Math.hypot(canonicalDx, canonicalDy) || 1,
+      side = curveSide(e, reverseExists),
+      nx = mini ? (-canonicalDy / canonicalLen) * side : -dy / len,
+      ny = mini ? (canonicalDx / canonicalLen) * side : dx / len,
       bow = Math.min(46, len * 0.13),
       cx = mx + nx * bow,
       cy = my + ny * bow
@@ -912,10 +931,15 @@ export class StarMap {
     g.moveTo(ax, ay)
     g.quadraticCurveTo(cx, cy, bx, by)
     g.lineCap = 'round'
-    if (e.satisfied) {
+    const usesResolvedStyle = mini ? e.state !== 'incomplete' : e.satisfied
+    if (usesResolvedStyle) {
       g.strokeStyle = 'rgba(190,225,200,0.82)'
       g.lineWidth = 3
       g.setLineDash([])
+    } else if (mini) {
+      g.strokeStyle = 'rgba(170,145,255,0.78)'
+      g.lineWidth = 2.6
+      g.setLineDash([8, 7])
     } else {
       g.strokeStyle = 'rgba(174,192,218,0.62)'
       g.lineWidth = 2.4
@@ -925,7 +949,7 @@ export class StarMap {
     g.setLineDash([])
     // A satisfied edge (blocker resolved) flows particles blocker→dependent, so
     // the frontier visibly ignites as paths clear (starmap-design.md dec. 5).
-    if (e.satisfied) {
+    if (mini ? e.state === 'traversed' : e.satisfied) {
       for (let k = 0; k < 3; k++) {
         const u = mod(this.#clock * 0.1 + k / 3 + (e.from * 0.13 + e.to * 0.07), 1),
           m = 1 - u
@@ -944,9 +968,11 @@ export class StarMap {
     // Direction arrowhead at the curve's midpoint.
     const midx = 0.25 * ax + 0.5 * cx + 0.25 * bx,
       midy = 0.25 * ay + 0.5 * cy + 0.25 * by
-    const al = Math.hypot(dx, dy) || 1,
-      ux = dx / al,
-      uy = dy / al
+    const tangentX = (cx - ax) + (bx - cx),
+      tangentY = (cy - ay) + (by - cy),
+      al = Math.hypot(tangentX, tangentY) || 1,
+      ux = tangentX / al,
+      uy = tangentY / al
     const ah = 12,
       aw = 6.5,
       px = -uy,
@@ -958,7 +984,7 @@ export class StarMap {
     g.lineTo(tipx - ux * ah + px * aw, tipy - uy * ah + py * aw)
     g.lineTo(tipx - ux * ah - px * aw, tipy - uy * ah - py * aw)
     g.closePath()
-    g.fillStyle = e.satisfied ? '#d9f3df' : '#c8d5e8'
+    g.fillStyle = usesResolvedStyle ? '#d9f3df' : mini ? '#c7b8ff' : '#c8d5e8'
     g.fill()
   }
 
@@ -983,6 +1009,13 @@ export class StarMap {
     g.fill()
 
     const cr = this.#radius(n)
+    if (n.parentIssue !== null && n.vstate !== 'resolved' && n.vstate !== 'out_of_scope') {
+      g.strokeStyle = SUBISSUE_RIM
+      g.lineWidth = 1.5
+      g.beginPath()
+      g.arc(x, y, cr + 4, 0, TAU)
+      g.stroke()
+    }
     if (n.vstate === 'resolved') {
       const cg = g.createRadialGradient(x, y, 0, x, y, cr * 1.35)
       cg.addColorStop(0, hexA(c.core, 1))

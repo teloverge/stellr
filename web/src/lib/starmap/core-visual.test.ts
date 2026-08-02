@@ -57,6 +57,16 @@ const OUT_OF_SCOPE: Ticket = {
   blockedBy: [],
   parentIssue: null,
 }
+const INCOMPLETE_CHILD: Ticket = { ...BLOCKED, num: 6, slug: '6', parentIssue: 99 }
+const RESOLVED_CHILD: Ticket = { ...RESOLVED, num: 7, slug: '7', parentIssue: 99 }
+const OUT_OF_SCOPE_CHILD: Ticket = { ...OUT_OF_SCOPE, num: 9, slug: '9', parentIssue: 99 }
+const READY_CHILD: Ticket = {
+  ...FRONTIER,
+  num: 8,
+  slug: '8',
+  parentIssue: 99,
+  readyForAgent: true,
+}
 
 function recordingContext(): {
   ctx: Record<string, unknown>
@@ -242,5 +252,43 @@ describe('issue core visual grammar', () => {
       { style: 'rgba(255,255,255,0.95)', lineWidth: 2, radius: 13.625 },
       { style: 'rgba(255,255,255,0.55)', lineWidth: 1, radius: 18.625 },
     ])
+  })
+
+  it('adds one relationship rim outside an incomplete child core and none to a resolved child', () => {
+    const incomplete = paint(INCOMPLETE_CHILD)
+    const relationshipRims = incomplete.strokes.filter((stroke) => stroke.style === 'rgba(170,145,255,0.82)')
+    const blackCore = incomplete.fills.find((fill) => fill.style === '#000')!
+
+    expect(relationshipRims).toHaveLength(1)
+    expect(relationshipRims[0].arc!.radius).toBeGreaterThan(blackCore.arc!.radius)
+    expect(incomplete.strokes).toContainEqual({
+      style: 'rgba(226,195,195,0.95)',
+      lineWidth: 2.2,
+      arc: { radius: 4.525 },
+    })
+    expect(paint(RESOLVED_CHILD).strokes.some((stroke) => stroke.style === 'rgba(170,145,255,0.82)')).toBe(false)
+    expect(paint(OUT_OF_SCOPE_CHILD).strokes.some((stroke) => stroke.style === 'rgba(170,145,255,0.82)')).toBe(false)
+  })
+
+  it('keeps READY and CURRENT emphasis strokes dominant over the relationship rim', () => {
+    const ready = paint(READY_CHILD)
+    const readyStyles = ready.strokes.map((stroke) => stroke.style)
+    const readyRelationshipIndex = readyStyles.indexOf('rgba(170,145,255,0.82)')
+    const readyStatusIndex = readyStyles.indexOf('rgba(138,216,255,0.95)')
+    expect(readyRelationshipIndex).toBeGreaterThanOrEqual(0)
+    expect(readyStatusIndex).toBeGreaterThan(readyRelationshipIndex)
+
+    const current = paint(INCOMPLETE_CHILD, INCOMPLETE_CHILD.num)
+    const currentStyles = current.strokes.map((stroke) => stroke.style)
+    const relationshipIndex = currentStyles.indexOf('rgba(170,145,255,0.82)')
+    const whiteRingIndexes = currentStyles
+      .map((style, index) => typeof style === 'string' && style.startsWith('rgba(255,255,255,') ? index : -1)
+      .filter((index) => index >= 0)
+    expect(whiteRingIndexes).toHaveLength(2)
+    expect(whiteRingIndexes.every((index) => index > relationshipIndex)).toBe(true)
+    const relationshipRadius = current.strokes[relationshipIndex].arc!.radius
+    for (const index of whiteRingIndexes) {
+      expect(current.strokes[index].arc!.radius).toBeGreaterThan(relationshipRadius)
+    }
   })
 })
