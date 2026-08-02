@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added the M1 application chrome: complete space add/select/refresh/remove
+  controls, visible stale and provider-error state, and restorable hash-routed
+  issue detail rendered through sanitized Markdown with responsive docking.
 - Strengthened dependency lines, arrows, and resolved-edge motion, and made
   incomplete issue cores hollow while completed issues remain solid.
 - Refocused the star map on the current conversation issue and actionable
