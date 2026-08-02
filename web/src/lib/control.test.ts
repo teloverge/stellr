@@ -3,6 +3,7 @@ import { Control, pageIssue } from './control.svelte'
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = []
+  closed = false
 
   onclose: ((event: CloseEvent) => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
@@ -13,6 +14,7 @@ class FakeWebSocket {
   }
 
   close(): void {
+    this.closed = true
     this.emitClose()
   }
 
@@ -139,6 +141,29 @@ describe('Control', () => {
     staleClose?.(new CloseEvent('close'))
     vi.advanceTimersByTime(500)
     expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('closes its active socket when destroyed', () => {
+    const control = new Control()
+    control.connect('ws://socket.example/ws/control')
+    const socket = FakeWebSocket.instances[0]
+
+    control.destroy()
+
+    expect(socket.closed).toBe(true)
+    expect(control.status).toBe('closed')
+  })
+
+  it('cancels pending reconnect work when destroyed', () => {
+    const control = new Control()
+    control.connect('ws://socket.example/ws/control')
+    FakeWebSocket.instances[0].emitClose()
+
+    control.destroy()
+    vi.advanceTimersByTime(500)
+
+    expect(FakeWebSocket.instances).toHaveLength(1)
     expect(vi.getTimerCount()).toBe(0)
   })
 })

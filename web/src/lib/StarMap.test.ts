@@ -117,6 +117,27 @@ describe('StarMap wrapper', () => {
     )
   })
 
+  it('selects a routed issue without echoing it as a user selection', () => {
+    const select = vi.spyOn(Renderer.prototype, 'select')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const selected: number[] = []
+
+    const component = mount(StarMap, {
+      target,
+      props: {
+        space: space(42),
+        selectedIssue: 42,
+        select: (number) => selected.push(number),
+      },
+    })
+    mounted.push(component)
+    flushSync()
+
+    expect(select).toHaveBeenLastCalledWith(42)
+    expect(selected).toEqual([])
+  })
+
   it('mounts the canvas island and forwards a selected issue number', () => {
     const target = document.createElement('div')
     document.body.appendChild(target)

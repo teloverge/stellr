@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added canonical space-and-issue deep links with responsive, sanitized issue
+  detail and safe GitHub navigation from the star map.
 - Strengthened dependency lines, arrows, and resolved-edge motion, and made
   incomplete issue cores hollow while completed issues remain solid.
 - Refocused the star map on the current conversation issue and actionable
