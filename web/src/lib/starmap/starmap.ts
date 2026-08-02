@@ -1009,7 +1009,8 @@ export class StarMap {
     g.fill()
 
     const cr = this.#radius(n)
-    if (n.parentIssue !== null && n.vstate !== 'resolved' && n.vstate !== 'out_of_scope') {
+    const hasSubissueRim = n.parentIssue !== null && n.vstate !== 'resolved' && n.vstate !== 'out_of_scope'
+    if (hasSubissueRim) {
       g.strokeStyle = SUBISSUE_RIM
       g.lineWidth = 1.5
       g.beginPath()
@@ -1036,6 +1037,14 @@ export class StarMap {
       g.lineWidth = lineWidth
       g.beginPath()
       g.arc(x, y, cr - lineWidth / 2, 0, TAU)
+      g.stroke()
+    }
+
+    if (hasSubissueRim && this.#focus.ready.includes(n.num) && this.#focus.current !== n.num) {
+      g.strokeStyle = hexA(c.core, 0.95)
+      g.lineWidth = 2
+      g.beginPath()
+      g.arc(x, y, cr + 8, 0, TAU)
       g.stroke()
     }
 

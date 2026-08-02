@@ -274,9 +274,18 @@ describe('issue core visual grammar', () => {
     const ready = paint(READY_CHILD)
     const readyStyles = ready.strokes.map((stroke) => stroke.style)
     const readyRelationshipIndex = readyStyles.indexOf('rgba(170,145,255,0.82)')
-    const readyStatusIndex = readyStyles.indexOf('rgba(138,216,255,0.95)')
+    const readyRelationshipRadius = ready.strokes[readyRelationshipIndex].arc!.radius
+    const readyEmphasisIndexes = ready.strokes
+      .map((stroke, index) =>
+        stroke.style === 'rgba(138,216,255,0.95)' &&
+        (stroke.arc?.radius ?? 0) > readyRelationshipRadius
+          ? index
+          : -1,
+      )
+      .filter((index) => index >= 0)
     expect(readyRelationshipIndex).toBeGreaterThanOrEqual(0)
-    expect(readyStatusIndex).toBeGreaterThan(readyRelationshipIndex)
+    expect(readyEmphasisIndexes).toHaveLength(1)
+    expect(readyEmphasisIndexes[0]).toBeGreaterThan(readyRelationshipIndex)
 
     const current = paint(INCOMPLETE_CHILD, INCOMPLETE_CHILD.num)
     const currentStyles = current.strokes.map((stroke) => stroke.style)
