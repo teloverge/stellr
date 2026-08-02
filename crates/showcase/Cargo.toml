@@ -6,5 +6,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
 roxmltree = "0.21"
+serde.workspace = true
+stellr-core = { path = "../core" }
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

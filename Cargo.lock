@@ -2457,7 +2457,11 @@ dependencies = [
 name = "stellr-showcase"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "roxmltree",
+ "serde",
+ "serde_json",
+ "stellr-core",
  "thiserror 2.0.19",
 ]
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added deterministic, auditable release-story manifests with explicit UTC
+  boundaries, lifecycle reconstruction through Stellr's core status derivation,
+  hidden blocker support, bounded beat grouping, and precise fail-closed
+  evidence diagnostics.
 - Added a script-free animated README constellation compatibility probe with a
   reduced-motion PNG and strict-Markdown fallback path.
 - Compacted native subissue workflows into deterministic parent-local arcs

@@ -1,5 +1,14 @@
 //! Release-constellation artifacts for Stellr's README.
 
+mod story;
+
+pub use story::{
+    ClosureReason, IssueSnapshot, IssueStatus, LifecycleEvent, LifecycleEventKind,
+    MilestoneIdentity, NodeCoordinate, NormalizedLifecycleEvent, PreviousRelease, RecordedIssue,
+    ReleaseBoundaries, ReleaseEvidence, ReleaseStory, SnapshotState, StartingSnapshot, StoryBeat,
+    StoryBoundaries, StoryBuildError, StoryEdge, StoryEvidence, UtcTimestamp, UtcTimestampError,
+};
+
 use roxmltree::Document;
 use thiserror::Error;
 
