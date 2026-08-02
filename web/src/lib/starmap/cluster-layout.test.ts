@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { edgesOf, type LayoutNode, type Point } from './layout'
-import { placeDirectChildClusters } from './cluster-layout'
+import { compareCandidateScores, placeDirectChildClusters } from './cluster-layout'
 import { workflowEdges } from './workflow'
 import { reverseEdgeKeys } from './workflow-visual'
 import {
@@ -90,6 +90,34 @@ describe('compact cluster sector selection', () => {
     expect(Number.isFinite(first[34].y)).toBe(true)
     expect(Number.isFinite(first[35].x)).toBe(true)
     expect(Number.isFinite(first[35].y)).toBe(true)
+  })
+
+  it('gives crossing penalties precedence over available clearance', () => {
+    expect(
+      compareCandidateScores(
+        { crossings: 0, nodeClearance: 42, dependencyClearance: 18 },
+        {
+          crossings: 1,
+          nodeClearance: Number.POSITIVE_INFINITY,
+          dependencyClearance: Number.POSITIVE_INFINITY,
+        },
+      ),
+    ).toBeGreaterThan(0)
+  })
+
+  it('orders competing clearance scores and preserves exact ties', () => {
+    expect(
+      compareCandidateScores(
+        { crossings: 0, nodeClearance: 60, dependencyClearance: 25 },
+        { crossings: 0, nodeClearance: 50, dependencyClearance: 25 },
+      ),
+    ).toBeGreaterThan(0)
+    expect(
+      compareCandidateScores(
+        { crossings: 0, nodeClearance: 60, dependencyClearance: 20 },
+        { crossings: 0, nodeClearance: 50, dependencyClearance: 30 },
+      ),
+    ).toBe(0)
   })
 
   it('places six children on bounded first and second arcs with minimum clearance', () => {
@@ -255,7 +283,7 @@ describe('compact cluster sector selection', () => {
     expect(cross(7, 8)).toBeGreaterThan(0)
   })
 
-  it('keeps every child in a large group within the bounded cluster', () => {
+  it('keeps every child in a large group on bounded, clear parent-centered arcs', () => {
     const children = Array.from({ length: 14 }, (_, index) => 31 + index)
     const nodes: LayoutNode[] = [
       { num: 16, blockedBy: [], parentIssue: null },
@@ -268,8 +296,22 @@ describe('compact cluster sector selection', () => {
 
     const points = placeDirectChildClusters(nodes, broadPoints, [])
 
+    const radii = children.map((number) => Math.hypot(points[number].x, points[number].y))
+    expect(radii.filter((radius) => Math.abs(radius - 92) < 0.001)).toHaveLength(4)
+    expect(radii.filter((radius) => Math.abs(radius - 126) < 0.001)).toHaveLength(10)
+
     for (const number of children) {
       expect(Math.hypot(points[number].x, points[number].y)).toBeLessThanOrEqual(126.001)
+    }
+    for (let left = 0; left < children.length; left++) {
+      for (let right = left + 1; right < children.length; right++) {
+        expect(
+          Math.hypot(
+            points[children[left]].x - points[children[right]].x,
+            points[children[left]].y - points[children[right]].y,
+          ),
+        ).toBeGreaterThanOrEqual(44)
+      }
     }
   })
 })

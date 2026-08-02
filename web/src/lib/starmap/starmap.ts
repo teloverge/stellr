@@ -251,6 +251,9 @@ export class StarMap {
   #byNum = new Map<number, Node>()
   #edges: RenderEdge[] = []
   #miniCurve: MutableMiniCurve = { control: { x: 0, y: 0 }, bow: 0 }
+  #miniCurveStart = { x: 0, y: 0 }
+  #miniCurveEnd = { x: 0, y: 0 }
+  #miniCurveParent = { x: 0, y: 0 }
   #sig = ''
   #resolved = new Set<number>()
 
@@ -926,22 +929,29 @@ export class StarMap {
       len = Math.hypot(dx, dy) || 1
     const mini = isMiniWorkflowEdge(e)
     const child = e.child === null ? undefined : this.#byNum.get(e.child)
-    const parent = child?.parentIssue === null || child?.parentIssue === undefined
-      ? undefined
-      : this.#byNum.get(child.parentIssue)
-    const curve = mini
-      ? writeMiniEdgeCurve(
-          this.#miniCurve,
-          e,
-          ax,
-          ay,
-          bx,
-          by,
-          e.reverseExists,
-          parent?._x,
-          parent?._y,
-        )
-      : null
+    const parent =
+      child?.parentIssue === null || child?.parentIssue === undefined
+        ? undefined
+        : this.#byNum.get(child.parentIssue)
+    let curve: MutableMiniCurve | null = null
+    if (mini) {
+      this.#miniCurveStart.x = ax
+      this.#miniCurveStart.y = ay
+      this.#miniCurveEnd.x = bx
+      this.#miniCurveEnd.y = by
+      if (parent) {
+        this.#miniCurveParent.x = parent._x
+        this.#miniCurveParent.y = parent._y
+      }
+      curve = writeMiniEdgeCurve(
+        this.#miniCurve,
+        e,
+        this.#miniCurveStart,
+        this.#miniCurveEnd,
+        e.reverseExists,
+        parent ? this.#miniCurveParent : undefined,
+      )
+    }
     const nx = -dy / len,
       ny = dx / len,
       bow = Math.min(46, len * 0.13),

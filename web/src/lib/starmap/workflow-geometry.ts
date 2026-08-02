@@ -32,18 +32,15 @@ export interface MiniEdgeCurveInput {
 export function writeMiniEdgeCurve(
   output: MutableMiniCurve,
   edge: WorkflowEdge,
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
+  start: Point,
+  end: Point,
   reverseExists: boolean,
-  parentX?: number,
-  parentY?: number,
+  parent?: Point,
 ): MutableMiniCurve {
-  const midpointX = (startX + endX) / 2
-  const midpointY = (startY + endY) / 2
-  const deltaX = endX - startX
-  const deltaY = endY - startY
+  const midpointX = (start.x + end.x) / 2
+  const midpointY = (start.y + end.y) / 2
+  const deltaX = end.x - start.x
+  const deltaY = end.y - start.y
   const edgeLength = Math.hypot(deltaX, deltaY) || 1
   const bow = Math.min(MINI_EDGE_BOW_CAP, edgeLength * 0.18)
 
@@ -51,11 +48,10 @@ export function writeMiniEdgeCurve(
   let normalY: number
   if (
     edge.roles.includes('sequence') &&
-    parentX !== undefined &&
-    parentY !== undefined
+    parent !== undefined
   ) {
-    const towardParentX = parentX - midpointX
-    const towardParentY = parentY - midpointY
+    const towardParentX = parent.x - midpointX
+    const towardParentY = parent.y - midpointY
     const length = Math.hypot(towardParentX, towardParentY)
     if (length > 0) {
       normalX = towardParentX / length
@@ -89,13 +85,10 @@ export function miniEdgeCurve({
   const mutable = writeMiniEdgeCurve(
     { control: { x: 0, y: 0 }, bow: 0 },
     edge,
-    start.x,
-    start.y,
-    end.x,
-    end.y,
+    start,
+    end,
     reverseExists,
-    parent?.x,
-    parent?.y,
+    parent,
   )
 
   return {

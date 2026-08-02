@@ -18,14 +18,23 @@ export const MIN_CHILD_CENTER_CLEARANCE = 44
 export const UNRELATED_NODE_CLEARANCE = 42
 export const DEPENDENCY_LINE_CLEARANCE = 18
 export const CANDIDATE_SECTORS = 16
-const SHALLOW_SECOND_ARC_CAPACITY = 8
+export const CLEARANCE_SCORE_CAP = SECOND_ARC_RADIUS * 2
+export const NODE_CLEARANCE_SCORE_WEIGHT = 1
+export const DEPENDENCY_CLEARANCE_SCORE_WEIGHT = 1
+export const CROSSING_SCORE_PENALTY =
+  CLEARANCE_SCORE_CAP *
+    (NODE_CLEARANCE_SCORE_WEIGHT + DEPENDENCY_CLEARANCE_SCORE_WEIGHT) +
+  1
 
-interface Candidate {
-  childPoints: Record<number, Point>
-  collisionFree: boolean
+export interface CandidateScoreInput {
   crossings: number
   nodeClearance: number
   dependencyClearance: number
+}
+
+interface Candidate extends CandidateScoreInput {
+  childPoints: Record<number, Point>
+  collisionFree: boolean
 }
 
 interface CurveWithEdge {
@@ -149,17 +158,6 @@ function arcPoints(
     for (let index = 0; index < offsets.length; index++) {
       const offset = offsets[index]
       const angle = centerAngle + offset
-      childPoints[children[index].num] = {
-        x: parent.x + Math.cos(angle) * SECOND_ARC_RADIUS,
-        y: parent.y + Math.sin(angle) * SECOND_ARC_RADIUS,
-      }
-    }
-    return childPoints
-  }
-
-  if (children.length > FIRST_ARC_CAPACITY + SHALLOW_SECOND_ARC_CAPACITY) {
-    for (let index = 0; index < children.length; index++) {
-      const angle = centerAngle + (index / children.length) * Math.PI * 2
       childPoints[children[index].num] = {
         x: parent.x + Math.cos(angle) * SECOND_ARC_RADIUS,
         y: parent.y + Math.sin(angle) * SECOND_ARC_RADIUS,
@@ -320,17 +318,31 @@ function evaluateCandidate(
   }
 }
 
+function boundedClearanceScore(clearance: number): number {
+  if (Number.isNaN(clearance)) return 0
+  return Math.min(Math.max(clearance, 0), CLEARANCE_SCORE_CAP)
+}
+
+function candidateScore(candidate: CandidateScoreInput): number {
+  return (
+    boundedClearanceScore(candidate.nodeClearance) * NODE_CLEARANCE_SCORE_WEIGHT +
+    boundedClearanceScore(candidate.dependencyClearance) *
+      DEPENDENCY_CLEARANCE_SCORE_WEIGHT -
+    candidate.crossings * CROSSING_SCORE_PENALTY
+  )
+}
+
+export function compareCandidateScores(
+  left: CandidateScoreInput,
+  right: CandidateScoreInput,
+): number {
+  return candidateScore(left) - candidateScore(right)
+}
+
 function isBetter(candidate: Candidate, current: Candidate | null): boolean {
   if (!current) return true
   if (candidate.collisionFree !== current.collisionFree) return candidate.collisionFree
-  if (candidate.crossings !== current.crossings) return candidate.crossings < current.crossings
-  const candidateFloor = Math.min(candidate.nodeClearance, candidate.dependencyClearance)
-  const currentFloor = Math.min(current.nodeClearance, current.dependencyClearance)
-  if (candidateFloor !== currentFloor) return candidateFloor > currentFloor
-  return (
-    Math.max(candidate.nodeClearance, candidate.dependencyClearance) >
-    Math.max(current.nodeClearance, current.dependencyClearance)
-  )
+  return compareCandidateScores(candidate, current) > 0
 }
 
 export function placeDirectChildClusters(

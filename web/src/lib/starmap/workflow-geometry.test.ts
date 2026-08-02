@@ -45,7 +45,13 @@ describe('mini-edge geometry', () => {
   it('writes renderer geometry into reusable storage without allocating a result', () => {
     const scratch: MutableMiniCurve = { control: { x: 0, y: 0 }, bow: 0 }
 
-    const result = writeMiniEdgeCurve(scratch, entry, 0, 0, 200, 0, true)
+    const result = writeMiniEdgeCurve(
+      scratch,
+      entry,
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      true,
+    )
 
     expect(result).toBe(scratch)
     expect(scratch).toEqual({ control: { x: 100, y: 28 }, bow: 28 })
