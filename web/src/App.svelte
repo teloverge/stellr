@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import DetailPane from './lib/DetailPane.svelte'
+  import Sidebar from './lib/Sidebar.svelte'
   import StarMap from './lib/StarMap.svelte'
   import { Control, pageIssue, takePageToken } from './lib/control.svelte'
+  import type { Model } from './lib/model'
   import { Route } from './lib/route.svelte'
   import { decideDock, type Dock } from './lib/starmap/dock'
 
@@ -23,24 +25,45 @@
   )
   let workspace: HTMLElement
   let dock = $state<Dock>('right')
+  let reconciledModel = $state.raw<Model | null>(null)
 
   $effect(() => {
-    if (control.model === null) return
+    const modelSnapshot = control.model
+    if (modelSnapshot === null || modelSnapshot === reconciledModel) return
+    reconciledModel = modelSnapshot
 
-    if (activeSpace === null) {
+    const routedSpace =
+      route.space === null
+        ? null
+        : (modelSnapshot.spaces.find((space) => space.id === route.space) ?? null)
+    const fallbackSpace = routedSpace ?? modelSnapshot.spaces[0] ?? null
+
+    if (fallbackSpace === null) {
       if (route.space !== null || route.issue !== null) route.go(null)
       return
     }
 
-    if (route.space !== activeSpace.id) {
-      route.go(activeSpace.id)
+    if (route.space !== fallbackSpace.id) {
+      route.go(fallbackSpace.id)
       return
     }
 
-    if (route.issue !== null && activeStar === null) {
-      route.go(activeSpace.id)
+    const routedStar =
+      route.issue === null
+        ? null
+        : (fallbackSpace.stars.find((star) => star.number === route.issue) ?? null)
+    if (route.issue !== null && routedStar === null) {
+      route.go(fallbackSpace.id)
     }
   })
+
+  function removedSpace(removedId: string): void {
+    if (route.space !== removedId) return
+
+    const removedIndex = spaces.findIndex((space) => space.id === removedId)
+    const fallbackSpace = spaces[removedIndex + 1] ?? spaces[removedIndex - 1] ?? null
+    route.go(fallbackSpace?.id ?? null)
+  }
 
   onMount(() => {
     control.connect()
@@ -64,63 +87,117 @@
   })
 </script>
 
-<main
-  class="workspace"
-  class:detail-right={activeStar !== null && dock === 'right'}
-  class:detail-bottom={activeStar !== null && dock === 'bottom'}
-  bind:this={workspace}
->
-  <section class="map-region" aria-label="Issue map">
-    {#if activeSpace}
-      <StarMap
-        space={activeSpace}
-        {currentIssue}
-        selectedIssue={activeStar?.number ?? null}
-        select={(issueNumber) => route.go(activeSpace.id, issueNumber)}
-      />
-    {:else}
-      <p>stellr</p>
+<main class="app-shell">
+  <div class="sidebar-region">
+    <Sidebar
+      {spaces}
+      activeSpaceId={route.space}
+      connectionStatus={control.status}
+      select={(spaceId) => route.go(spaceId)}
+      added={(spaceId) => route.go(spaceId)}
+      removed={removedSpace}
+    />
+  </div>
+
+  <section
+    class="workspace"
+    class:detail-right={activeStar !== null && dock === 'right'}
+    class:detail-bottom={activeStar !== null && dock === 'bottom'}
+    bind:this={workspace}
+  >
+    <section class="map-region" aria-label="Issue map">
+      {#if activeSpace}
+        <StarMap
+          space={activeSpace}
+          {currentIssue}
+          selectedIssue={activeStar?.number ?? null}
+          select={(issueNumber) => route.go(activeSpace.id, issueNumber)}
+        />
+      {:else}
+        <p class="empty-map">No spaces yet. Add a local path or GitHub repository to begin.</p>
+      {/if}
+    </section>
+
+    {#if activeStar}
+      <section class="detail-region">
+        <DetailPane star={activeStar} close={() => route.go(activeSpace?.id ?? null)} />
+      </section>
     {/if}
   </section>
-
-  {#if activeStar}
-    <section class="detail-region">
-      <DetailPane star={activeStar} close={() => route.go(activeSpace?.id ?? null)} />
-    </section>
-  {/if}
 </main>
 
 <style>
+  .app-shell {
+    display: grid;
+    grid-template-columns: clamp(14rem, 24vw, 20rem) minmax(0, 1fr);
+    width: 100%;
+    height: 100dvh;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .sidebar-region {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .sidebar-region :global(aside) {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
   .workspace {
     display: grid;
+    grid-template-areas: "map";
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
     width: 100%;
-    height: 100dvh;
     min-height: 0;
+    overflow: hidden;
   }
 
   .workspace.detail-right {
-    grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+    grid-template-areas: "map detail";
+    grid-template-columns: minmax(0, 1fr) clamp(18rem, 32vw, 24rem);
   }
 
   .workspace.detail-bottom {
-    grid-template-rows: minmax(0, 1fr) minmax(14rem, 42dvh);
+    grid-template-areas:
+      "map"
+      "detail";
+    grid-template-rows: minmax(0, 1fr) clamp(14rem, 42dvh, 22rem);
   }
 
   .map-region,
   .detail-region {
     min-width: 0;
     min-height: 0;
+    overflow: hidden;
   }
 
-  .detail-right .detail-region {
-    grid-column: 2;
-    grid-row: 1;
+  .map-region {
+    grid-area: map;
   }
 
-  .detail-bottom .detail-region {
-    grid-column: 1;
-    grid-row: 2;
+  .detail-region {
+    grid-area: detail;
+  }
+
+  .empty-map {
+    display: flex;
+    box-sizing: border-box;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 2rem;
+    color: var(--muted-foreground);
+    text-align: center;
   }
 </style>
