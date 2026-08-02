@@ -5,6 +5,7 @@
   import StarMap from './lib/StarMap.svelte'
   import { removeSpace } from './lib/api'
   import { Control, pageIssue, takePageToken } from './lib/control.svelte'
+  import type { Model } from './lib/model'
   import { Route } from './lib/route.svelte'
   import { decideDock, type Dock } from './lib/starmap/dock'
 
@@ -34,59 +35,61 @@
   let pendingAddedId = $state<string | null>(null)
   let pendingRemovals = $state.raw<Record<string, RemovalIntent>>({})
 
+  function reconcileModel(modelSnapshot: Model): void {
+    if (pendingAddedId !== null) {
+      if (modelSnapshot.spaces.some((space) => space.id === pendingAddedId)) {
+        pendingAddedId = null
+      } else if (route.space === pendingAddedId) {
+        return
+      } else {
+        pendingAddedId = null
+      }
+    }
+
+    for (const pendingRemoval of Object.values(pendingRemovals)) {
+      const removedSpaceStillPresent = modelSnapshot.spaces.some(
+        (space) => space.id === pendingRemoval.id,
+      )
+      if (!removedSpaceStillPresent && pendingRemoval.succeeded) {
+        clearRemovalIntent(pendingRemoval.id)
+      } else if (
+        route.space === pendingRemoval.id ||
+        (pendingRemoval.succeeded && route.space === pendingRemoval.fallbackId)
+      ) {
+        return
+      }
+    }
+
+    const routedSpace =
+      route.space === null
+        ? null
+        : (modelSnapshot.spaces.find((space) => space.id === route.space) ?? null)
+    const fallbackSpace = routedSpace ?? modelSnapshot.spaces[0] ?? null
+
+    if (fallbackSpace === null) {
+      if (route.space !== null || route.issue !== null) route.go(null)
+      return
+    }
+
+    if (route.space !== fallbackSpace.id) {
+      route.go(fallbackSpace.id)
+      return
+    }
+
+    const routedStar =
+      route.issue === null
+        ? null
+        : (fallbackSpace.stars.find((star) => star.number === route.issue) ?? null)
+    if (route.issue !== null && routedStar === null) {
+      route.go(fallbackSpace.id)
+    }
+  }
+
   $effect(() => {
     const modelSnapshot = control.model
     if (modelSnapshot === null) return
 
-    untrack(() => {
-      if (pendingAddedId !== null) {
-        if (modelSnapshot.spaces.some((space) => space.id === pendingAddedId)) {
-          pendingAddedId = null
-        } else if (route.space === pendingAddedId) {
-          return
-        } else {
-          pendingAddedId = null
-        }
-      }
-
-      for (const pendingRemoval of Object.values(pendingRemovals)) {
-        const removedSpaceStillPresent = modelSnapshot.spaces.some(
-          (space) => space.id === pendingRemoval.id,
-        )
-        if (!removedSpaceStillPresent && pendingRemoval.succeeded) {
-          clearRemovalIntent(pendingRemoval.id)
-        } else if (
-          route.space === pendingRemoval.id ||
-          (pendingRemoval.succeeded && route.space === pendingRemoval.fallbackId)
-        ) {
-          return
-        }
-      }
-
-      const routedSpace =
-        route.space === null
-          ? null
-          : (modelSnapshot.spaces.find((space) => space.id === route.space) ?? null)
-      const fallbackSpace = routedSpace ?? modelSnapshot.spaces[0] ?? null
-
-      if (fallbackSpace === null) {
-        if (route.space !== null || route.issue !== null) route.go(null)
-        return
-      }
-
-      if (route.space !== fallbackSpace.id) {
-        route.go(fallbackSpace.id)
-        return
-      }
-
-      const routedStar =
-        route.issue === null
-          ? null
-          : (fallbackSpace.stars.find((star) => star.number === route.issue) ?? null)
-      if (route.issue !== null && routedStar === null) {
-        route.go(fallbackSpace.id)
-      }
-    })
+    untrack(() => reconcileModel(modelSnapshot))
   })
 
   function addedSpace(addedId: string): void {
@@ -136,6 +139,7 @@
     if (control.model?.spaces.every((space) => space.id !== removedId)) {
       clearRemovalIntent(removedId)
     }
+    if (control.model !== null) reconcileModel(control.model)
   }
 
   onMount(() => {

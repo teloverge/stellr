@@ -244,6 +244,49 @@ describe('App issue routing', () => {
   })
 
   it.each([
+    { completionOrder: ['middle', 'last'], hasRemainingSpace: true, expected: '#s=first' },
+    { completionOrder: ['last', 'middle'], hasRemainingSpace: true, expected: '#s=first' },
+    { completionOrder: ['middle', 'last'], hasRemainingSpace: false, expected: '' },
+    { completionOrder: ['last', 'middle'], hasRemainingSpace: false, expected: '' },
+  ])(
+    'routes to an available fallback when concurrent removals finish in order $completionOrder with remaining=$hasRemainingSpace',
+    async ({ completionOrder, hasRemainingSpace, expected }) => {
+      const finishRemove: Record<string, (response: Response) => void> = {}
+      vi.stubGlobal(
+        'fetch',
+        vi.fn<typeof fetch>().mockImplementation(
+          (input) =>
+            new Promise((resolve) => {
+              const id = String(input).split('/').at(-1)!
+              finishRemove[id] = resolve
+            }),
+        ),
+      )
+      window.history.replaceState(null, '', '/#s=middle&i=22')
+      const { target, socket } = mountApp()
+      socket.emitModel({
+        spaces: hasRemainingSpace
+          ? lifecycleModel.spaces
+          : [space('middle', 22), space('last', 33)],
+      })
+      flushSync()
+
+      target.querySelector<HTMLButtonElement>('button[aria-label="Remove middle"]')!.click()
+      target.querySelector<HTMLButtonElement>('button[aria-label="Remove last"]')!.click()
+      flushSync()
+      socket.emitModel({ spaces: hasRemainingSpace ? [space('first', 11)] : [] })
+      flushSync()
+
+      for (const id of completionOrder) {
+        finishRemove[id]!(new Response(null, { status: 204 }))
+        await settle()
+      }
+
+      expect(window.location.hash).toBe(expected)
+    },
+  )
+
+  it.each([
     { active: 'first', issueNumber: 11, expected: '#s=middle' },
     { active: 'last', issueNumber: 33, expected: '#s=middle' },
   ])(
