@@ -22,8 +22,8 @@ import { STAR, LABEL, SESSION_HUE, visualState, hexA, type VisualState } from '.
 import { GRAMMAR, type SessionState } from './session'
 import { analyzeFocus, type Focus } from './focus'
 import { edgeKey, workflowEdges, type WorkflowEdge } from './workflow'
+import { miniEdgeCurve } from './workflow-geometry'
 import {
-  curveSide,
   reverseEdgeKeys,
   workflowVisualState,
   type WorkflowVisualState,
@@ -924,17 +924,24 @@ export class StarMap {
       dy = by - ay,
       len = Math.hypot(dx, dy) || 1
     const mini = e.roles.some((role) => role === 'entry' || role === 'sequence' || role === 'return')
-    const low = this.#byNum.get(Math.min(e.from, e.to))!,
-      high = this.#byNum.get(Math.max(e.from, e.to))!,
-      canonicalDx = high._x - low._x,
-      canonicalDy = high._y - low._y,
-      canonicalLen = Math.hypot(canonicalDx, canonicalDy) || 1,
-      side = curveSide(e, e.reverseExists),
-      nx = mini ? (-canonicalDy / canonicalLen) * side : -dy / len,
-      ny = mini ? (canonicalDx / canonicalLen) * side : dx / len,
+    const child = e.child === null ? undefined : this.#byNum.get(e.child)
+    const parent = child?.parentIssue === null || child?.parentIssue === undefined
+      ? undefined
+      : this.#byNum.get(child.parentIssue)
+    const curve = mini
+      ? miniEdgeCurve({
+          edge: e,
+          start: { x: ax, y: ay },
+          end: { x: bx, y: by },
+          reverseExists: e.reverseExists,
+          parent: parent ? { x: parent._x, y: parent._y } : undefined,
+        })
+      : null
+    const nx = -dy / len,
+      ny = dx / len,
       bow = Math.min(46, len * 0.13),
-      cx = mx + nx * bow,
-      cy = my + ny * bow
+      cx = curve?.control.x ?? mx + nx * bow,
+      cy = curve?.control.y ?? my + ny * bow
     g.beginPath()
     g.moveTo(ax, ay)
     g.quadraticCurveTo(cx, cy, bx, by)

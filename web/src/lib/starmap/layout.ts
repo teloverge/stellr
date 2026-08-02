@@ -5,13 +5,14 @@
 // seam (ADR 0010), with the tuned constants cribbed directly from the
 // wayfinder-maps renderer to prevent feel-drift.
 //
-// The function is pure and depends only on ticket numbers plus parent-aware workflow
-// edges — never on status. That is the load-bearing property the seam tests
+// The function is pure and depends only on ticket numbers, dependency edges,
+// and parent topology — never on status. That is the load-bearing property the seam tests
 // pin: a model push that changes only a ticket's status can never move a star,
 // because status is not an input to layout at all.
 
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
+import { placeDirectChildClusters } from './cluster-layout'
 import { workflowEdges, type WorkflowNode } from './workflow'
 
 export const TAU = 6.2831853
@@ -83,7 +84,7 @@ function ringR(rank: number): number {
 export function computeLayout(nodes: LayoutNode[]): Record<number, Point> {
   const sorted = [...nodes].sort((a, b) => a.num - b.num)
   const rank = rankOf(sorted)
-  const edges = workflowEdges(sorted)
+  const edges = edgesOf(sorted)
 
   const pts: Record<number, Point> = {}
   const rnd = mulberry32(1337)
@@ -142,7 +143,7 @@ export function computeLayout(nodes: LayoutNode[]): Record<number, Point> {
       p.y += (p.y / d) * f
     }
   }
-  return pts
+  return placeDirectChildClusters(sorted, pts)
 }
 
 // A stable signature of a map's *structure* — its ticket numbers and edges, not
