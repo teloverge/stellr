@@ -53,15 +53,32 @@ async fn serve(args: ServeArgs) -> Result<(), DynError> {
 
     let listener = tokio::net::TcpListener::bind(&args.addr).await?;
     let address = listener.local_addr()?;
-    let url = match session_token {
-        Some(token) => format!("http://{address}/?token={token}"),
-        None => format!("http://{address}/"),
-    };
+    let url = cockpit_url(address, session_token.as_deref(), args.issue);
     println!("stellr cockpit: {url}");
     std::io::stdout().flush()?;
 
     axum::serve(listener, router(state)).await?;
     Ok(())
+}
+
+fn cockpit_url(
+    address: std::net::SocketAddr,
+    token: Option<&str>,
+    issue: Option<std::num::NonZeroU64>,
+) -> String {
+    let mut query = Vec::new();
+    if let Some(token) = token {
+        query.push(format!("token={token}"));
+    }
+    if let Some(issue) = issue {
+        query.push(format!("issue={issue}"));
+    }
+    let suffix = if query.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", query.join("&"))
+    };
+    format!("http://{address}/{suffix}")
 }
 
 fn session_token() -> Result<String, getrandom::Error> {
@@ -79,6 +96,8 @@ fn session_token() -> Result<String, getrandom::Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
+
     use clap::Parser;
 
     use crate::{
@@ -93,6 +112,7 @@ mod tests {
 
         assert_eq!(args.addr, "127.0.0.1:8787");
         assert!(!args.no_token);
+        assert_eq!(args.issue, None);
     }
 
     #[test]
@@ -104,6 +124,17 @@ mod tests {
 
         assert_eq!(args.addr, "127.0.0.1:0");
         assert!(args.no_token);
+    }
+
+    #[test]
+    fn serve_accepts_a_positive_conversation_issue() {
+        let parsed =
+            Cli::try_parse_from(["stellr", "serve", "--addr", "127.0.0.1:0", "--issue", "14"])
+                .unwrap();
+        let Command::Serve(args) = parsed.command;
+
+        assert_eq!(args.issue.map(NonZeroU64::get), Some(14));
+        assert!(Cli::try_parse_from(["stellr", "serve", "--issue", "0"]).is_err());
     }
 
     #[test]

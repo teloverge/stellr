@@ -36,21 +36,31 @@ async fn launch(arguments: &[&str]) -> (Child, String, TempDir) {
 
 #[tokio::test]
 async fn serve_without_session_auth_hosts_the_ui_and_empty_model() {
-    let (mut child, line, _profile) =
-        launch(&["serve", "--addr", "127.0.0.1:0", "--no-token"]).await;
-    let url = line
+    let (mut child, line, _profile) = launch(&[
+        "serve",
+        "--addr",
+        "127.0.0.1:0",
+        "--no-token",
+        "--issue",
+        "14",
+    ])
+    .await;
+    let raw_url = line
         .strip_prefix("stellr cockpit: ")
         .expect("the startup line should use the documented prefix");
+    let url = reqwest::Url::parse(raw_url).unwrap();
 
-    assert!(url.starts_with("http://127.0.0.1:"));
-    assert!(url.ends_with('/'));
-    assert!(!url.contains('?'));
+    assert!(raw_url.starts_with("http://127.0.0.1:"));
+    assert_eq!(
+        url.query_pairs().collect::<Vec<_>>(),
+        vec![("issue".into(), "14".into())]
+    );
 
-    let root = reqwest::get(url).await.unwrap();
+    let root = reqwest::get(url.clone()).await.unwrap();
     assert_eq!(root.status(), reqwest::StatusCode::OK);
     assert!(root.text().await.unwrap().contains("<div id=\"app\">"));
 
-    let model = reqwest::get(format!("{url}api/model"))
+    let model = reqwest::get(url.join("api/model").unwrap())
         .await
         .unwrap()
         .text()
@@ -62,8 +72,9 @@ async fn serve_without_session_auth_hosts_the_ui_and_empty_model() {
 }
 
 #[tokio::test]
-async fn serve_generates_a_session_token_and_gates_the_ui_by_default() {
-    let (mut child, line, _profile) = launch(&["serve", "--addr", "127.0.0.1:0"]).await;
+async fn serve_generates_a_session_token_and_gates_protected_routes_by_default() {
+    let (mut child, line, _profile) =
+        launch(&["serve", "--addr", "127.0.0.1:0", "--issue", "14"]).await;
     let url = line
         .strip_prefix("stellr cockpit: ")
         .expect("the startup line should use the documented prefix");
@@ -72,6 +83,9 @@ async fn serve_generates_a_session_token_and_gates_the_ui_by_default() {
         .query_pairs()
         .find_map(|(name, value)| (name == "token").then(|| value.into_owned()))
         .expect("the default cockpit URL should carry a session token");
+    let issue = tokened_url
+        .query_pairs()
+        .find_map(|(name, value)| (name == "issue").then(|| value.into_owned()));
 
     assert_eq!(token.len(), 32);
     assert!(
@@ -83,11 +97,19 @@ async fn serve_generates_a_session_token_and_gates_the_ui_by_default() {
     let mut bare_url = tokened_url.clone();
     bare_url.set_query(None);
     assert_eq!(
-        reqwest::get(bare_url).await.unwrap().status(),
+        reqwest::get(bare_url.clone()).await.unwrap().status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(issue.as_deref(), Some("14"));
+
+    let mut protected_url = bare_url.join("api/model").unwrap();
+    assert_eq!(
+        reqwest::get(protected_url.clone()).await.unwrap().status(),
         reqwest::StatusCode::UNAUTHORIZED
     );
+    protected_url.set_query(tokened_url.query());
     assert_eq!(
-        reqwest::get(tokened_url).await.unwrap().status(),
+        reqwest::get(protected_url).await.unwrap().status(),
         reqwest::StatusCode::OK
     );
 

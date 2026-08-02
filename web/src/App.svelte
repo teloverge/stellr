@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import StarMap from './lib/StarMap.svelte'
-  import { Control } from './lib/control.svelte'
+  import { Control, pageIssue, takePageToken } from './lib/control.svelte'
 
-  const control = new Control()
+  const currentIssue = pageIssue()
+  const sessionToken = takePageToken()
+  const control = new Control(sessionToken)
   const space = $derived(control.model?.spaces[0] ?? null)
 
   onMount(() => control.connect())
@@ -11,7 +13,7 @@
 
 <main>
   {#if space}
-    <StarMap {space} />
+    <StarMap {space} {currentIssue} />
   {:else}
     <p>stellr</p>
   {/if}

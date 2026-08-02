@@ -1,3 +1,7 @@
+/// <reference types="node" />
+
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 import StarMap from './StarMap.svelte'
@@ -12,6 +16,7 @@ afterEach(async () => {
     await unmount(component)
   }
   document.body.innerHTML = ''
+  document.head.querySelectorAll('[data-test-app-css]').forEach((style) => style.remove())
   document.documentElement.style.removeProperty('--background')
   vi.restoreAllMocks()
 })
@@ -41,6 +46,20 @@ function space(number: number): SpaceModel {
 }
 
 describe('StarMap wrapper', () => {
+  it('defines pure black as the default document background', () => {
+    const style = document.createElement('style')
+    style.dataset.testAppCss = ''
+    style.textContent = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8').replace(
+      '@import "tailwindcss";',
+      '',
+    )
+    document.head.appendChild(style)
+
+    expect(getComputedStyle(document.documentElement).getPropertyValue('--background').trim()).toBe(
+      '#000',
+    )
+  })
+
   it('sets the initial renderer background from the mounted document token', () => {
     document.documentElement.style.setProperty('--background', 'rgb(12, 34, 56)')
     const setBackground = vi.spyOn(Renderer.prototype, 'setBackground')
@@ -72,9 +91,30 @@ describe('StarMap wrapper', () => {
     component.updateSpace(space(99))
     flushSync()
 
-    expect(setModel).toHaveBeenLastCalledWith([
-      expect.objectContaining({ num: 99, slug: '99', title: 'Issue 99' }),
-    ])
+    expect(setModel).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ num: 99, slug: '99', title: 'Issue 99' })],
+      {},
+      null,
+    )
+  })
+
+  it('passes the current conversation issue to the renderer', () => {
+    const setModel = vi.spyOn(Renderer.prototype, 'setModel')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+
+    const component = mount(StarMap, {
+      target,
+      props: { space: space(42), currentIssue: 14 },
+    })
+    mounted.push(component)
+    flushSync()
+
+    expect(setModel).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ num: 42 })],
+      {},
+      14,
+    )
   })
 
   it('mounts the canvas island and forwards a selected issue number', () => {

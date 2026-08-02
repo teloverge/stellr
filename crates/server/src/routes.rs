@@ -24,14 +24,17 @@ const TOKEN_COOKIE: &str = "stellr_token";
 const CONTROL_SEND_DEADLINE: Duration = Duration::from_secs(1);
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let protected = Router::new()
         .route("/api/model", get(model))
         .route("/api/spaces", post(add_space))
         .route("/api/spaces/{id}", delete(remove_space))
         .route("/api/spaces/{id}/refresh", post(refresh_space))
         .route("/ws/control", get(control_ws))
+        .layer(middleware::from_fn_with_state(state.clone(), auth));
+
+    Router::new()
+        .merge(protected)
         .fallback(crate::embed::static_handler)
-        .layer(middleware::from_fn_with_state(state.clone(), auth))
         .with_state(state)
 }
 

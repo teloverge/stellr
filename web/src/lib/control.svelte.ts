@@ -2,7 +2,28 @@ import type { Model } from './model'
 
 type ConnectionStatus = 'connecting' | 'open' | 'closed'
 
-function controlUrl(url?: string): string {
+export function pageIssue(): number | null {
+  const raw = new URL(window.location.href).searchParams.get('issue')
+  if (raw === null || !/^\d+$/.test(raw)) return null
+  const issue = Number(raw)
+  return Number.isSafeInteger(issue) && issue > 0 ? issue : null
+}
+
+export function takePageToken(): string | null {
+  const page = new URL(window.location.href)
+  const token = page.searchParams.get('token')
+  if (token !== null) {
+    page.searchParams.delete('token')
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${page.pathname}${page.search}${page.hash}`,
+    )
+  }
+  return token
+}
+
+function controlUrl(token: string | null, url?: string): string {
   const target = url
     ? new URL(url)
     : new URL('/ws/control', window.location.href)
@@ -11,7 +32,6 @@ function controlUrl(url?: string): string {
     target.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   }
 
-  const token = new URLSearchParams(window.location.search).get('token')
   if (token !== null) {
     target.searchParams.set('token', token)
   }
@@ -25,10 +45,15 @@ export class Control {
 
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null
   #socket: WebSocket | null = null
+  #token: string | null
   #url: string | null = null
 
+  constructor(token: string | null = takePageToken()) {
+    this.#token = token
+  }
+
   connect(url?: string): void {
-    const nextUrl = controlUrl(url)
+    const nextUrl = controlUrl(this.#token, url)
     this.#url = nextUrl
     this.#clearReconnect()
 

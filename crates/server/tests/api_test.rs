@@ -91,6 +91,29 @@ async fn embedded_ui_serves_the_built_index_at_the_root() {
 }
 
 #[tokio::test]
+async fn embedded_ui_assets_remain_public_when_api_requires_authentication() {
+    let base = serve(state(Some("session-token"))).await;
+    let client = reqwest::Client::new();
+
+    let index = client.get(format!("{base}/")).send().await.unwrap();
+    assert_eq!(index.status(), reqwest::StatusCode::OK);
+    let html = index.text().await.unwrap();
+    let asset_path = html
+        .split("src=\"")
+        .nth(1)
+        .and_then(|tail| tail.split('"').next())
+        .expect("the embedded index should reference its built script");
+    assert!(asset_path.starts_with("/assets/"));
+
+    let asset = client
+        .get(format!("{base}{asset_path}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(asset.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
 async fn embedded_ui_uses_the_index_for_spa_paths() {
     let base = serve(state(None)).await;
 

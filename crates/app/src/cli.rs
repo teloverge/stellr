@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -18,4 +20,6 @@ pub struct ServeArgs {
     pub addr: String,
     #[arg(long)]
     pub no_token: bool,
+    #[arg(long)]
+    pub issue: Option<NonZeroU64>,
 }
