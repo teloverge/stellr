@@ -24,6 +24,8 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::{TrayIcon, TrayIconBuilder},
 };
+#[cfg(target_os = "macos")]
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 use thiserror::Error;
@@ -257,6 +259,70 @@ fn forwarded_route_event(args: &[String], cwd: &str) -> NativeRouteEvent {
             message: error.to_string(),
         },
     }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+trait DeepLinkSource {
+    type Error;
+
+    fn current_urls(&self) -> Result<Option<Vec<url::Url>>, Self::Error>;
+    fn on_open_url(&self, handler: Box<dyn Fn(Vec<url::Url>) + Send + Sync>);
+}
+
+#[cfg(target_os = "macos")]
+struct TauriDeepLinks<R: Runtime>(AppHandle<R>);
+
+#[cfg(target_os = "macos")]
+impl<R: Runtime> DeepLinkSource for TauriDeepLinks<R> {
+    type Error = tauri_plugin_deep_link::Error;
+
+    fn current_urls(&self) -> Result<Option<Vec<url::Url>>, Self::Error> {
+        self.0.deep_link().get_current()
+    }
+
+    fn on_open_url(&self, handler: Box<dyn Fn(Vec<url::Url>) + Send + Sync>) {
+        self.0
+            .deep_link()
+            .on_open_url(move |event| handler(event.urls()));
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn queue_deep_link_urls(
+    inbox: &RouteInbox,
+    cwd: &std::path::Path,
+    urls: Vec<url::Url>,
+    reveal: &Arc<dyn Fn() + Send + Sync>,
+) {
+    if urls.is_empty() {
+        return;
+    }
+    for url in urls {
+        let event = match TargetResolver::new(cwd.to_path_buf()).resolve(url.as_str()) {
+            Ok(target) => NativeRouteEvent::Target { target },
+            Err(error) => NativeRouteEvent::Error {
+                message: error.to_string(),
+            },
+        };
+        inbox.push(event);
+    }
+    reveal();
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn install_deep_link_routing<S: DeepLinkSource>(
+    source: &S,
+    inbox: RouteInbox,
+    cwd: PathBuf,
+    reveal: Arc<dyn Fn() + Send + Sync>,
+) -> Result<(), S::Error> {
+    if let Some(urls) = source.current_urls()? {
+        queue_deep_link_urls(&inbox, &cwd, urls, &reveal);
+    }
+    source.on_open_url(Box::new(move |urls| {
+        queue_deep_link_urls(&inbox, &cwd, urls, &reveal);
+    }));
+    Ok(())
 }
 
 #[tauri::command]
@@ -519,6 +585,16 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                     return Err(Box::new(error));
                 }
             };
+            #[cfg(target_os = "macos")]
+            {
+                let app_handle = app.handle().clone();
+                install_deep_link_routing(
+                    &TauriDeepLinks(app.handle().clone()),
+                    app.state::<RouteInbox>().inner().clone(),
+                    launch.cwd.clone(),
+                    Arc::new(move || show_main_window(&app_handle)),
+                )?;
+            }
             let polling = runtime.polling_control();
             let app_handle = window.app_handle().clone();
             window.on_window_event(move |event| match event {
@@ -553,6 +629,73 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct FakeDeepLinks {
+        current: Vec<url::Url>,
+        opened: Vec<url::Url>,
+    }
+
+    impl DeepLinkSource for FakeDeepLinks {
+        type Error = std::convert::Infallible;
+
+        fn current_urls(&self) -> Result<Option<Vec<url::Url>>, Self::Error> {
+            Ok(Some(self.current.clone()))
+        }
+
+        fn on_open_url(&self, handler: Box<dyn Fn(Vec<url::Url>) + Send + Sync>) {
+            handler(self.opened.clone());
+        }
+    }
+
+    #[test]
+    fn startup_and_running_deep_links_route_and_reveal_the_app() {
+        let source = FakeDeepLinks {
+            current: vec![
+                "stellr://space?repo=teloverge%2Fstellr&issue=61"
+                    .parse()
+                    .unwrap(),
+            ],
+            opened: vec![
+                "stellr://space?repo=teloverge%2Fstellr&issue=62"
+                    .parse()
+                    .unwrap(),
+            ],
+        };
+        let inbox = RouteInbox::default();
+        let reveals = Arc::new(AtomicUsize::new(0));
+        let reveal_count = reveals.clone();
+
+        install_deep_link_routing(
+            &source,
+            inbox.clone(),
+            PathBuf::from("D:\\dev\\stellr"),
+            Arc::new(move || {
+                reveal_count.fetch_add(1, Ordering::SeqCst);
+            }),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            inbox.take(),
+            Some(NativeRouteEvent::Target {
+                target: RouteTarget {
+                    issue: Some(61),
+                    ..
+                }
+            })
+        ));
+        assert!(matches!(
+            inbox.take(),
+            Some(NativeRouteEvent::Target {
+                target: RouteTarget {
+                    issue: Some(62),
+                    ..
+                }
+            })
+        ));
+        assert_eq!(reveals.load(Ordering::SeqCst), 2);
+    }
 
     #[test]
     fn forwarded_open_and_protocol_arguments_share_the_target_resolver() {
