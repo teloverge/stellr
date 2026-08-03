@@ -21,6 +21,7 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 reqwest = "0.12"
 tempfile = "3"
 tokio.workspace = true
