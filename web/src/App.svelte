@@ -16,7 +16,12 @@
     hasNativeAuth,
     type DeviceFlowStatus,
   } from './lib/native-auth'
-  import { applyNativeRouteEvent, takeNativeRouteEvent } from './lib/native-route'
+  import {
+    applyNativeRouteEvent,
+    hasNativeRoutePersistence,
+    persistNativeRoute,
+    takeNativeRouteEvent,
+  } from './lib/native-route'
 
   interface RemovalIntent {
     id: string
@@ -69,6 +74,8 @@
   let authStatus = $state<DeviceFlowStatus | null>(null)
   let nativeRouteNotice = $state<string | null>(null)
   let nativeRouteBusy = false
+  let persistedRouteKey: string | null = null
+  const nativeRoutePersistence = hasNativeRoutePersistence()
 
   async function pollNativeRoute(): Promise<void> {
     if (nativeRouteBusy) return
@@ -169,8 +176,37 @@
   $effect(() => {
     const modelSnapshot = control.model
     if (modelSnapshot === null) return
+    if (
+      nativeRoutePersistence &&
+      control.revision === 1 &&
+      modelSnapshot.spaces.length === 0 &&
+      route.space !== null
+    ) {
+      return
+    }
 
     untrack(() => reconcileModel(modelSnapshot))
+  })
+
+  $effect(() => {
+    const modelSnapshot = control.model
+    const spaceId = route.space
+    const issueNumber = route.issue
+    if (!nativeRoutePersistence || modelSnapshot === null) return
+    if (control.revision === 1 && modelSnapshot.spaces.length === 0 && spaceId !== null) return
+    if (spaceId === null && modelSnapshot.spaces.length > 0) return
+
+    const validated = resolveRoute(modelSnapshot, spaceId, issueNumber, false)
+    if (spaceId !== null && validated.space?.id !== spaceId) return
+    if (issueNumber !== null && validated.star?.number !== issueNumber) return
+
+    const key = JSON.stringify([spaceId, issueNumber])
+    if (key === persistedRouteKey) return
+    persistedRouteKey = key
+    void persistNativeRoute(spaceId, issueNumber).catch((error) => {
+      persistedRouteKey = null
+      nativeRouteNotice = `Could not remember the current route: ${String(error)}`
+    })
   })
 
   function addedSpace(addedId: string): void {

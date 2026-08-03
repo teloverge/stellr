@@ -64,6 +64,7 @@ describe('Control', () => {
 
     first.emitMessage('{"spaces":[]}')
     expect(control.model).toEqual({ spaces: [] })
+    expect(control.revision).toBe(1)
 
     first.emitClose()
     expect(control.status).toBe('closed')

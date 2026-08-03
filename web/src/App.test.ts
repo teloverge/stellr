@@ -69,6 +69,8 @@ afterEach(async () => {
   window.history.replaceState(null, '', '/')
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
+  delete (globalThis as typeof globalThis & { isTauri?: boolean }).isTauri
   if (clientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidth)
   if (clientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeight)
 })
@@ -465,6 +467,39 @@ describe('App issue routing', () => {
     expect(select).toHaveBeenLastCalledWith(22)
     expect(target.querySelector('[aria-label="Issue details"]')?.textContent).toContain('#22')
     expect(target.textContent).toContain('Detail for Issue 22')
+  })
+
+  it('preserves a native restored issue through the runtime placeholder snapshot', async () => {
+    const invoke = vi.fn((command: string) => {
+      if (command === 'device_authorization_status') {
+        return Promise.resolve({ state: 'authorized', storage_warning: null })
+      }
+      if (command === 'take_route_event') return Promise.resolve(null)
+      return Promise.resolve(undefined)
+    })
+    ;(
+      window as Window & {
+        __TAURI_INTERNALS__?: { invoke: typeof invoke }
+      }
+    ).__TAURI_INTERNALS__ = { invoke }
+    ;(globalThis as typeof globalThis & { isTauri?: boolean }).isTauri = true
+    window.history.replaceState(null, '', '/#s=second&i=22')
+    const { target, socket } = mountApp()
+
+    socket.emitModel({ spaces: [] })
+    flushSync()
+    expect(window.location.hash).toBe('#s=second&i=22')
+
+    socket.emitModel(model)
+    await settle()
+
+    expect(window.location.hash).toBe('#s=second&i=22')
+    expect(target.querySelector('[aria-label="Issue details"]')?.textContent).toContain('#22')
+    expect(invoke).toHaveBeenCalledWith(
+      'persist_route_state',
+      { space: 'second', issue: 22 },
+      undefined,
+    )
   })
 
   it('clears an unknown issue while preserving the routed space', () => {

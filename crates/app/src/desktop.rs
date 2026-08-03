@@ -26,6 +26,7 @@ use tokio::sync::{Mutex, Notify};
 
 use crate::{
     auth_activation::activate_provider_and_store,
+    route_state::{PersistedRoute, RouteStateStore},
     runtime::{
         ApplicationRuntime, ProviderSlot, RuntimeError, RuntimeOptions, SessionAuth, start,
         start_with_polling,
@@ -42,6 +43,7 @@ const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 pub struct DesktopLaunch {
     pub cwd: PathBuf,
     pub target: String,
+    pub restore_route: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,6 +217,22 @@ fn take_route_event(state: State<'_, RouteInbox>) -> Option<NativeRouteEvent> {
 }
 
 #[tauri::command]
+fn persist_route_state(
+    state: State<'_, RouteStateStore>,
+    space: Option<String>,
+    issue: Option<u64>,
+) -> Result<(), String> {
+    let route = match space {
+        Some(space) => PersistedRoute::new(space, issue)
+            .ok_or_else(|| "route state must contain a space and a positive issue".to_owned())?
+            .into(),
+        None if issue.is_none() => None,
+        None => return Err("an issue route requires a space".to_owned()),
+    };
+    state.save(route).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn begin_device_authorization(
     state: State<'_, DesktopAuthState>,
 ) -> Result<DeviceFlowStatus, String> {
@@ -299,23 +317,38 @@ pub fn create_main_window<R: Runtime, M: Manager<R>>(
         .title("Stellr")
         .decorations(true)
         .inner_size(1180.0, 760.0)
+        .visible(false)
         .build()
 }
 
-fn route_url(mut url: tauri::Url, target: &RouteTarget) -> tauri::Url {
+fn route_url(mut url: tauri::Url, route: &PersistedRoute) -> tauri::Url {
     let mut fragment = url::form_urlencoded::Serializer::new(String::new());
-    fragment.append_pair("s", &target.space_id);
-    if let Some(issue) = target.issue {
+    fragment.append_pair("s", &route.space);
+    if let Some(issue) = route.issue {
         fragment.append_pair("i", &issue.to_string());
     }
     url.set_fragment(Some(&fragment.finish()));
     url
 }
 
+fn initial_route(
+    target: &RouteTarget,
+    restored: Option<PersistedRoute>,
+    restore_route: bool,
+) -> PersistedRoute {
+    if restore_route && let Some(restored) = restored {
+        return restored;
+    }
+    PersistedRoute::new(target.space_id.clone(), target.issue)
+        .expect("a resolved target always has a space")
+}
+
 pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
     let route_inbox = RouteInbox::default();
+    let route_state = RouteStateStore::new(RouteStateStore::default_file());
     tauri::Builder::default()
         .manage(route_inbox.clone())
+        .manage(route_state.clone())
         .plugin(tauri_plugin_single_instance::init(move |app, args, cwd| {
             route_inbox.push(forwarded_route_event(&args, &cwd));
             if let Some(window) = app.get_webview_window("main") {
@@ -325,6 +358,15 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             let startup = tauri::async_runtime::block_on(async {
@@ -362,7 +404,8 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                 }
             };
 
-            let url = route_url(runtime.cockpit_url().parse()?, &target);
+            let startup_route = initial_route(&target, route_state.load(), launch.restore_route);
+            let url = route_url(runtime.cockpit_url().parse()?, &startup_route);
             let window = match create_main_window(app, url) {
                 Ok(window) => window,
                 Err(error) => {
@@ -375,11 +418,13 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                 }
             };
             let polling = runtime.polling_control();
-            window.on_window_event(move |event| {
-                if let tauri::WindowEvent::Focused(focused) = event {
-                    polling.set_focused(*focused);
-                }
+            let app_handle = window.app_handle().clone();
+            window.on_window_event(move |event| match event {
+                tauri::WindowEvent::Focused(focused) => polling.set_focused(*focused),
+                tauri::WindowEvent::CloseRequested { .. } => app_handle.exit(0),
+                _ => {}
             });
+            window.show()?;
             app.manage(DesktopState { _runtime: runtime });
             app.manage(auth);
             Ok(())
@@ -388,7 +433,8 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
             begin_device_authorization,
             device_authorization_status,
             cancel_device_authorization,
-            take_route_event
+            take_route_event,
+            persist_route_state
         ])
         .run(tauri::generate_context!())?;
     Ok(())
@@ -458,17 +504,32 @@ mod tests {
             "http://127.0.0.1:49152/?token=session-token"
                 .parse()
                 .unwrap(),
-            &RouteTarget {
-                space_id: "teloverge-stellr".into(),
-                repo: "teloverge/stellr".into(),
-                path: None,
-                issue: Some(62),
-            },
+            &PersistedRoute::new("teloverge-stellr", Some(62)).unwrap(),
         );
 
         assert_eq!(
             url.as_str(),
             "http://127.0.0.1:49152/?token=session-token#s=teloverge-stellr&i=62"
+        );
+    }
+
+    #[test]
+    fn bare_launch_restores_but_explicit_targets_win() {
+        let target = RouteTarget {
+            space_id: "explicit-space".into(),
+            repo: "teloverge/explicit-space".into(),
+            path: None,
+            issue: Some(70),
+        };
+        let restored = PersistedRoute::new("remembered-space", Some(64)).unwrap();
+
+        assert_eq!(
+            initial_route(&target, Some(restored.clone()), true),
+            restored
+        );
+        assert_eq!(
+            initial_route(&target, Some(restored), false),
+            PersistedRoute::new("explicit-space", Some(70)).unwrap()
         );
     }
 }

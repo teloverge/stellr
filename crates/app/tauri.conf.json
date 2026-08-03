@@ -13,7 +13,7 @@
       "capabilities": [
         {
           "identifier": "main-loopback-native-bridge",
-          "description": "Allows only Stellr's loopback-hosted main window to control device authorization and receive normalized route requests.",
+          "description": "Allows only Stellr's loopback-hosted main window to control device authorization, receive normalized route requests, and persist validated routes.",
           "windows": ["main"],
           "remote": {
             "urls": ["http://127.0.0.1:*"]
@@ -22,7 +22,8 @@
             "allow-begin-device-authorization",
             "allow-device-authorization-status",
             "allow-cancel-device-authorization",
-            "allow-take-route-event"
+            "allow-take-route-event",
+            "allow-persist-route-state"
           ]
         }
       ]

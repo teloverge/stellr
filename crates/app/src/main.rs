@@ -30,16 +30,22 @@ fn run() -> Result<(), DynError> {
             stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch {
                 cwd,
                 target: args.target,
+                restore_route: false,
             })
             .map_err(Into::into)
         }
         None => {
             let cwd = std::env::current_dir()?;
+            let restore_route = cli.protocol_target.is_none();
             let target = cli
                 .protocol_target
                 .unwrap_or_else(|| cwd.to_string_lossy().into_owned());
-            stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch { target, cwd })
-                .map_err(Into::into)
+            stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch {
+                target,
+                cwd,
+                restore_route,
+            })
+            .map_err(Into::into)
         }
     }
 }

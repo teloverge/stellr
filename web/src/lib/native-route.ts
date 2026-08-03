@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { addSpace } from './api'
 
 export interface NativeRouteTarget {
@@ -19,6 +19,14 @@ export interface NativeRouteOutcome {
 
 export function takeNativeRouteEvent(): Promise<NativeRouteEvent | null> {
   return invoke<NativeRouteEvent | null>('take_route_event')
+}
+
+export function hasNativeRoutePersistence(): boolean {
+  return isTauri()
+}
+
+export function persistNativeRoute(space: string | null, issue: number | null): Promise<void> {
+  return invoke<void>('persist_route_state', { space, issue })
 }
 
 export async function applyNativeRouteEvent(

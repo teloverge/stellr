@@ -23,6 +23,7 @@ tauri.workspace = true
 tauri-plugin-deep-link.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-single-instance.workspace = true
+tauri-plugin-window-state.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 url.workspace = true
