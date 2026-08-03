@@ -4,7 +4,7 @@
   import SignInPanel from './lib/SignInPanel.svelte'
   import Sidebar from './lib/Sidebar.svelte'
   import StarMap from './lib/StarMap.svelte'
-  import { removeSpace } from './lib/api'
+  import { addSpace, removeSpace } from './lib/api'
   import { Control, pageIssue, takePageToken } from './lib/control.svelte'
   import type { Model } from './lib/model'
   import { Route } from './lib/route.svelte'
@@ -16,6 +16,7 @@
     hasNativeAuth,
     type DeviceFlowStatus,
   } from './lib/native-auth'
+  import { applyNativeRouteEvent, takeNativeRouteEvent } from './lib/native-route'
 
   interface RemovalIntent {
     id: string
@@ -66,6 +67,37 @@
   let dock = $state<Dock>('right')
   let pendingRemovals = $state.raw<Record<string, RemovalIntent>>({})
   let authStatus = $state<DeviceFlowStatus | null>(null)
+  let nativeRouteNotice = $state<string | null>(null)
+  let nativeRouteBusy = false
+
+  async function pollNativeRoute(): Promise<void> {
+    if (nativeRouteBusy) return
+    nativeRouteBusy = true
+    try {
+      const event = await takeNativeRouteEvent()
+      if (event === null) return
+      const outcome = await applyNativeRouteEvent(
+        event,
+        spaces.map((space) => space.id),
+        addSpace,
+      )
+      if (outcome.error !== null) {
+        nativeRouteNotice = outcome.error
+        return
+      }
+      if (outcome.route !== null) {
+        nativeRouteNotice = null
+        if (!spaces.some((space) => space.id === outcome.route?.space)) {
+          pendingAddedId = outcome.route.space
+        }
+        route.go(outcome.route.space, outcome.route.issue)
+      }
+    } catch (error) {
+      nativeRouteNotice = String(error)
+    } finally {
+      nativeRouteBusy = false
+    }
+  }
 
   async function refreshAuthorization(): Promise<void> {
     try {
@@ -200,7 +232,9 @@
     control.connect()
     const nativeAuth = hasNativeAuth()
     if (nativeAuth) void refreshAuthorization()
+    if (nativeAuth) void pollNativeRoute()
     const authPoller = nativeAuth ? window.setInterval(refreshAuthorization, 1_000) : undefined
+    const routePoller = nativeAuth ? window.setInterval(pollNativeRoute, 250) : undefined
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return
       dock = decideDock(
@@ -215,6 +249,7 @@
 
     return () => {
       if (authPoller !== undefined) window.clearInterval(authPoller)
+      if (routePoller !== undefined) window.clearInterval(routePoller)
       observer.disconnect()
       control.destroy()
       route.destroy()
@@ -223,6 +258,12 @@
 </script>
 
 <main class="app-shell">
+  {#if nativeRouteNotice !== null}
+    <div class="route-notice" role="alert">
+      <span>{nativeRouteNotice}</span>
+      <button aria-label="Dismiss routing error" onclick={() => (nativeRouteNotice = null)}>×</button>
+    </div>
+  {/if}
   <div class="sidebar-region">
     <Sidebar
       {spaces}
@@ -271,6 +312,7 @@
 
 <style>
   .app-shell {
+    position: relative;
     display: grid;
     grid-template-columns: clamp(14rem, 24vw, 20rem) minmax(0, 1fr);
     width: 100%;
@@ -278,6 +320,31 @@
     min-width: 0;
     min-height: 0;
     overflow: hidden;
+  }
+
+  .route-notice {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    z-index: 10;
+    display: flex;
+    max-width: min(28rem, calc(100% - 2rem));
+    gap: 0.75rem;
+    align-items: flex-start;
+    padding: 0.8rem 1rem;
+    border: 1px solid var(--destructive);
+    border-radius: 0.7rem;
+    color: var(--foreground);
+    background: color-mix(in oklch, var(--background) 92%, var(--destructive));
+    box-shadow: 0 0.75rem 2rem rgb(0 0 0 / 35%);
+  }
+
+  .route-notice button {
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    cursor: pointer;
   }
 
   .sidebar-region {

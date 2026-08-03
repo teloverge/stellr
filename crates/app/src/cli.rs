@@ -7,11 +7,19 @@ use clap::{Args, Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
+    #[arg(value_name = "STELLR_LINK", hide = true)]
+    pub protocol_target: Option<String>,
 }
 
 #[derive(Subcommand)]
 pub enum Command {
     Serve(ServeArgs),
+    Open(OpenArgs),
+}
+
+#[derive(Args)]
+pub struct OpenArgs {
+    pub target: String,
 }
 
 #[derive(Args)]

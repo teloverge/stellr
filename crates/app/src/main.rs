@@ -25,7 +25,22 @@ fn run() -> Result<(), DynError> {
             .enable_all()
             .build()?
             .block_on(serve(args)),
-        None => stellr_app::desktop::run(std::env::current_dir()?).map_err(Into::into),
+        Some(Command::Open(args)) => {
+            let cwd = std::env::current_dir()?;
+            stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch {
+                cwd,
+                target: args.target,
+            })
+            .map_err(Into::into)
+        }
+        None => {
+            let cwd = std::env::current_dir()?;
+            let target = cli
+                .protocol_target
+                .unwrap_or_else(|| cwd.to_string_lossy().into_owned());
+            stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch { target, cwd })
+                .map_err(Into::into)
+        }
     }
 }
 
@@ -106,5 +121,32 @@ mod tests {
 
         assert_eq!(args.issue.map(NonZeroU64::get), Some(14));
         assert!(Cli::try_parse_from(["stellr", "serve", "--issue", "0"]).is_err());
+    }
+
+    #[test]
+    fn open_accepts_one_path_url_slug_or_stellr_target() {
+        for target in [
+            r"D:\dev\stellr",
+            "teloverge/stellr",
+            "https://github.com/teloverge/stellr/issues/62",
+            "stellr://space?repo=teloverge%2Fstellr&issue=62",
+        ] {
+            let parsed = Cli::try_parse_from(["stellr", "open", target]).unwrap();
+            let Some(Command::Open(args)) = parsed.command else {
+                panic!("open should select the desktop open command")
+            };
+            assert_eq!(args.target, target);
+        }
+        assert!(Cli::try_parse_from(["stellr", "open"]).is_err());
+        assert!(Cli::try_parse_from(["stellr", "open", "one", "two"]).is_err());
+    }
+
+    #[test]
+    fn a_registered_stellr_protocol_link_is_accepted_as_the_hidden_root_target() {
+        let link = "stellr://space?repo=teloverge%2Fstellr&issue=62";
+        let parsed = Cli::try_parse_from(["stellr", link]).unwrap();
+
+        assert!(parsed.command.is_none());
+        assert_eq!(parsed.protocol_target.as_deref(), Some(link));
     }
 }

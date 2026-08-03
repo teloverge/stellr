@@ -4,6 +4,7 @@ fn main() {
             "begin_device_authorization",
             "device_authorization_status",
             "cancel_device_authorization",
+            "take_route_event",
         ]),
     ))
     .expect("Tauri build configuration should be valid");

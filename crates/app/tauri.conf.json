@@ -12,8 +12,8 @@
       "csp": "default-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'",
       "capabilities": [
         {
-          "identifier": "main-loopback-device-authorization",
-          "description": "Allows only Stellr's loopback-hosted main window to control native GitHub device authorization.",
+          "identifier": "main-loopback-native-bridge",
+          "description": "Allows only Stellr's loopback-hosted main window to control device authorization and receive normalized route requests.",
           "windows": ["main"],
           "remote": {
             "urls": ["http://127.0.0.1:*"]
@@ -21,7 +21,8 @@
           "permissions": [
             "allow-begin-device-authorization",
             "allow-device-authorization-status",
-            "allow-cancel-device-authorization"
+            "allow-cancel-device-authorization",
+            "allow-take-route-event"
           ]
         }
       ]
@@ -31,5 +32,12 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.png", "icons/icon.ico"]
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["stellr"]
+      }
+    }
   }
 }

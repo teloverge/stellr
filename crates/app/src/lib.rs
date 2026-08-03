@@ -3,3 +3,4 @@
 pub mod auth_activation;
 pub mod desktop;
 pub mod runtime;
+pub mod target;
