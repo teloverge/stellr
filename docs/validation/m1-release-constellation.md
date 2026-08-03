@@ -61,9 +61,9 @@ Microsoft Edge and Firefox on Windows 11.
 | Firefox, motion | 1440 x 1000 | SVG and animation loaded with 17 stars and 23 edges, no page errors or horizontal overflow |
 
 The Firefox run used the locally installed Playwright Firefox build directly
-because the bundled library expected a newer cached revision. This records the
-expected browser-specific degradation path without downloading or changing the
-machine browser installation.
+because the bundled library expected a newer cached revision. No additional
+Firefox degradation was observed: the SVG loaded at its intrinsic dimensions
+without page errors, and reduced motion selected the PNG fallback.
 
 ## README delivery paths
 
@@ -74,8 +74,38 @@ The accepted README block uses:
 - an ordinary Markdown link to `m1.png` for strict renderers;
 - adjacent text stating that 17 visible issues are resolved.
 
-Rendered GitHub branch validation is recorded after the publication commit is
-pushed, before issue #54 is closed.
+## Rendered GitHub evidence
+
+The publication commits were pushed to
+`codex/issues-47-54-readme-showcase`, and Playwright loaded the rendered branch
+README from GitHub with anonymous browser contexts.
+
+| Browser/mode | Viewport | GitHub result |
+| --- | --- | --- |
+| Edge, motion | 1440 x 1000 | HTTP 200; `currentSrc` is `m1.svg`; intrinsic 1200 x 675; rendered 838 x 471; no page errors or horizontal overflow |
+| Edge, motion | 480 x 900 | HTTP 200; `currentSrc` is `m1.svg`; rendered 414 x 233; no page errors or horizontal overflow |
+| Edge, reduced motion | 1200 x 900 | HTTP 200; `currentSrc` is `m1.png`; intrinsic 1600 x 900; rendered 758 x 426 |
+| Firefox, motion | 1440 x 1000 | HTTP 200; `currentSrc` is `m1.svg`; intrinsic 1200 x 675; rendered 838 x 471; no page errors or horizontal overflow |
+| Firefox, reduced motion | 1200 x 900 | HTTP 200; `currentSrc` is `m1.png`; intrinsic 1600 x 900; rendered 758 x 426 |
+
+The ordinary Markdown link resolved to GitHub's versioned `m1.png` blob page,
+returned HTTP 200, and rendered the exact PNG at its intrinsic 1600 x 900
+dimensions. This separately proves the strict-Markdown path rather than
+inferring it from the `<picture>` source.
+
+## Native Windows gates
+
+All completion gates ran from the isolated native Windows worktree:
+
+| Command | Result |
+| --- | --- |
+| `cargo.exe fmt --all -- --check` | Passed |
+| `cargo.exe clippy --workspace --all-targets --locked -- -D warnings` | Passed with no warnings |
+| `cargo.exe test --workspace --locked` | 137 passed, 0 failed, 2 intentional ignores |
+
+The test suite includes the release-story, deterministic SVG/PNG, live preview,
+README contract, and digest-gated atomic acceptance checks used by this
+publication.
 
 ## Native commands
 

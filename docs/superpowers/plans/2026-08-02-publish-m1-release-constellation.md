@@ -27,9 +27,9 @@ the final M1 issue closure.
   fallback/degradation behavior.
 - [x] Accept only the exact reviewed digest, publish immutable `m1` SVG, PNG,
   and story JSON files, and confirm the README points to those exact assets.
-- [ ] Record the release evidence in `docs/validation`, update the Unreleased
+- [x] Record the release evidence in `docs/validation`, update the Unreleased
   changelog, and run the native Windows formatting, lint, workspace-test, and
   release-showcase gates.
-- [ ] Commit and push the publication, inspect the rendered GitHub branch README
+- [x] Commit and push the publication, inspect the rendered GitHub branch README
   at desktop and narrow widths, obtain final spec and standards reviews, then
   close #54 only when every acceptance criterion has current evidence.
