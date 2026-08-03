@@ -92,6 +92,9 @@ fn svg_safety_gate_rejects_active_and_external_content() {
         r#"<svg xmlns="http://www.w3.org/2000/svg"><set attributeName="href" to="https://example.test/a.svg" /></svg>"#,
         r#"<svg xmlns="http://www.w3.org/2000/svg"><style>@IMPORT 'https://example.test/a.css';</style></svg>"#,
         r#"<svg xmlns="http://www.w3.org/2000/svg"><style>.x { fill: URL( 'https://example.test/a.svg#paint' ); }</style></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><style>@keyframes drift { from { transform: translate(0 0); } to { transform: translate(10px, 0); } }</style></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><style>@keyframes drift { from { x: 0; } to { x: 10px; } }</style></svg>"#,
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><style>@keyframes drift { from { y: 0; } to { y: 10px; } }</style></svg>"#,
     ] {
         assert!(
             validate_svg_safety(unsafe_svg).is_err(),

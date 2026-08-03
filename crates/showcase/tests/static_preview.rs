@@ -138,7 +138,7 @@ fn story() -> ReleaseStory {
 }
 
 #[test]
-fn one_story_produces_byte_identical_safe_static_assets() {
+fn one_story_produces_byte_identical_safe_release_assets() {
     let story = story();
     let first = render_static_preview(&story).unwrap();
     let second = render_static_preview(&story).unwrap();
@@ -150,7 +150,7 @@ fn one_story_produces_byte_identical_safe_static_assets() {
     assert_eq!(first.manifest, serde_json::to_vec(&story).unwrap());
     assert_eq!(
         sha256(&first.svg),
-        "47c93ba16d1bb4f9e0d584502abe28e31dd0c065123c339fde4e45d1a8299a9c"
+        "0f33cf093df3766f4c75de84275ddca04f23d9572eafbe27ea13178f3620fb52"
     );
     assert_eq!(
         sha256(&first.png),
@@ -162,7 +162,7 @@ fn one_story_produces_byte_identical_safe_static_assets() {
     );
     assert_eq!(
         sha256(&first.review_html),
-        "b96885ffc43b0948aebfd48fa7f3d8b1453eeb5c3466f371a606538adea161fe"
+        "42f27f42957b2fb623dea532ba4dea42629b6fcc8cdd9e0a9a5965b7234f4c52"
     );
 
     let svg = std::str::from_utf8(&first.svg).unwrap();
@@ -223,6 +223,121 @@ fn one_story_produces_byte_identical_safe_static_assets() {
     assert!(first.svg.len() <= 750 * 1024);
     assert!(first.png.len() <= 1536 * 1024);
     assert!(first.manifest.len() <= 1024 * 1024);
+}
+
+#[test]
+fn animated_replay_uses_truthful_fixed_twelve_second_motion() {
+    let preview = render_static_preview(&story()).unwrap();
+    let svg = std::str::from_utf8(&preview.svg).unwrap();
+    let document = roxmltree::Document::parse(svg).unwrap();
+
+    let replay = document
+        .descendants()
+        .find(|node| node.attribute("id") == Some("animated-replay"))
+        .expect("animated replay group");
+    assert_eq!(replay.attribute("data-loop-ms"), Some("12000"));
+    assert_eq!(replay.attribute("data-reveal-ms"), Some("1000"));
+    assert_eq!(replay.attribute("data-replay-ms"), Some("8000"));
+    assert_eq!(replay.attribute("data-final-hold-ms"), Some("2000"));
+    assert_eq!(replay.attribute("data-soft-reset-ms"), Some("1000"));
+
+    let beats = document
+        .descendants()
+        .filter(|node| node.attribute("data-beat").is_some())
+        .filter(|node| node.attribute("data-role") == Some("beat-focus"))
+        .collect::<Vec<_>>();
+    assert_eq!(beats.len(), 3);
+    assert_eq!(beats[0].attribute("data-beat"), Some("0"));
+    assert_eq!(beats[0].attribute("data-replay-offset-ms"), Some("2666"));
+    assert_eq!(beats[0].attribute("data-event-ids"), Some("C10"));
+    assert_eq!(beats[0].attribute("data-changed-issues"), Some("10 20"));
+    assert_eq!(beats[0].attribute("data-primary-issue"), Some("10"));
+    assert_eq!(beats[0].attribute("data-ready-issues"), Some("20"));
+    assert_eq!(beats[2].attribute("data-beat"), Some("2"));
+    assert_eq!(beats[2].attribute("data-replay-offset-ms"), Some("8000"));
+    assert_eq!(beats[2].attribute("data-event-ids"), Some("C20"));
+    assert_eq!(beats[2].attribute("data-changed-issues"), Some("20 30"));
+    assert_eq!(beats[2].attribute("data-primary-issue"), Some("20"));
+    assert_eq!(beats[2].attribute("data-ready-issues"), Some("30"));
+
+    let focus = beats[2]
+        .descendants()
+        .filter_map(|node| Some((node.attribute("data-focus")?, node.attribute("data-issue")?)))
+        .collect::<Vec<_>>();
+    assert!(focus.contains(&("current", "20")));
+    assert!(focus.contains(&("ready", "30")));
+    assert!(beats[2].descendants().any(|node| {
+        node.attribute("data-caption") == Some("Resolved")
+            && node.attribute("data-issue") == Some("20")
+    }));
+
+    let traversals = document
+        .descendants()
+        .filter(|node| node.attribute("data-motion") == Some("newly-traversable"))
+        .map(|node| {
+            (
+                node.attribute("data-beat").unwrap(),
+                node.attribute("data-blocker").unwrap(),
+                node.attribute("data-dependent").unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(traversals, vec![("0", "10", "20"), ("2", "20", "30")]);
+
+    let style = document
+        .descendants()
+        .find(|node| node.has_tag_name(("http://www.w3.org/2000/svg", "style")))
+        .and_then(|node| node.text())
+        .expect("embedded motion CSS");
+    assert!(style.contains("animation-duration:12s"));
+    assert!(style.contains("@media (prefers-reduced-motion:reduce)"));
+    assert!(style.contains("#animated-replay{display:none}"));
+    assert!(style.contains("#final-scene{animation:none;opacity:1}"));
+    assert!(!style.contains("transform"));
+    assert!(!svg.contains("<animate"));
+    assert!(!svg.contains("<set"));
+
+    let final_scene = document
+        .descendants()
+        .find(|node| node.attribute("id") == Some("final-scene"))
+        .expect("final scene fallback");
+    assert_eq!(final_scene.attribute("data-static-state"), Some("final"));
+    assert_eq!(final_scene.attribute("data-state-after-beat"), Some("2"));
+}
+
+#[test]
+fn animation_beat_without_exact_manifest_evidence_fails_closed() {
+    let mut story = story();
+    story.beats[0].source_event_ids = vec!["invented-event".to_owned()];
+
+    let error = render_static_preview(&story).unwrap_err();
+
+    assert!(matches!(error, PreviewRenderError::IncompleteStory(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("animation beat 0 does not map exactly to its manifest evidence")
+    );
+}
+
+#[test]
+fn animation_beat_with_statuses_not_derived_from_evidence_fails_closed() {
+    let mut story = story();
+    story.beats[0]
+        .statuses
+        .iter_mut()
+        .find(|status| status.issue_number == 10)
+        .unwrap()
+        .status = Some(stellr_core::Status::Blocked);
+
+    let error = render_static_preview(&story).unwrap_err();
+
+    assert!(matches!(error, PreviewRenderError::IncompleteStory(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("release story does not match the canonical replay derived from evidence")
+    );
 }
 
 #[test]

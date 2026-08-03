@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added a truthful twelve-second release replay with fixed graph geometry,
+  evidence-keyed synchronized status beats, CURRENT and READY focus, motion only
+  on newly traversable resolved edges, a two-second final hold, soft reset, and
+  a deterministic reduced-motion final state.
 - Added deterministic final-scene release previews with a safe 1200-by-675 SVG,
   matching 1600-by-900 PNG, canonical manifest, self-contained review page,
   bounded accessible labels, fixed asset budgets, and a bundled raster font.

@@ -131,6 +131,9 @@ fn validate_css(css: &str) -> Result<(), SvgSafetyError> {
     for forbidden_token in [
         "@import",
         "@font-face",
+        "@-webkit-keyframes",
+        "@-moz-keyframes",
+        "@-o-keyframes",
         "expression(",
         "javascript:",
         "/*",
@@ -140,6 +143,7 @@ fn validate_css(css: &str) -> Result<(), SvgSafetyError> {
             return forbidden("CSS token", forbidden_token);
         }
     }
+    validate_keyframe_properties(&lowercase)?;
 
     let mut search = lowercase.as_str();
     while let Some(position) = search.find("url") {
@@ -175,6 +179,89 @@ fn validate_css(css: &str) -> Result<(), SvgSafetyError> {
         search = &arguments[closing + 1..];
     }
 
+    Ok(())
+}
+
+fn validate_keyframe_properties(css: &str) -> Result<(), SvgSafetyError> {
+    let mut cursor = 0;
+    while let Some(relative_start) = css[cursor..].find("@keyframes") {
+        let keyframes_start = cursor + relative_start;
+        let after_keyword = keyframes_start + "@keyframes".len();
+        let opening = css[after_keyword..]
+            .find('{')
+            .map(|relative| after_keyword + relative)
+            .ok_or_else(|| SvgSafetyError::Forbidden {
+                kind: "CSS keyframes",
+                detail: "missing opening brace".to_owned(),
+            })?;
+        let closing = matching_brace(css, opening).ok_or_else(|| SvgSafetyError::Forbidden {
+            kind: "CSS keyframes",
+            detail: "missing closing brace".to_owned(),
+        })?;
+        validate_keyframe_body(&css[opening + 1..closing])?;
+        cursor = closing + 1;
+    }
+    Ok(())
+}
+
+fn matching_brace(css: &str, opening: usize) -> Option<usize> {
+    let mut depth = 0_u32;
+    for (relative, character) in css[opening..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(opening + relative);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn validate_keyframe_body(body: &str) -> Result<(), SvgSafetyError> {
+    let mut declaration_start = None;
+    for (index, character) in body.char_indices() {
+        match (character, declaration_start) {
+            ('{', None) => declaration_start = Some(index + 1),
+            ('{', Some(_)) => return forbidden("CSS keyframes", "nested declaration block"),
+            ('}', Some(start)) => {
+                validate_keyframe_declarations(&body[start..index])?;
+                declaration_start = None;
+            }
+            ('}', None) => return forbidden("CSS keyframes", "unexpected closing brace"),
+            _ => {}
+        }
+    }
+    if declaration_start.is_some() {
+        return forbidden("CSS keyframes", "unterminated declaration block");
+    }
+    Ok(())
+}
+
+fn validate_keyframe_declarations(declarations: &str) -> Result<(), SvgSafetyError> {
+    for declaration in declarations
+        .split(';')
+        .map(str::trim)
+        .filter(|declaration| !declaration.is_empty())
+    {
+        let (property, _) =
+            declaration
+                .split_once(':')
+                .ok_or_else(|| SvgSafetyError::Forbidden {
+                    kind: "CSS keyframes",
+                    detail: format!("invalid declaration '{declaration}'"),
+                })?;
+        let property = property.trim();
+        if !matches!(
+            property,
+            "opacity" | "fill" | "stroke" | "stroke-dasharray" | "stroke-dashoffset"
+        ) {
+            return forbidden("CSS animation property", property);
+        }
+    }
     Ok(())
 }
 
