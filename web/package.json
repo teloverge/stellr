@@ -24,6 +24,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@tauri-apps/api": "2.11.1",
     "dompurify": "^3.4.12",
     "marked": "^18.0.7"
   }

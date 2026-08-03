@@ -9,7 +9,22 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'",
+      "capabilities": [
+        {
+          "identifier": "main-loopback-device-authorization",
+          "description": "Allows only Stellr's loopback-hosted main window to control native GitHub device authorization.",
+          "windows": ["main"],
+          "remote": {
+            "urls": ["http://127.0.0.1:*"]
+          },
+          "permissions": [
+            "allow-begin-device-authorization",
+            "allow-device-authorization-status",
+            "allow-cancel-device-authorization"
+          ]
+        }
+      ]
     }
   },
   "bundle": {

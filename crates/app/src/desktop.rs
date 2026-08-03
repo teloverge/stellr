@@ -1,13 +1,22 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use stellr_core::Provider;
-use stellr_github::{auth::resolve_token, cache::Cache, sync::GithubProvider};
+use stellr_core::{Provider, ProviderError, RawIssue, RepoRef};
+use stellr_github::{
+    auth::resolve_token,
+    cache::Cache,
+    device_flow::{DeviceFlowClient, DeviceFlowController, DeviceFlowStatus},
+    sync::GithubProvider,
+};
 use stellr_server::spaces::{SpaceEntry, SpaceStore, detect_repo};
-use tauri::{Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use thiserror::Error;
 
 use crate::runtime::{ApplicationRuntime, RuntimeError, RuntimeOptions, SessionAuth, start};
+
+const GITHUB_DEVICE_FLOW_BASE: &str = "https://github.com";
+const GITHUB_DEVICE_CLIENT_ID: &str = "Ov23liWXBEZ0ysYu2MxE";
+const GITHUB_DEVICE_SCOPE: &str = "repo";
 
 pub struct DesktopRuntimeOptions {
     pub current_dir: PathBuf,
@@ -33,6 +42,72 @@ pub enum DesktopHostError {
 
 struct DesktopState {
     _runtime: ApplicationRuntime,
+}
+
+struct DesktopAuthState {
+    controller: DeviceFlowController,
+    credential_present: bool,
+}
+
+impl DesktopAuthState {
+    async fn public_status(&self) -> DeviceFlowStatus {
+        let status = self.controller.status().await;
+        if self.credential_present && status == DeviceFlowStatus::Idle {
+            DeviceFlowStatus::Authorized
+        } else {
+            status
+        }
+    }
+}
+
+struct SignedOutProvider;
+
+#[async_trait::async_trait]
+impl Provider for SignedOutProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+        Err(ProviderError::Auth("GitHub sign-in required".to_owned()))
+    }
+}
+
+fn provider_from_environment() -> Result<(Arc<dyn Provider + Send + Sync>, bool), ProviderError> {
+    match resolve_token() {
+        Ok(token) => Ok((Arc::new(GithubProvider::new(token)?), true)),
+        Err(_) => Ok((Arc::new(SignedOutProvider), false)),
+    }
+}
+
+fn device_flow_controller() -> Result<DeviceFlowController, Box<dyn std::error::Error + Send + Sync>>
+{
+    let client = DeviceFlowClient::new(
+        GITHUB_DEVICE_FLOW_BASE.parse()?,
+        GITHUB_DEVICE_CLIENT_ID,
+        GITHUB_DEVICE_SCOPE,
+    )?;
+    Ok(DeviceFlowController::new(client))
+}
+
+#[tauri::command]
+async fn begin_device_authorization(
+    state: State<'_, DesktopAuthState>,
+) -> Result<DeviceFlowStatus, String> {
+    state
+        .controller
+        .begin()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn device_authorization_status(
+    state: State<'_, DesktopAuthState>,
+) -> Result<DeviceFlowStatus, String> {
+    Ok(state.public_status().await)
+}
+
+#[tauri::command]
+async fn cancel_device_authorization(state: State<'_, DesktopAuthState>) -> Result<(), String> {
+    state.controller.cancel().await;
+    Ok(())
 }
 
 pub async fn start_runtime(
@@ -92,14 +167,17 @@ pub fn run(current_dir: PathBuf) -> Result<(), DesktopHostError> {
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             let startup = tauri::async_runtime::block_on(async {
-                let provider_token = resolve_token()?;
-                let provider = Arc::new(GithubProvider::new(provider_token)?);
+                let (provider, credential_present) = provider_from_environment()?;
+                let auth = DesktopAuthState {
+                    controller: device_flow_controller()?,
+                    credential_present,
+                };
                 let runtime = start_runtime(default_options(current_dir.clone()), provider).await?;
-                Ok::<ApplicationRuntime, Box<dyn std::error::Error + Send + Sync>>(runtime)
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>((runtime, auth))
             });
 
-            let runtime = match startup {
-                Ok(runtime) => runtime,
+            let (runtime, auth) = match startup {
+                Ok(startup) => startup,
                 Err(error) => {
                     app.dialog()
                         .message(error.to_string())
@@ -120,8 +198,14 @@ pub fn run(current_dir: PathBuf) -> Result<(), DesktopHostError> {
                 return Err(Box::new(error));
             }
             app.manage(DesktopState { _runtime: runtime });
+            app.manage(auth);
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            begin_device_authorization,
+            device_authorization_status,
+            cancel_device_authorization
+        ])
         .run(tauri::generate_context!())?;
     Ok(())
 }

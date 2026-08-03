@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-device-authorization"
+description = "Enables the cancel_device_authorization command without any pre-configured scope."
+commands.allow = ["cancel_device_authorization"]
+
+[[permission]]
+identifier = "deny-cancel-device-authorization"
+description = "Denies the cancel_device_authorization command without any pre-configured scope."
+commands.deny = ["cancel_device_authorization"]

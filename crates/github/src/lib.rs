@@ -2,5 +2,6 @@
 
 pub mod auth;
 pub mod cache;
+pub mod device_flow;
 pub mod sync;
 pub mod textref;

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte'
   import DetailPane from './lib/DetailPane.svelte'
+  import SignInPanel from './lib/SignInPanel.svelte'
   import Sidebar from './lib/Sidebar.svelte'
   import StarMap from './lib/StarMap.svelte'
   import { removeSpace } from './lib/api'
@@ -8,6 +9,13 @@
   import type { Model } from './lib/model'
   import { Route } from './lib/route.svelte'
   import { decideDock, type Dock } from './lib/starmap/dock'
+  import {
+    beginDeviceAuthorization,
+    cancelDeviceAuthorization,
+    deviceAuthorizationStatus,
+    hasNativeAuth,
+    type DeviceFlowStatus,
+  } from './lib/native-auth'
 
   interface RemovalIntent {
     id: string
@@ -57,6 +65,31 @@
   let workspace: HTMLElement
   let dock = $state<Dock>('right')
   let pendingRemovals = $state.raw<Record<string, RemovalIntent>>({})
+  let authStatus = $state<DeviceFlowStatus | null>(null)
+
+  async function refreshAuthorization(): Promise<void> {
+    try {
+      authStatus = await deviceAuthorizationStatus()
+    } catch (error) {
+      authStatus = { state: 'failed', message: String(error) }
+    }
+  }
+
+  async function beginAuthorization(): Promise<void> {
+    try {
+      authStatus = await beginDeviceAuthorization()
+    } catch (error) {
+      authStatus = { state: 'failed', message: String(error) }
+    }
+  }
+
+  async function cancelAuthorization(): Promise<void> {
+    try {
+      authStatus = await cancelDeviceAuthorization()
+    } catch (error) {
+      authStatus = { state: 'failed', message: String(error) }
+    }
+  }
 
   function reconcileModel(modelSnapshot: Model): void {
     if (pendingAddedId !== null) {
@@ -165,6 +198,9 @@
 
   onMount(() => {
     control.connect()
+    const nativeAuth = hasNativeAuth()
+    if (nativeAuth) void refreshAuthorization()
+    const authPoller = nativeAuth ? window.setInterval(refreshAuthorization, 1_000) : undefined
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return
       dock = decideDock(
@@ -178,6 +214,7 @@
     observer.observe(workspace)
 
     return () => {
+      if (authPoller !== undefined) window.clearInterval(authPoller)
       observer.disconnect()
       control.destroy()
       route.destroy()
@@ -204,6 +241,13 @@
     class:detail-bottom={activeStar !== null && dock === 'bottom'}
     bind:this={workspace}
   >
+    {#if authStatus !== null && authStatus.state !== 'authorized'}
+      <SignInPanel
+        status={authStatus}
+        begin={beginAuthorization}
+        cancel={cancelAuthorization}
+      />
+    {/if}
     <section class="map-region" aria-label="Issue map">
       {#if activeSpace}
         <StarMap
@@ -251,6 +295,7 @@
   }
 
   .workspace {
+    position: relative;
     display: grid;
     grid-template-areas: "map";
     grid-template-columns: minmax(0, 1fr);
