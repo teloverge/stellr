@@ -4,15 +4,13 @@ on:
   pull_request:
   workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   unsigned-development:
-    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -29,6 +27,11 @@ jobs:
       - name: Build unsigned Windows x64 NSIS installer
         shell: powershell
         run: .\scripts\build-windows-nsis.ps1 -Channel Development
+      - name: Prove the real desktop application-process boundary
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .\scripts\smoke-windows-application-process.ps1 -ExecutablePath target\release\stellr.exe
       - name: Smoke install, WebView2 launch, and uninstall
         shell: powershell
         run: |
@@ -47,53 +50,3 @@ jobs:
           name: Stellr-Windows-x64-NSIS-UNSIGNED-NOT-FOR-RELEASE
           path: artifacts/windows-x64/*UNSIGNED-NOT-FOR-RELEASE*
           if-no-files-found: error
-
-  signed-tag-candidate:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: windows-latest
-    env:
-      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Fail closed unless Windows signing credentials exist
-        shell: powershell
-        run: .\scripts\assert-windows-signing.ps1 -CertificateBase64 $env:WINDOWS_CERTIFICATE_BASE64 -CertificatePassword $env:WINDOWS_CERTIFICATE_PASSWORD
-      - name: Import Windows signing certificate
-        shell: powershell
-        run: |
-          $certificatePath = Join-Path $env:RUNNER_TEMP 'stellr-windows-signing.pfx'
-          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
-          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password |
-            Where-Object HasPrivateKey |
-            Select-Object -First 1
-          if ($null -eq $certificate -or [string]::IsNullOrWhiteSpace($certificate.Thumbprint)) { throw 'Windows certificate import failed.' }
-          "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - run: npm --prefix web ci
-      - name: Build signed Windows x64 NSIS candidate
-        shell: powershell
-        run: .\scripts\build-windows-nsis.ps1 -Channel Release -CertificateThumbprint $env:WINDOWS_CERTIFICATE_THUMBPRINT
-      - name: Smoke signed install, WebView2 launch, and uninstall
-        shell: powershell
-        run: |
-          $installer = Get-ChildItem artifacts\windows-x64\*.exe -File | Select-Object -ExpandProperty FullName -First 1
-          .\scripts\smoke-windows-nsis.ps1 -InstallerPath $installer
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Stellr-Windows-x64-NSIS-signed-release-candidate
-          path: artifacts/windows-x64/*
-          if-no-files-found: error
-      - name: Remove imported signing certificate
-        if: always()
-        shell: powershell
-        run: |
-          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_THUMBPRINT)) {
-            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:WINDOWS_CERTIFICATE_THUMBPRINT" -Force -ErrorAction SilentlyContinue
-          }

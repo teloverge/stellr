@@ -4,15 +4,13 @@ on:
   pull_request:
   workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   unsigned-development:
-    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -41,50 +39,3 @@ jobs:
           name: Stellr-macOS-universal-DMG-UNSIGNED-NOT-FOR-RELEASE
           path: artifacts/macos-universal/*UNSIGNED-NOT-FOR-RELEASE*
           if-no-files-found: error
-
-  signed-tag-candidate:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    runs-on: macos-latest
-    env:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-    steps:
-      - uses: actions/checkout@v6
-      - name: Fail closed unless macOS signing credentials exist
-        run: bash scripts/assert-macos-signing.sh
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Import Developer ID certificate
-        run: |
-          keychain="$RUNNER_TEMP/stellr-signing.keychain-db"
-          certificate="$RUNNER_TEMP/stellr-signing.p12"
-          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A -out "$certificate"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security default-keychain -s "$keychain"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security set-keychain-settings -t 3600 -u "$keychain"
-          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
-          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/{print $2; exit}')"
-          test -n "$identity" || { echo 'No Developer ID Application identity was imported.' >&2; exit 1; }
-          printf 'APPLE_SIGNING_IDENTITY=%s\n' "$identity" >> "$GITHUB_ENV"
-      - run: npm --prefix web ci
-      - name: Build signed universal macOS DMG
-        run: bash scripts/build-macos-universal.sh Release
-      - name: Verify signature, slices, and signed launch
-        run: bash scripts/inspect-macos-dmg.sh artifacts/macos-universal/*.dmg Release
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Stellr-macOS-universal-DMG-signed-release-candidate
-          path: artifacts/macos-universal/*
-          if-no-files-found: error
-      - name: Remove ephemeral signing keychain
-        if: always()
-        run: security delete-keychain "$RUNNER_TEMP/stellr-signing.keychain-db" 2>/dev/null || true

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+channel="${1:-Development}"
+if [[ "$channel" != 'Development' && "$channel" != 'Release' ]]; then
+  printf 'Usage: %s [Development|Release]\n' "$0" >&2
+  exit 2
+fi
 if [[ "$(uname -s)" != 'Linux' ]]; then
   printf 'Linux packages must be built on native Linux.\n' >&2
   exit 1
@@ -34,8 +39,12 @@ fi
 
 artifact_dir="$repo/artifacts/linux-x86_64"
 mkdir -p "$artifact_dir"
-appimage_artifact="$artifact_dir/Stellr_${version}_linux-x86_64_appimage_UNSIGNED-NOT-FOR-RELEASE.AppImage"
-deb_artifact="$artifact_dir/Stellr_${version}_linux-x86_64_deb_UNSIGNED-NOT-FOR-RELEASE.deb"
+suffix=''
+if [[ "$channel" == 'Development' ]]; then
+  suffix='_UNSIGNED-NOT-FOR-RELEASE'
+fi
+appimage_artifact="$artifact_dir/Stellr_${version}_linux-x86_64_appimage${suffix}.AppImage"
+deb_artifact="$artifact_dir/Stellr_${version}_linux-x86_64_deb${suffix}.deb"
 cp "$appimage" "$appimage_artifact"
 cp "$deb" "$deb_artifact"
 chmod +x "$appimage_artifact"

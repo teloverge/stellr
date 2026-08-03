@@ -19,8 +19,9 @@ Assert-True ($workflow.Contains('runs-on: windows-latest')) 'The bundle must bui
 Assert-True ($workflow.Contains('UNSIGNED-NOT-FOR-RELEASE')) 'Development artifacts must be unmistakably unsigned.'
 Assert-True ($workflow.Contains('GITHUB_STEP_SUMMARY')) 'The workflow summary must warn that development artifacts are unsigned.'
 Assert-True ($workflow.Contains('smoke-windows-nsis.ps1')) 'The clean-runner installer smoke test must gate artifacts.'
-Assert-True ($workflow.Contains('WINDOWS_CERTIFICATE_BASE64')) 'Tagged builds must require the Windows certificate secret.'
-Assert-True ($workflow.Contains('WINDOWS_CERTIFICATE_PASSWORD')) 'Tagged builds must require the certificate password secret.'
+$releaseWorkflow = Get-Content (Join-Path $repo '.github\workflows\release.yml') -Raw
+Assert-True ($releaseWorkflow.Contains('WINDOWS_CERTIFICATE_BASE64')) 'Tagged builds must require the Windows certificate secret.'
+Assert-True ($releaseWorkflow.Contains('WINDOWS_CERTIFICATE_PASSWORD')) 'Tagged builds must require the certificate password secret.'
 Assert-True ((Get-Content (Join-Path $repo '.gitignore') -Raw).Contains('artifacts/')) `
   'Generated package artifacts must stay out of source control.'
 

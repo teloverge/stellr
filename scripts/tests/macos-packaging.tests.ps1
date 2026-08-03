@@ -18,9 +18,10 @@ Assert-True ($workflow.Contains('aarch64-apple-darwin,x86_64-apple-darwin')) `
   'The workflow must install both universal-binary Rust targets.'
 Assert-True ($workflow.Contains('UNSIGNED-NOT-FOR-RELEASE')) 'Development DMGs must be unmistakably unsigned.'
 Assert-True ($workflow.Contains('GITHUB_STEP_SUMMARY')) 'The workflow summary must warn that development DMGs are unsigned.'
-Assert-True ($workflow.Contains('APPLE_CERTIFICATE')) 'Tagged builds must require the Apple certificate secret.'
-Assert-True ($workflow.Contains('APPLE_CERTIFICATE_PASSWORD')) 'Tagged builds must require the Apple certificate password.'
-Assert-True ($workflow.Contains('KEYCHAIN_PASSWORD')) 'Tagged builds must require an ephemeral keychain password.'
+$releaseWorkflow = Get-Content (Join-Path $repo '.github\workflows\release.yml') -Raw
+Assert-True ($releaseWorkflow.Contains('APPLE_CERTIFICATE')) 'Tagged builds must require the Apple certificate secret.'
+Assert-True ($releaseWorkflow.Contains('APPLE_CERTIFICATE_PASSWORD')) 'Tagged builds must require the Apple certificate password.'
+Assert-True ($releaseWorkflow.Contains('KEYCHAIN_PASSWORD')) 'Tagged builds must require an ephemeral keychain password.'
 
 $buildScript = Join-Path $repo 'scripts\build-macos-universal.sh'
 $inspectScript = Join-Path $repo 'scripts\inspect-macos-dmg.sh'

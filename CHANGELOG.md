@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added the M2 native desktop shell with GitHub device authorization, OS-backed
+  credential persistence, single-instance deep-link routing, focus-aware
+  synchronization, restorable window and route state, native tray/settings
+  actions, and gated Windows, universal macOS, and Linux packages.
 - Compacted native subissue workflows into deterministic parent-local arcs
   that avoid unrelated nodes and dependency paths, with bounded overflow,
   nested-cluster placement, and safe malformed-data fallbacks.
