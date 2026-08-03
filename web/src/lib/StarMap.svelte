@@ -43,7 +43,7 @@
 
   onMount(() => {
     renderer = new Renderer()
-    const background = getComputedStyle(host).getPropertyValue('--background').trim()
+    const background = getComputedStyle(host).getPropertyValue('--map-background').trim()
     renderer.setBackground(background)
     renderer.mount(host)
     renderer.onSelect((issueNumber) => {
@@ -65,5 +65,6 @@
     width: 100%;
     height: 100%;
     min-height: 0;
+    background: var(--map-background);
   }
 </style>

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, unmount } from 'svelte'
 import DetailPane from './DetailPane.svelte'
 import type { Star } from './model'
@@ -28,10 +28,14 @@ function issue(overrides: Partial<Star> = {}): Star {
   }
 }
 
-function render(star: Star, close = () => undefined): HTMLElement {
+function render(
+  star: Star,
+  close = () => undefined,
+  openExternal = vi.fn(async () => undefined),
+): HTMLElement {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  mounted.push(mount(DetailPane, { target, props: { star, close } }))
+  mounted.push(mount(DetailPane, { target, props: { star, close, openExternal } }))
   return target
 }
 
@@ -51,14 +55,24 @@ describe('DetailPane', () => {
     expect(target.textContent).toContain('@alice')
     expect(target.querySelector('strong')?.textContent).toBe('safe detail')
 
-    const link = target.querySelector<HTMLAnchorElement>('a[href$="/issues/42"]')!
-    expect(link.target).toBe('_blank')
-    expect(link.rel).toBe('noopener noreferrer')
+    expect(target.textContent).toContain('Open on GitHub')
 
     target
       .querySelector<HTMLButtonElement>('button[aria-label="Close issue details"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(closed).toBe(true)
+  })
+
+  it('opens a validated issue URL through the system-browser bridge', async () => {
+    const openExternal = vi.fn(async () => undefined)
+    const target = render(issue(), () => undefined, openExternal)
+
+    target.querySelector<HTMLButtonElement>('button[data-external-url]')!.click()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(openExternal).toHaveBeenCalledWith(
+      'https://github.com/teloverge/stellr/issues/42',
+    )
   })
 
   it('omits metadata sections that have no values', () => {
@@ -77,6 +91,6 @@ describe('DetailPane', () => {
   ])('omits the outbound link for an unsafe provider URL %s', (url) => {
     const target = render(issue({ url }))
 
-    expect(target.querySelector('a')).toBeNull()
+    expect(target.querySelector('[data-external-url]')).toBeNull()
   })
 })

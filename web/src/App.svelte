@@ -3,11 +3,13 @@
   import DetailPane from './lib/DetailPane.svelte'
   import SignInPanel from './lib/SignInPanel.svelte'
   import Sidebar from './lib/Sidebar.svelte'
+  import StatePanel from './lib/StatePanel.svelte'
   import StarMap from './lib/StarMap.svelte'
   import { addSpace, removeSpace } from './lib/api'
   import { Control, pageIssue, takePageToken } from './lib/control.svelte'
   import type { Model } from './lib/model'
   import { Route } from './lib/route.svelte'
+  import { ThemeController } from './lib/theme.svelte'
   import { decideDock, type Dock } from './lib/starmap/dock'
   import {
     beginDeviceAuthorization,
@@ -56,6 +58,7 @@
   const sessionToken = takePageToken()
   const control = new Control(sessionToken)
   const route = new Route()
+  const theme = new ThemeController()
   let pendingAddedId = $state<string | null>(null)
   const spaces = $derived(control.model?.spaces ?? [])
   const resolvedRoute = $derived(
@@ -76,6 +79,10 @@
   let nativeRouteBusy = false
   let persistedRouteKey: string | null = null
   const nativeRoutePersistence = hasNativeRoutePersistence()
+  const modelLoading = $derived(
+    control.model === null ||
+      (nativeRoutePersistence && control.revision === 1 && spaces.length === 0 && route.space !== null),
+  )
 
   async function pollNativeRoute(): Promise<void> {
     if (nativeRouteBusy) return
@@ -265,6 +272,7 @@
   }
 
   onMount(() => {
+    void theme.start()
     control.connect()
     const nativeAuth = hasNativeAuth()
     if (nativeAuth) void refreshAuthorization()
@@ -289,6 +297,7 @@
       observer.disconnect()
       control.destroy()
       route.destroy()
+      theme.destroy()
     }
   })
 </script>
@@ -309,6 +318,8 @@
       added={addedSpace}
       removed={removedSpace}
       removeRequest={requestRemoveSpace}
+      themePreference={theme.preference}
+      selectTheme={(preference) => theme.setPreference(preference)}
     />
   </div>
 
@@ -326,7 +337,13 @@
       />
     {/if}
     <section class="map-region" aria-label="Issue map">
-      {#if activeSpace}
+      {#if modelLoading}
+        <StatePanel
+          kind="loading"
+          title="Opening observatory"
+          description="Loading cached spaces and the latest GitHub issue state."
+        />
+      {:else if activeSpace}
         <StarMap
           space={activeSpace}
           {currentIssue}
@@ -334,7 +351,11 @@
           select={(issueNumber) => route.go(activeSpace.id, issueNumber)}
         />
       {:else}
-        <p class="empty-map">No spaces yet. Add a local path or GitHub repository to begin.</p>
+        <StatePanel
+          kind="empty"
+          title="No spaces yet"
+          description="Add a local path or GitHub repository to begin."
+        />
       {/if}
     </section>
 
@@ -371,8 +392,8 @@
     border: 1px solid var(--destructive);
     border-radius: 0.7rem;
     color: var(--foreground);
-    background: color-mix(in oklch, var(--background) 92%, var(--destructive));
-    box-shadow: 0 0.75rem 2rem rgb(0 0 0 / 35%);
+    background: color-mix(in oklch, var(--surface-raised) 88%, var(--destructive));
+    box-shadow: 0 0.75rem 2rem var(--shadow-color);
   }
 
   .route-notice button {
@@ -406,6 +427,7 @@
     width: 100%;
     min-height: 0;
     overflow: hidden;
+    background: var(--map-background);
   }
 
   .workspace.detail-right {
@@ -435,16 +457,4 @@
     grid-area: detail;
   }
 
-  .empty-map {
-    display: flex;
-    box-sizing: border-box;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-    margin: 0;
-    padding: 2rem;
-    color: var(--muted-foreground);
-    text-align: center;
-  }
 </style>

@@ -1,10 +1,36 @@
 <script lang="ts">
+  import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon'
+  import XIcon from 'phosphor-svelte/lib/XIcon'
   import { safeGithubIssueUrl } from './github-url'
   import { renderIssueMarkdown } from './markdown'
   import type { Star } from './model'
+  import { openExternalUrl } from './native-shell'
 
-  let { star, close }: { star: Star; close: () => void } = $props()
+  let {
+    star,
+    close,
+    openExternal = openExternalUrl,
+  }: {
+    star: Star
+    close: () => void
+    openExternal?: typeof openExternalUrl
+  } = $props()
   const githubUrl = $derived(safeGithubIssueUrl(star.url, star.number))
+  let externalError = $state<string | null>(null)
+  let opening = $state(false)
+
+  async function openIssue(): Promise<void> {
+    if (githubUrl === null || opening) return
+    opening = true
+    externalError = null
+    try {
+      await openExternal(githubUrl)
+    } catch (error) {
+      externalError = String(error)
+    } finally {
+      opening = false
+    }
+  }
 </script>
 
 <aside class="detail-pane" aria-label="Issue details">
@@ -13,7 +39,9 @@
       <span class="issue-number">#{star.number}</span>
       <h2>{star.title}</h2>
     </div>
-    <button class="close" type="button" aria-label="Close issue details" onclick={close}>×</button>
+    <button class="close" type="button" aria-label="Close issue details" onclick={close}>
+      <XIcon size={18} aria-hidden="true" />
+    </button>
   </header>
 
   <div class="status" data-status={star.status}>{star.status.replaceAll('_', ' ')}</div>
@@ -52,7 +80,17 @@
   {/if}
 
   {#if githubUrl}
-    <a href={githubUrl} target="_blank" rel="noopener noreferrer">Open on GitHub</a>
+    <button
+      class="external-link"
+      type="button"
+      data-external-url={githubUrl}
+      disabled={opening}
+      onclick={openIssue}
+    >
+      Open on GitHub
+      <ArrowSquareOutIcon size={17} aria-hidden="true" />
+    </button>
+    {#if externalError}<p class="external-error" role="alert">{externalError}</p>{/if}
   {/if}
 </aside>
 
@@ -63,7 +101,7 @@
     overflow: auto;
     padding: 1.25rem;
     border: 1px solid var(--border);
-    background: var(--background);
+    background: var(--surface);
     color: var(--foreground);
   }
 
@@ -157,9 +195,20 @@
     background: var(--muted);
   }
 
-  a {
-    display: inline-block;
+  .external-link {
+    display: inline-flex;
+    gap: 0.4rem;
+    align-items: center;
     margin-top: 1.25rem;
+    padding: 0;
+    border: 0;
     color: var(--primary);
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .external-error {
+    color: var(--destructive);
   }
 </style>

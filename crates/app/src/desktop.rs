@@ -25,6 +25,7 @@ use tauri::{
     tray::{TrayIcon, TrayIconBuilder},
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_opener::OpenerExt;
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify};
 
@@ -36,6 +37,7 @@ use crate::{
         start_with_polling,
     },
     target::{RouteTarget, TargetResolver},
+    theme::{ThemePreference, ThemeStore},
 };
 
 const GITHUB_DEVICE_FLOW_BASE: &str = "https://github.com";
@@ -279,6 +281,57 @@ fn persist_route_state(
 }
 
 #[tauri::command]
+fn get_theme_preference(state: State<'_, ThemeStore>) -> ThemePreference {
+    state.load()
+}
+
+#[tauri::command]
+fn set_theme_preference(
+    state: State<'_, ThemeStore>,
+    preference: ThemePreference,
+) -> Result<(), String> {
+    state.save(preference).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn choose_repository_directory(app: AppHandle) -> Result<Option<String>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("Choose a Git repository")
+        .pick_folder(move |folder| {
+            let _ = sender.send(folder);
+        });
+    let folder = receiver
+        .await
+        .map_err(|_| "repository chooser closed unexpectedly".to_owned())?;
+    folder
+        .map(|folder| {
+            folder
+                .into_path()
+                .map(|path| path.to_string_lossy().into_owned())
+                .map_err(|error| error.to_string())
+        })
+        .transpose()
+}
+
+fn validated_external_url(raw: &str) -> Result<url::Url, String> {
+    let url = url::Url::parse(raw).map_err(|_| "external URL is invalid".to_owned())?;
+    if url.scheme() != "https" {
+        return Err("only https external URLs are allowed".to_owned());
+    }
+    Ok(url)
+}
+
+#[tauri::command]
+fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
+    let url = validated_external_url(&url)?;
+    app.opener()
+        .open_url(url.as_str(), None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn begin_device_authorization(
     state: State<'_, DesktopAuthState>,
 ) -> Result<DeviceFlowStatus, String> {
@@ -392,9 +445,11 @@ fn initial_route(
 pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
     let route_inbox = RouteInbox::default();
     let route_state = RouteStateStore::new(RouteStateStore::default_file());
+    let theme_state = ThemeStore::new(ThemeStore::default_file());
     tauri::Builder::default()
         .manage(route_inbox.clone())
         .manage(route_state.clone())
+        .manage(theme_state)
         .plugin(tauri_plugin_single_instance::init(move |app, args, cwd| {
             route_inbox.push(forwarded_route_event(&args, &cwd));
             if let Some(window) = app.get_webview_window("main") {
@@ -414,6 +469,7 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             let startup = tauri::async_runtime::block_on(async {
                 let target = TargetResolver::new(launch.cwd.clone()).resolve(&launch.target)?;
@@ -484,7 +540,11 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
             device_authorization_status,
             cancel_device_authorization,
             take_route_event,
-            persist_route_state
+            persist_route_state,
+            get_theme_preference,
+            set_theme_preference,
+            choose_repository_directory,
+            open_external_url
         ])
         .run(tauri::generate_context!())?;
     Ok(())
@@ -588,5 +648,18 @@ mod tests {
         assert_eq!(tray_action("open"), Some(TrayAction::Open));
         assert_eq!(tray_action("quit"), Some(TrayAction::Quit));
         assert_eq!(tray_action("hide"), None);
+    }
+
+    #[test]
+    fn external_opening_accepts_https_and_rejects_other_schemes() {
+        assert_eq!(
+            validated_external_url("https://github.com/teloverge/stellr")
+                .unwrap()
+                .scheme(),
+            "https"
+        );
+        assert!(validated_external_url("http://github.com/teloverge/stellr").is_err());
+        assert!(validated_external_url("javascript:alert(1)").is_err());
+        assert!(validated_external_url("not a url").is_err());
     }
 }

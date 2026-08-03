@@ -131,6 +131,17 @@ async function settle(): Promise<void> {
 }
 
 describe('App issue routing', () => {
+  it('distinguishes runtime loading from an authoritative empty model', () => {
+    const { target, socket } = mountApp()
+
+    expect(target.querySelector('[role="status"]')?.textContent).toContain('Opening observatory')
+    expect(target.textContent).not.toContain('No spaces yet')
+
+    socket.emitModel({ spaces: [] })
+    flushSync()
+    expect(target.textContent).toContain('No spaces yet')
+  })
+
   it('closes its control socket when the App is unmounted', async () => {
     const { socket, component } = mountApp()
 

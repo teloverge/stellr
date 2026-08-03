@@ -6,6 +6,10 @@ fn main() {
             "cancel_device_authorization",
             "take_route_event",
             "persist_route_state",
+            "get_theme_preference",
+            "set_theme_preference",
+            "choose_repository_directory",
+            "open_external_url",
         ]),
     ))
     .expect("Tauri build configuration should be valid");

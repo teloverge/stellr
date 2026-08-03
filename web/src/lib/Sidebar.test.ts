@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 import Sidebar from './Sidebar.svelte'
 import type { addSpace, refreshSpace, removeSpace } from './api'
+import type { chooseRepositoryDirectory } from './native-shell'
 import type { SpaceModel } from './model'
 
 const mounted: object[] = []
@@ -38,6 +39,8 @@ function render(
     addRequest?: typeof addSpace
     removeRequest?: typeof removeSpace
     refreshRequest?: typeof refreshSpace
+    nativeShell?: boolean
+    chooseDirectory?: typeof chooseRepositoryDirectory
   } = {},
 ): HTMLElement {
   const target = document.createElement('div')
@@ -55,6 +58,8 @@ function render(
         addRequest: overrides.addRequest,
         removeRequest: overrides.removeRequest,
         refreshRequest: overrides.refreshRequest,
+        nativeShell: overrides.nativeShell,
+        chooseDirectory: overrides.chooseDirectory,
       },
     }),
   )
@@ -110,6 +115,9 @@ describe('Sidebar display', () => {
 
     expect(target.textContent).toContain('Stale')
     expect(target.textContent).toContain('GitHub rate limit exceeded')
+    expect(target.querySelector('[role="status"]')?.textContent).toContain(
+      'GitHub rate limit exceeded',
+    )
 
     target
       .querySelector<HTMLButtonElement>('button[data-space-id="cached-space"]')!
@@ -119,6 +127,23 @@ describe('Sidebar display', () => {
 })
 
 describe('Sidebar add form', () => {
+  it('uses the native chooser to populate one local repository path', async () => {
+    const chooseDirectory = vi
+      .fn<typeof chooseRepositoryDirectory>()
+      .mockResolvedValue('D:\\dev\\stellr')
+    const target = render([], { nativeShell: true, chooseDirectory })
+
+    target
+      .querySelector<HTMLButtonElement>('button[aria-label="Browse for local repository"]')!
+      .click()
+    await settle()
+
+    expect(chooseDirectory).toHaveBeenCalledOnce()
+    expect(target.querySelector<HTMLInputElement>('input[name="path"]')?.value).toBe(
+      'D:\\dev\\stellr',
+    )
+  })
+
   it('enables Add only when exactly one trimmed input is nonblank', () => {
     const target = render([])
     const path = target.querySelector<HTMLInputElement>('input[name="path"]')!

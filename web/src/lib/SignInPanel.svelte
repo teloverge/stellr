@@ -1,17 +1,23 @@
 <script lang="ts">
+  import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon'
+  import SparkleIcon from 'phosphor-svelte/lib/SparkleIcon'
   import type { DeviceFlowStatus } from './native-auth'
+  import { openExternalUrl } from './native-shell'
 
   let {
     status,
     begin,
     cancel,
+    openExternal = openExternalUrl,
   }: {
     status: DeviceFlowStatus
     begin: () => Promise<void>
     cancel: () => Promise<void>
+    openExternal?: typeof openExternalUrl
   } = $props()
 
   let busy = $state(false)
+  let externalError = $state<string | null>(null)
 
   async function run(action: () => Promise<void>): Promise<void> {
     busy = true
@@ -22,6 +28,15 @@
     }
   }
 
+  async function openVerification(url: string): Promise<void> {
+    externalError = null
+    try {
+      await openExternal(url)
+    } catch (error) {
+      externalError = String(error)
+    }
+  }
+
   function minutes(seconds: number): string {
     const count = Math.max(1, Math.ceil(seconds / 60))
     return `${count} ${count === 1 ? 'minute' : 'minutes'}`
@@ -29,7 +44,7 @@
 </script>
 
 <section class="sign-in-panel" aria-labelledby="github-sign-in-title">
-  <div class="constellation" aria-hidden="true">✦</div>
+  <div class="constellation" aria-hidden="true"><SparkleIcon size="100%" weight="thin" /></div>
   <div class="content">
     <p class="eyebrow">Native authorization</p>
     <h1 id="github-sign-in-title">Connect GitHub</h1>
@@ -40,7 +55,15 @@
     {:else if status.state === 'pending' || status.state === 'slow_down'}
       <p>Open GitHub, then enter this one-time code:</p>
       <strong class="user-code">{status.user_code}</strong>
-      <a href={status.verification_uri} target="_blank" rel="noreferrer">Open GitHub device sign-in</a>
+      <button
+        type="button"
+        data-external-url={status.verification_uri}
+        onclick={() => openVerification(status.verification_uri)}
+      >
+        Open GitHub device sign-in
+        <ArrowSquareOutIcon size={18} aria-hidden="true" />
+      </button>
+      {#if externalError}<p role="alert">{externalError}</p>{/if}
       <p class="expiry">Code expires in {minutes(status.expires_in_seconds)}.</p>
       {#if status.state === 'slow_down'}
         <p class="notice">GitHub asked Stellr to check less often. Your code is still valid.</p>
@@ -78,7 +101,7 @@
     padding: 2rem;
     background:
       radial-gradient(circle at 68% 24%, color-mix(in oklch, var(--primary) 16%, transparent), transparent 34%),
-      color-mix(in oklch, var(--background) 92%, transparent);
+      color-mix(in oklch, var(--background) 88%, transparent);
     backdrop-filter: blur(16px);
   }
 
@@ -97,8 +120,8 @@
     padding: clamp(1.5rem, 4vw, 3rem);
     border: 1px solid var(--border);
     border-radius: 1.25rem;
-    background: color-mix(in oklch, var(--background) 94%, var(--muted));
-    box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 45%);
+    background: color-mix(in oklch, var(--surface-raised) 94%, var(--muted));
+    box-shadow: 0 1.5rem 5rem var(--shadow-color);
     text-align: center;
   }
 
@@ -130,7 +153,6 @@
     letter-spacing: 0.08em;
   }
 
-  a,
   button {
     display: inline-flex;
     align-items: center;
@@ -139,11 +161,12 @@
     padding: 0 1.25rem;
     border: 1px solid var(--primary);
     border-radius: 0.65rem;
-    color: var(--background);
+    color: var(--primary-foreground);
     background: var(--primary);
     font-weight: 700;
     text-decoration: none;
     cursor: pointer;
+    gap: 0.45rem;
   }
 
   button:disabled {

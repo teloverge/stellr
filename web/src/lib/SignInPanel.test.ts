@@ -15,10 +15,11 @@ function render(
   status: DeviceFlowStatus,
   begin = vi.fn(async () => undefined),
   cancel = vi.fn(async () => undefined),
+  openExternal = vi.fn(async () => undefined),
 ): { target: HTMLElement; begin: typeof begin; cancel: typeof cancel } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  mounted.push(mount(SignInPanel, { target, props: { status, begin, cancel } }))
+  mounted.push(mount(SignInPanel, { target, props: { status, begin, cancel, openExternal } }))
   flushSync()
   return { target, begin, cancel }
 }
@@ -41,23 +42,24 @@ describe('native GitHub sign-in panel', () => {
   })
 
   it('shows only the operator-safe code, verification link, expiry, and cancel action', async () => {
+    const openExternal = vi.fn(async () => undefined)
     const { target, cancel } = render({
       state: 'pending',
       user_code: 'ABCD-EFGH',
       verification_uri: 'https://github.com/login/device',
       expires_in_seconds: 900,
       interval_seconds: 5,
-    })
+    }, undefined, undefined, openExternal)
 
     expect(target.textContent).toContain('ABCD-EFGH')
     expect(target.textContent).toContain('15 minutes')
     expect(target.innerHTML).not.toContain('device_code')
     expect(target.innerHTML).not.toContain('access_token')
-    expect(target.querySelector<HTMLAnchorElement>('a')?.href).toBe(
-      'https://github.com/login/device',
-    )
+    target.querySelector<HTMLButtonElement>('button[data-external-url]')!.click()
+    await settle()
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/login/device')
 
-    target.querySelector<HTMLButtonElement>('button')!.click()
+    target.querySelector<HTMLButtonElement>('button.secondary')!.click()
     await settle()
     expect(cancel).toHaveBeenCalledOnce()
   })
