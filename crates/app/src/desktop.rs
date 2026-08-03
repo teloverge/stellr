@@ -131,6 +131,20 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+fn startup_diagnostic(stage: &str) {
+    if std::env::var_os("STELLR_STARTUP_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        eprintln!("STELLR_DESKTOP_STARTUP_STAGE={stage}");
+    }
+}
+
+fn startup_diagnostic_error(context: &str, error: &dyn std::fmt::Display) {
+    if std::env::var_os("STELLR_STARTUP_DIAGNOSTICS").as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        eprintln!("STELLR_DESKTOP_STARTUP_ERROR={context}: {error}");
+    }
+}
+
 fn create_tray(app: &tauri::App) -> tauri::Result<TrayIcon> {
     let open = MenuItem::with_id(app, "open", "Open", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -537,9 +551,12 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
+            startup_diagnostic("setup-begin");
             let startup = tauri::async_runtime::block_on(async {
                 let target = TargetResolver::new(launch.cwd.clone()).resolve(&launch.target)?;
+                startup_diagnostic("target-resolved");
                 let (provider, credential_present) = provider_from_environment()?;
+                startup_diagnostic("provider-ready");
                 let provider_slot = ProviderSlot::new(provider);
                 let polling =
                     PollingControl::focus_aware(FOCUSED_POLL_INTERVAL, BACKGROUND_POLL_INTERVAL);
@@ -550,6 +567,7 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                     Some(polling),
                 )
                 .await?;
+                startup_diagnostic("runtime-ready");
                 let auth = DesktopAuthState::new(
                     device_flow_controller()?,
                     credential_present,
@@ -557,12 +575,14 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                     runtime.state().refresh.clone(),
                     Arc::new(OsCredentialStore::default()),
                 );
+                startup_diagnostic("auth-ready");
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>((runtime, auth, target))
             });
 
             let (runtime, auth, target) = match startup {
                 Ok(startup) => startup,
                 Err(error) => {
+                    startup_diagnostic_error("startup", error.as_ref());
                     app.dialog()
                         .message(error.to_string())
                         .kind(MessageDialogKind::Error)
@@ -575,8 +595,12 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
             let startup_route = initial_route(&target, route_state.load(), launch.restore_route);
             let url = route_url(runtime.cockpit_url().parse()?, &startup_route);
             let window = match create_main_window(app, url) {
-                Ok(window) => window,
+                Ok(window) => {
+                    startup_diagnostic("window-created");
+                    window
+                }
                 Err(error) => {
+                    startup_diagnostic_error("window", &error);
                     app.dialog()
                         .message(error.to_string())
                         .kind(MessageDialogKind::Error)
@@ -603,7 +627,9 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                 _ => {}
             });
             window.show()?;
+            startup_diagnostic("window-visible");
             let tray = create_tray(app)?;
+            startup_diagnostic("tray-ready");
             app.manage(DesktopState {
                 _runtime: runtime,
                 _tray: tray,

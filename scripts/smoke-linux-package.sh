@@ -85,7 +85,7 @@ else
   command=("$executable")
 fi
 
-"${command[@]}" >"$launch_log" 2>&1 &
+STELLR_STARTUP_DIAGNOSTICS=1 "${command[@]}" >"$launch_log" 2>&1 &
 app_pid=$!
 visible='false'
 listeners=''

@@ -41,8 +41,10 @@ Assert-True ($releaseAppImageJob.Contains('xdg-desktop-portal-gtk')) `
 
 $buildScript = Join-Path $repo 'scripts\build-linux-packages.sh'
 $smokeScript = Join-Path $repo 'scripts\smoke-linux-package.sh'
+$desktopSource = Join-Path $repo 'crates\app\src\desktop.rs'
 Assert-True (Test-Path $buildScript) 'The Linux package build script is missing.'
 Assert-True (Test-Path $smokeScript) 'The Linux package smoke script is missing.'
+Assert-True (Test-Path $desktopSource) 'The desktop host source is missing.'
 
 $config = Get-Content (Join-Path $repo 'crates\app\tauri.conf.json') -Raw | ConvertFrom-Json
 $debDepends = $config.bundle.linux.deb.depends
@@ -61,6 +63,11 @@ Assert-True ($build.Contains('--bundles appimage,deb')) 'The build must produce 
 Assert-True ($build.Contains('uname -m')) 'The build must reject non-x86_64 hosts.'
 
 $smoke = Get-Content $smokeScript -Raw
+$desktop = Get-Content $desktopSource -Raw
+Assert-True ($smoke.Contains('STELLR_STARTUP_DIAGNOSTICS=1')) `
+  'The smoke must enable opt-in desktop startup diagnostics.'
+Assert-True ($desktop.Contains('STELLR_DESKTOP_STARTUP_STAGE=')) `
+  'The desktop host must expose opt-in startup stage evidence.'
 Assert-True ($smoke.Contains('xvfb-run')) 'The smoke must launch the native shell under a display server.'
 Assert-True ($smoke.Contains('dbus-run-session')) 'The smoke must launch WebKitGTK inside a clean D-Bus session.'
 Assert-True ($smoke.Contains('openbox')) 'The smoke must launch a window manager before asserting visibility.'
