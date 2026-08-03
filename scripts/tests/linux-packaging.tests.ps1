@@ -68,6 +68,12 @@ $xvfbIndex = $smoke.IndexOf('xvfb-run')
 $dbusIndex = $smoke.IndexOf('dbus-run-session')
 Assert-True ($xvfbIndex -lt $dbusIndex) 'Xvfb must set DISPLAY before the D-Bus activation environment is created.'
 Assert-True ($smoke.Contains('xdotool search --onlyvisible')) 'The smoke must prove the native shell is visible.'
+Assert-True ($smoke.Contains('ps -eo pid=,ppid=,stat=,comm=,args= --forest')) `
+  'A failed smoke must report the application process tree.'
+Assert-True ($smoke.Contains('xdotool getwindowname')) `
+  'A failed smoke must report every visible window title.'
+Assert-True ($smoke.Contains('xdotool getwindowpid')) `
+  'A failed smoke must report every visible window owner.'
 Assert-True ($smoke.Contains('ss -ltnp')) 'The smoke must inspect the application process listeners.'
 Assert-True ($smoke.Contains('127.0.0.1:')) 'The smoke must permit IPv4 loopback listeners.'
 Assert-True ($smoke.Contains('[::1]')) 'The smoke must permit IPv6 loopback listeners.'

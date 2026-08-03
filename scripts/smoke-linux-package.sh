@@ -40,6 +40,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
+dump_diagnostics() {
+  printf '\nApplication process tree:\n' >&2
+  ps -eo pid=,ppid=,stat=,comm=,args= --forest >&2 || true
+  printf '\nVisible windows:\n' >&2
+  window_ids="$(xdotool search --onlyvisible --name '.*' 2>/dev/null || true)"
+  if [[ -z "$window_ids" ]]; then
+    printf '(none)\n' >&2
+  else
+    for window_id in $window_ids; do
+      window_title="$(xdotool getwindowname "$window_id" 2>/dev/null || printf '<unavailable>')"
+      window_pid="$(xdotool getwindowpid "$window_id" 2>/dev/null || printf '<unavailable>')"
+      printf 'id=%s pid=%s title=%s\n' "$window_id" "$window_pid" "$window_title" >&2
+    done
+  fi
+  printf '\nListening sockets:\n' >&2
+  ss -ltnp >&2 || true
+  printf '\nApplication log:\n' >&2
+  cat "$launch_log" >&2
+  printf '\nWindow-manager log:\n' >&2
+  cat "$wm_log" >&2
+}
+
 openbox >"$wm_log" 2>&1 &
 wm_pid=$!
 sleep 0.5
@@ -71,7 +93,7 @@ listeners=''
 for _ in {1..60}; do
   if ! kill -0 "$app_pid" 2>/dev/null; then
     printf 'Packaged Stellr exited before its native shell became ready.\n' >&2
-    cat "$launch_log" >&2
+    dump_diagnostics
     exit 1
   fi
   if xdotool search --onlyvisible --name '^Stellr$' >/dev/null 2>&1; then
@@ -86,12 +108,12 @@ done
 
 if [[ "$visible" != 'true' ]]; then
   printf 'The packaged native Stellr window never became visible.\n' >&2
-  cat "$launch_log" >&2
+  dump_diagnostics
   exit 1
 fi
 if [[ -z "$listeners" ]]; then
   printf 'No embedded-server listener was owned by the Stellr process.\n' >&2
-  cat "$launch_log" >&2
+  dump_diagnostics
   exit 1
 fi
 
