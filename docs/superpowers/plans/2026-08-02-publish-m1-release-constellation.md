@@ -1,7 +1,9 @@
 # Publish the M1 Release Constellation
 
-**Issue:** #54  
-**Branch:** `codex/issues-47-54-readme-showcase`  
+**Issue:** #54
+
+**Branch:** `codex/issues-47-54-readme-showcase`
+
 **Environment:** Native Windows 11 and PowerShell
 
 ## Frozen release identity

@@ -1,7 +1,9 @@
 # M1 Release Constellation Validation
 
-**Issue:** #54  
-**Artifact version:** `m1`  
+**Issue:** #54
+
+**Artifact version:** `m1`
+
 **Milestone:** `M1 — the chart`
 
 ## Frozen evidence boundary

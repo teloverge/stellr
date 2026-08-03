@@ -12,10 +12,28 @@ Rust + Tauri 2 desktop app for Windows 11, macOS, and Linux; the same binary
 runs headless (`stellr serve`) so the UI can live in VS Code's Simple Browser,
 t3code's preview pane, or any browser.
 
-**Status: design phase.** The approved design spec is at
+**Status: M1 is available.** The headless server synchronizes GitHub issues and
+serves the interactive star-map in a browser or IDE pane. The approved design
+spec remains at
 [`docs/specs/2026-07-29-stellr-port-design.md`](docs/specs/2026-07-29-stellr-port-design.md).
-No code yet; `reference/` holds assets from the reference implementation that
-port verbatim.
+
+## Quick start (M1)
+
+Install the stable Rust toolchain, Node.js 24 with npm, and the GitHub CLI.
+Authenticate with `gh auth login`, or set `GITHUB_TOKEN` in the environment.
+
+From the repository root in PowerShell:
+
+```powershell
+npm.cmd --prefix web ci
+npm.cmd --prefix web run build
+cargo.exe run -p stellr-app -- serve
+```
+
+Open the printed `stellr cockpit` URL in any browser. In VS Code, use
+**Simple Browser: Show** and paste the same URL. Add a space from the sidebar
+using a local repository path or an `owner/repo` name; stellr synchronizes its
+issues and renders them as the star-map.
 
 <!-- stellr-release-constellation:start -->
 ## Release constellation
