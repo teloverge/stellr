@@ -62,7 +62,16 @@ jobs:
       - name: Install clean-runner AppImage smoke dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dbus-x11 iproute2 libegl1 libfuse2 openbox xdotool xvfb
+          sudo apt-get install -y \
+            dbus-x11 \
+            iproute2 \
+            libegl1 \
+            libfuse2 \
+            openbox \
+            xdg-desktop-portal \
+            xdg-desktop-portal-gtk \
+            xdotool \
+            xvfb
       - name: Directly launch AppImage and prove the native boundary
         run: bash scripts/smoke-linux-package.sh AppImage artifacts/linux-x86_64/*.AppImage
 

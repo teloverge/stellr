@@ -18,9 +18,26 @@ Assert-True ($workflow.Contains('smoke-appimage')) 'The AppImage must have its o
 Assert-True ($workflow.Contains('smoke-deb')) 'The deb must have its own clean-runner smoke job.'
 Assert-True ($workflow.Contains('libegl1')) 'The clean AppImage runner must install the EGL runtime required by WebKitGTK.'
 Assert-True ($workflow.Contains('openbox')) 'Linux smoke jobs must provide a window manager for the visibility proof.'
+$appImageStart = $workflow.IndexOf('  smoke-appimage:')
+$appImageEnd = $workflow.IndexOf('  smoke-deb:', $appImageStart)
+$appImageJob = $workflow.Substring($appImageStart, $appImageEnd - $appImageStart)
+Assert-True ($appImageJob.Contains('xdg-desktop-portal')) `
+  'The clean AppImage runner must provide the desktop portal service used during WebKitGTK startup.'
+Assert-True ($appImageJob.Contains('xdg-desktop-portal-gtk')) `
+  'The clean AppImage runner must provide a desktop portal backend.'
 $releaseWorkflow = Get-Content (Join-Path $repo '.github\workflows\release.yml') -Raw
 Assert-True ($releaseWorkflow.Contains('libegl1')) 'Release AppImage smoke must install the EGL runtime.'
 Assert-True ($releaseWorkflow.Contains('openbox')) 'Release Linux smoke jobs must provide a window manager.'
+$releaseAppImageStart = $releaseWorkflow.IndexOf('  linux-appimage-smoke:')
+$releaseAppImageEnd = $releaseWorkflow.IndexOf('  linux-deb-smoke:', $releaseAppImageStart)
+$releaseAppImageJob = $releaseWorkflow.Substring(
+  $releaseAppImageStart,
+  $releaseAppImageEnd - $releaseAppImageStart
+)
+Assert-True ($releaseAppImageJob.Contains('xdg-desktop-portal')) `
+  'Release AppImage smoke must provide the desktop portal service.'
+Assert-True ($releaseAppImageJob.Contains('xdg-desktop-portal-gtk')) `
+  'Release AppImage smoke must provide a desktop portal backend.'
 
 $buildScript = Join-Path $repo 'scripts\build-linux-packages.sh'
 $smokeScript = Join-Path $repo 'scripts\smoke-linux-package.sh'
