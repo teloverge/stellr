@@ -27,6 +27,13 @@ $smokeScript = Join-Path $repo 'scripts\smoke-linux-package.sh'
 Assert-True (Test-Path $buildScript) 'The Linux package build script is missing.'
 Assert-True (Test-Path $smokeScript) 'The Linux package smoke script is missing.'
 
+$config = Get-Content (Join-Path $repo 'crates\app\tauri.conf.json') -Raw | ConvertFrom-Json
+$debDepends = $config.bundle.linux.deb.depends
+Assert-True ($debDepends -contains 'libwebkit2gtk-4.1-0') 'The deb must declare its WebKitGTK runtime dependency.'
+Assert-True ($debDepends -contains 'libgtk-3-0') 'The deb must declare its GTK runtime dependency.'
+Assert-True ($debDepends -contains 'libayatana-appindicator3-1 | libappindicator3-1') `
+  'The deb must declare a compatible tray-indicator runtime dependency.'
+
 $build = Get-Content $buildScript -Raw
 Assert-True ($build.Contains('--bundles appimage,deb')) 'The build must produce both AppImage and deb packages.'
 Assert-True ($build.Contains('uname -m')) 'The build must reject non-x86_64 hosts.'
@@ -35,6 +42,9 @@ $smoke = Get-Content $smokeScript -Raw
 Assert-True ($smoke.Contains('xvfb-run')) 'The smoke must launch the native shell under a display server.'
 Assert-True ($smoke.Contains('dbus-run-session')) 'The smoke must launch WebKitGTK inside a clean D-Bus session.'
 Assert-True ($smoke.Contains('openbox')) 'The smoke must launch a window manager before asserting visibility.'
+$xvfbIndex = $smoke.IndexOf('xvfb-run')
+$dbusIndex = $smoke.IndexOf('dbus-run-session')
+Assert-True ($xvfbIndex -lt $dbusIndex) 'Xvfb must set DISPLAY before the D-Bus activation environment is created.'
 Assert-True ($smoke.Contains('xdotool search --onlyvisible')) 'The smoke must prove the native shell is visible.'
 Assert-True ($smoke.Contains('ss -ltnp')) 'The smoke must inspect the application process listeners.'
 Assert-True ($smoke.Contains('127.0.0.1:')) 'The smoke must permit IPv4 loopback listeners.'

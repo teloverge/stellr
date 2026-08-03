@@ -2,6 +2,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Duration;
 
 use stellr_github::device_flow::{
     DeviceFlowClient, DeviceFlowController, DeviceFlowStatus, PollOutcome,
@@ -34,20 +35,14 @@ fn client(server: &MockServer) -> DeviceFlowClient {
     DeviceFlowClient::new(server.uri().parse().unwrap(), CLIENT_ID, "repo").unwrap()
 }
 
-async fn wait_for_calls(calls: &AtomicUsize, expected: usize) {
-    for _ in 0..100 {
-        if calls.load(Ordering::SeqCst) == expected {
+async fn wait_for_status(controller: &DeviceFlowController, expected: DeviceFlowStatus) {
+    for _ in 0..1_000 {
+        if controller.status().await == expected {
             return;
         }
         tokio::task::yield_now().await;
     }
-    assert_eq!(calls.load(Ordering::SeqCst), expected);
-}
-
-async fn settle_http_response() {
-    for _ in 0..100 {
-        tokio::task::yield_now().await;
-    }
+    assert_eq!(controller.status().await, expected);
 }
 
 #[tokio::test]
@@ -151,10 +146,57 @@ impl Respond for SequenceResponder {
     }
 }
 
+#[derive(Clone)]
+struct AuthorizedResponder {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Respond for AuthorizedResponder {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "native-only-token",
+            "token_type": "bearer",
+            "scope": "repo"
+        }))
+    }
+}
+
 #[tokio::test(start_paused = true)]
-async fn pending_and_slow_down_respect_the_server_interval_and_add_five_seconds() {
+async fn polling_waits_for_the_server_interval_before_the_first_request() {
     let server = MockServer::start().await;
     mount_device_code(&server, 1).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path("/login/oauth/access_token"))
+        .respond_with(AuthorizedResponder {
+            calls: calls.clone(),
+        })
+        .mount(&server)
+        .await;
+    let controller = DeviceFlowController::new(client(&server));
+    controller.begin().await.unwrap();
+    tokio::task::yield_now().await;
+
+    tokio::time::advance(Duration::from_millis(999)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    tokio::time::advance(Duration::from_millis(1)).await;
+    wait_for_status(
+        &controller,
+        DeviceFlowStatus::Authorized {
+            storage_warning: None,
+        },
+    )
+    .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_then_slow_down_adds_five_seconds_before_the_next_poll() {
+    let server = MockServer::start().await;
+    mount_device_code(&server, 0).await;
     let calls = Arc::new(AtomicUsize::new(0));
     Mock::given(method("POST"))
         .and(path("/login/oauth/access_token"))
@@ -165,33 +207,32 @@ async fn pending_and_slow_down_respect_the_server_interval_and_add_five_seconds(
         .await;
     let controller = DeviceFlowController::new(client(&server));
     controller.begin().await.unwrap();
+
+    wait_for_status(
+        &controller,
+        DeviceFlowStatus::SlowDown {
+            user_code: "ABCD-EFGH".into(),
+            verification_uri: "https://github.com/login/device".into(),
+            expires_in_seconds: 900,
+            interval_seconds: 5,
+        },
+    )
+    .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
     tokio::task::yield_now().await;
 
-    tokio::time::advance(std::time::Duration::from_millis(999)).await;
-    tokio::task::yield_now().await;
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-
-    tokio::time::advance(std::time::Duration::from_millis(1)).await;
-    wait_for_calls(&calls, 1).await;
-    settle_http_response().await;
-
-    tokio::time::advance(std::time::Duration::from_secs(1)).await;
-    wait_for_calls(&calls, 2).await;
-    settle_http_response().await;
-
-    tokio::time::advance(std::time::Duration::from_millis(5_999)).await;
+    tokio::time::advance(Duration::from_millis(4_999)).await;
     tokio::task::yield_now().await;
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 
-    tokio::time::advance(std::time::Duration::from_millis(1)).await;
-    wait_for_calls(&calls, 3).await;
-    settle_http_response().await;
-    assert_eq!(
-        controller.status().await,
+    tokio::time::advance(Duration::from_millis(1)).await;
+    wait_for_status(
+        &controller,
         DeviceFlowStatus::Authorized {
             storage_warning: None,
-        }
-    );
+        },
+    )
+    .await;
     assert_eq!(
         controller.take_token().await.as_deref(),
         Some("native-only-token")

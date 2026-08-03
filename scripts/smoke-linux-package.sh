@@ -15,7 +15,7 @@ package="$(realpath "$2")"
 script="$(realpath "$0")"
 
 if [[ -z "${DISPLAY:-}" ]]; then
-  exec dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash "$script" "$kind" "$package"
+  exec xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- bash "$script" "$kind" "$package"
 fi
 
 app_pid=''
