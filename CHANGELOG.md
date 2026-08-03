@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a native fail-closed live release preview command that acquires complete
+  GitHub evidence, proves byte determinism, validates all four review outputs,
+  and atomically exposes them under the ignored `target/readme-showcase` tree.
 - Added a truthful twelve-second release replay with fixed graph geometry,
   evidence-keyed synchronized status beats, CURRENT and READY focus, motion only
   on newly traversable resolved edges, a two-second final hold, soft reset, and

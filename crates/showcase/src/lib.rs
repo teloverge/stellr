@@ -2,6 +2,7 @@
 
 mod github_source;
 mod preview;
+mod preview_operation;
 mod story;
 
 pub use github_source::{
@@ -9,6 +10,10 @@ pub use github_source::{
     ReleaseWindowStart,
 };
 pub use preview::{PreviewRenderError, StaticPreview, render_static_preview};
+pub use preview_operation::{
+    DefaultPreviewRenderer, PreviewOperationError, PreviewReceipt, PreviewRenderer,
+    generate_release_preview,
+};
 pub use story::{
     ClosureReason, IssueSnapshot, IssueStatus, LifecycleEvent, LifecycleEventKind,
     MilestoneIdentity, NodeCoordinate, NormalizedLifecycleEvent, PreviousRelease, RecordedIssue,
