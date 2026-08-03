@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/github", "crates/server", "crates/app"]
+members = [
+    "crates/core",
+    "crates/github",
+    "crates/server",
+    "crates/app",
+    "crates/showcase",
+]
 
 [workspace.package]
 edition = "2024"

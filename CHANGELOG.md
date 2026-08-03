@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Published the first real M1 release constellation from the frozen live GitHub
+  issue history, with immutable SVG, PNG, and story evidence linked from the
+  README through animated, reduced-motion, and strict-Markdown paths.
+- Added explicit digest-gated acceptance for reviewed release previews, with
+  immutable versioned SVG, PNG, and story assets plus a README-last atomic
+  publication step and exact unreferenced-asset failure reporting.
+- Added a native fail-closed live release preview command that acquires complete
+  GitHub evidence, proves byte determinism, validates all four review outputs,
+  and atomically exposes them under the ignored `target/readme-showcase` tree.
+- Added a truthful twelve-second release replay with fixed graph geometry,
+  evidence-keyed synchronized status beats, CURRENT and READY focus, motion only
+  on newly traversable resolved edges, a two-second final hold, soft reset, and
+  a deterministic reduced-motion final state.
+- Added deterministic final-scene release previews with a safe 1200-by-675 SVG,
+  matching 1600-by-900 PNG, canonical manifest, self-contained review page,
+  bounded accessible labels, fixed asset budgets, and a bundled raster font.
+- Added a read-only live GitHub release-history source with complete milestone,
+  release, issue, blocker, and lifecycle pagination; explicit first/later release
+  boundaries; inherited typed provider failures; and manifest privacy checks.
+- Added deterministic, auditable release-story manifests with explicit UTC
+  boundaries, lifecycle reconstruction through Stellr's core status derivation,
+  hidden blocker support, bounded beat grouping, and precise fail-closed
+  evidence diagnostics.
+- Added a script-free animated README constellation compatibility probe with a
+  reduced-motion PNG and strict-Markdown fallback path.
 - Compacted native subissue workflows into deterministic parent-local arcs
   that avoid unrelated nodes and dependency paths, with bounded overflow,
   nested-cluster placement, and safe malformed-data fallbacks.
