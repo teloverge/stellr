@@ -33,8 +33,12 @@ Assert-True (Test-Path $signingScript) 'The fail-closed macOS signing guard is m
 $build = Get-Content $buildScript -Raw
 Assert-True ($build.Contains('--target universal-apple-darwin')) 'The build must use Tauri universal-apple-darwin.'
 Assert-True ($build.Contains('--bundles dmg')) 'The build must produce a DMG.'
+Assert-True (-not $build.Contains('app="$bundle_root/macos/Stellr.app"')) `
+  'The build must not require Tauri staging app output after DMG finalization.'
 
 $inspect = Get-Content $inspectScript -Raw
+Assert-True ($inspect.Contains('The DMG does not contain Stellr.app')) `
+  'The mounted DMG inspection must own the packaged app-presence proof.'
 Assert-True ($inspect.Contains('lipo -archs')) 'The packaged binary slices must be inspected with lipo.'
 Assert-True ($inspect.Contains('arm64')) 'The inspection must require an arm64 slice.'
 Assert-True ($inspect.Contains('x86_64')) 'The inspection must require an x86_64 slice.'

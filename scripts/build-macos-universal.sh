@@ -31,24 +31,10 @@ npm --prefix "$repo/web" run build
 )
 
 bundle_root="$repo/target/universal-apple-darwin/release/bundle"
-app="$bundle_root/macos/Stellr.app"
 dmg="$(find "$bundle_root/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
-if [[ ! -d "$app" || -z "$dmg" ]]; then
-  printf 'Tauri did not produce both Stellr.app and a DMG.\n' >&2
+if [[ -z "$dmg" ]]; then
+  printf 'Tauri did not produce a DMG.\n' >&2
   exit 1
-fi
-
-signature="$(codesign -dv --verbose=4 "$app" 2>&1 || true)"
-if [[ "$channel" == 'Development' && "$signature" == *'Authority=Developer ID Application'* ]]; then
-  printf 'Development DMG unexpectedly carries a Developer ID identity.\n' >&2
-  exit 1
-fi
-if [[ "$channel" == 'Release' ]]; then
-  codesign --verify --deep --strict --verbose=2 "$app"
-  if [[ "$signature" != *'Authority=Developer ID Application'* ]]; then
-    printf 'Official DMG is not signed with a Developer ID Application identity.\n' >&2
-    exit 1
-  fi
 fi
 
 artifact_dir="$repo/artifacts/macos-universal"

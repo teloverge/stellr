@@ -15,24 +15,39 @@ package="$(realpath "$2")"
 script="$(realpath "$0")"
 
 if [[ -z "${DISPLAY:-}" ]]; then
-  exec xvfb-run -a -s '-screen 0 1280x800x24' bash "$script" "$kind" "$package"
+  exec dbus-run-session -- xvfb-run -a -s '-screen 0 1280x800x24' bash "$script" "$kind" "$package"
 fi
 
 app_pid=''
+wm_pid=''
 installed_package=''
 launch_log="$(mktemp)"
+wm_log="$(mktemp)"
 
 cleanup() {
   if [[ -n "$app_pid" ]] && kill -0 "$app_pid" 2>/dev/null; then
     kill -TERM "$app_pid" 2>/dev/null || true
     wait "$app_pid" 2>/dev/null || true
   fi
+  if [[ -n "$wm_pid" ]] && kill -0 "$wm_pid" 2>/dev/null; then
+    kill -TERM "$wm_pid" 2>/dev/null || true
+    wait "$wm_pid" 2>/dev/null || true
+  fi
   if [[ -n "$installed_package" ]]; then
     sudo apt-get remove -y "$installed_package" >/dev/null 2>&1 || true
   fi
-  rm -f "$launch_log"
+  rm -f "$launch_log" "$wm_log"
 }
 trap cleanup EXIT
+
+openbox >"$wm_log" 2>&1 &
+wm_pid=$!
+sleep 0.5
+if ! kill -0 "$wm_pid" 2>/dev/null; then
+  printf 'The clean-runner window manager failed to start.\n' >&2
+  cat "$wm_log" >&2
+  exit 1
+fi
 
 if [[ "$kind" == 'AppImage' ]]; then
   chmod +x "$package"

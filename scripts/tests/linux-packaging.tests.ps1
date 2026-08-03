@@ -16,6 +16,11 @@ Assert-True ($workflow.Contains('GITHUB_STEP_SUMMARY')) 'The workflow summary mu
 Assert-True ($workflow.Contains('actions/download-artifact@v4')) 'Smoke jobs must download packages into clean runners.'
 Assert-True ($workflow.Contains('smoke-appimage')) 'The AppImage must have its own clean-runner smoke job.'
 Assert-True ($workflow.Contains('smoke-deb')) 'The deb must have its own clean-runner smoke job.'
+Assert-True ($workflow.Contains('libegl1')) 'The clean AppImage runner must install the EGL runtime required by WebKitGTK.'
+Assert-True ($workflow.Contains('openbox')) 'Linux smoke jobs must provide a window manager for the visibility proof.'
+$releaseWorkflow = Get-Content (Join-Path $repo '.github\workflows\release.yml') -Raw
+Assert-True ($releaseWorkflow.Contains('libegl1')) 'Release AppImage smoke must install the EGL runtime.'
+Assert-True ($releaseWorkflow.Contains('openbox')) 'Release Linux smoke jobs must provide a window manager.'
 
 $buildScript = Join-Path $repo 'scripts\build-linux-packages.sh'
 $smokeScript = Join-Path $repo 'scripts\smoke-linux-package.sh'
@@ -28,6 +33,8 @@ Assert-True ($build.Contains('uname -m')) 'The build must reject non-x86_64 host
 
 $smoke = Get-Content $smokeScript -Raw
 Assert-True ($smoke.Contains('xvfb-run')) 'The smoke must launch the native shell under a display server.'
+Assert-True ($smoke.Contains('dbus-run-session')) 'The smoke must launch WebKitGTK inside a clean D-Bus session.'
+Assert-True ($smoke.Contains('openbox')) 'The smoke must launch a window manager before asserting visibility.'
 Assert-True ($smoke.Contains('xdotool search --onlyvisible')) 'The smoke must prove the native shell is visible.'
 Assert-True ($smoke.Contains('ss -ltnp')) 'The smoke must inspect the application process listeners.'
 Assert-True ($smoke.Contains('127.0.0.1:')) 'The smoke must permit IPv4 loopback listeners.'

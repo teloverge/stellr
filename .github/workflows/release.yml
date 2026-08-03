@@ -179,7 +179,7 @@ jobs:
         with:
           name: release-linux
           path: artifacts/linux-x86_64
-      - run: sudo apt-get update && sudo apt-get install -y iproute2 libfuse2 xdotool xvfb
+      - run: sudo apt-get update && sudo apt-get install -y dbus-x11 iproute2 libegl1 libfuse2 openbox xdotool xvfb
       - run: bash scripts/smoke-linux-package.sh AppImage artifacts/linux-x86_64/*.AppImage
 
   linux-deb-smoke:
@@ -191,7 +191,7 @@ jobs:
         with:
           name: release-linux
           path: artifacts/linux-x86_64
-      - run: sudo apt-get update && sudo apt-get install -y iproute2 xdotool xvfb
+      - run: sudo apt-get update && sudo apt-get install -y dbus-x11 iproute2 libegl1 openbox xdotool xvfb
       - run: bash scripts/smoke-linux-package.sh Deb artifacts/linux-x86_64/*.deb
 
   publish-draft:
