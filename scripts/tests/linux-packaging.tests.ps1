@@ -34,6 +34,11 @@ Assert-True ($debDepends -contains 'libgtk-3-0') 'The deb must declare its GTK r
 Assert-True ($debDepends -contains 'libayatana-appindicator3-1 | libappindicator3-1') `
   'The deb must declare a compatible tray-indicator runtime dependency.'
 
+$defaultIcon = Join-Path $repo 'crates\app\icons\icon.png'
+$defaultIconBytes = [System.IO.File]::ReadAllBytes($defaultIcon)
+Assert-True ($defaultIconBytes[24] -eq 8) 'The default PNG must use 8-bit channels for the Linux tray backend.'
+Assert-True ($defaultIconBytes[25] -eq 6) 'The default PNG must use RGBA color for the Linux tray backend.'
+
 $build = Get-Content $buildScript -Raw
 Assert-True ($build.Contains('--bundles appimage,deb')) 'The build must produce both AppImage and deb packages.'
 Assert-True ($build.Contains('uname -m')) 'The build must reject non-x86_64 hosts.'
