@@ -19,7 +19,11 @@ use stellr_github::{
 };
 use stellr_server::poll::PollingControl;
 use stellr_server::spaces::{SpaceEntry, SpaceStore, detect_repo};
-use tauri::{Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    menu::{Menu, MenuItem},
+    tray::{TrayIcon, TrayIconBuilder},
+};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use thiserror::Error;
 use tokio::sync::{Mutex, Notify};
@@ -98,6 +102,48 @@ pub enum DesktopHostError {
 
 struct DesktopState {
     _runtime: ApplicationRuntime,
+    _tray: TrayIcon,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayAction {
+    Open,
+    Quit,
+}
+
+fn tray_action(id: &str) -> Option<TrayAction> {
+    match id {
+        "open" => Some(TrayAction::Open),
+        "quit" => Some(TrayAction::Quit),
+        _ => None,
+    }
+}
+
+fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn create_tray(app: &tauri::App) -> tauri::Result<TrayIcon> {
+    let open = MenuItem::with_id(app, "open", "Open", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let mut builder = TrayIconBuilder::new()
+        .tooltip("Stellr")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match tray_action(event.id().as_ref()) {
+            Some(TrayAction::Open) => show_main_window(app),
+            Some(TrayAction::Quit) => app.exit(0),
+            None => {}
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)
 }
 
 struct DesktopAuthState {
@@ -425,7 +471,11 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                 _ => {}
             });
             window.show()?;
-            app.manage(DesktopState { _runtime: runtime });
+            let tray = create_tray(app)?;
+            app.manage(DesktopState {
+                _runtime: runtime,
+                _tray: tray,
+            });
             app.manage(auth);
             Ok(())
         })
@@ -531,5 +581,12 @@ mod tests {
             initial_route(&target, Some(restored), false),
             PersistedRoute::new("explicit-space", Some(70)).unwrap()
         );
+    }
+
+    #[test]
+    fn tray_menu_exposes_only_open_and_quit_lifecycle_actions() {
+        assert_eq!(tray_action("open"), Some(TrayAction::Open));
+        assert_eq!(tray_action("quit"), Some(TrayAction::Quit));
+        assert_eq!(tray_action("hide"), None);
     }
 }
