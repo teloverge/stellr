@@ -1,10 +1,12 @@
 //! Release-constellation artifacts for Stellr's README.
 
+mod acceptance;
 mod github_source;
 mod preview;
 mod preview_operation;
 mod story;
 
+pub use acceptance::{AcceptanceError, AcceptanceReceipt, accept_release_preview, preview_digest};
 pub use github_source::{
     GithubReleaseHistorySource, LiveReleaseRequest, ReleaseHistoryError, ReleaseHistorySource,
     ReleaseWindowStart,

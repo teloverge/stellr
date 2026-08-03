@@ -10,23 +10,45 @@ fn repository_root() -> &'static Path {
 }
 
 #[test]
-fn readme_offers_animated_and_static_constellation_paths() {
+fn readme_showcase_section_offers_animated_and_static_paths() {
     let readme = fs::read_to_string(repository_root().join("README.md"))
         .expect("the repository README should be readable");
+    let start = readme
+        .find("<!-- stellr-release-constellation:start -->")
+        .expect("README should delimit the showcase start");
+    let end = readme
+        .find("<!-- stellr-release-constellation:end -->")
+        .expect("README should delimit the showcase end");
+    let showcase = &readme[start..end];
 
     for required in [
         "<picture>",
         "media=\"(prefers-reduced-motion: reduce)\"",
-        "srcset=\"docs/assets/readme-showcase/compatibility-probe.png\"",
-        "src=\"docs/assets/readme-showcase/compatibility-probe.svg\"",
-        "alt=\"Stellr release constellation compatibility probe\"",
-        "[View the static release constellation](docs/assets/readme-showcase/compatibility-probe.png)",
+        "srcset=\"docs/assets/readme-showcase/",
+        ".png\"",
+        "src=\"docs/assets/readme-showcase/",
+        ".svg\"",
+        "alt=\"Stellr ",
+        "[View the static ",
+        "](docs/assets/readme-showcase/",
+        ".png)",
     ] {
         assert!(
-            readme.contains(required),
+            showcase.contains(required),
             "README delivery contract is missing {required:?}"
         );
     }
+    let after_picture = showcase
+        .split_once("</picture>")
+        .expect("showcase should close its picture")
+        .1;
+    assert!(
+        after_picture.lines().any(|line| {
+            let line = line.trim();
+            !line.is_empty() && !line.starts_with('[')
+        }),
+        "showcase should include an adjacent text summary"
+    );
 }
 
 #[test]

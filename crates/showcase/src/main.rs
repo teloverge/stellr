@@ -4,8 +4,8 @@ use std::process::{Command, ExitCode};
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use stellr_core::RepoRef;
 use stellr_showcase::{
-    DefaultPreviewRenderer, GithubReleaseHistorySource, LiveReleaseRequest, ReleaseWindowStart,
-    UtcTimestamp, generate_release_preview,
+    DefaultPreviewRenderer, GithubReleaseHistorySource, LiveReleaseRequest, PreviewReceipt,
+    ReleaseWindowStart, UtcTimestamp, accept_release_preview, generate_release_preview,
 };
 use thiserror::Error;
 
@@ -20,6 +20,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum ShowcaseCommand {
     Preview(PreviewArgs),
+    Accept(AcceptArgs),
+}
+
+#[derive(Args)]
+struct AcceptArgs {
+    #[arg(long)]
+    preview: PathBuf,
+    #[arg(long)]
+    digest: String,
 }
 
 #[derive(Args)]
@@ -55,6 +64,8 @@ enum CliError {
     History(#[from] stellr_showcase::ReleaseHistoryError),
     #[error(transparent)]
     Preview(#[from] stellr_showcase::PreviewOperationError),
+    #[error(transparent)]
+    Acceptance(#[from] stellr_showcase::AcceptanceError),
 }
 
 #[tokio::main]
@@ -71,7 +82,25 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         ShowcaseCommand::Preview(args) => preview(args).await,
+        ShowcaseCommand::Accept(args) => accept(args),
     }
+}
+
+fn accept(args: AcceptArgs) -> Result<(), CliError> {
+    let current = std::env::current_dir().map_err(CliError::CurrentDirectory)?;
+    let repository_root = git_repository_root(&current)?;
+    let preview = if args.preview.is_absolute() {
+        args.preview
+    } else {
+        repository_root.join(args.preview)
+    };
+    let receipt = accept_release_preview(&repository_root, &preview, &args.digest)?;
+    println!("Accepted review digest: {}", receipt.digest);
+    for asset in receipt.assets {
+        println!("Accepted asset: {}", asset.display());
+    }
+    println!("README reference: {}", receipt.readme.display());
+    Ok(())
 }
 
 async fn preview(args: PreviewArgs) -> Result<(), CliError> {
@@ -101,8 +130,16 @@ async fn preview(args: PreviewArgs) -> Result<(), CliError> {
         &repository_root,
     )
     .await?;
-    println!("Preview ready: {}", receipt.directory.display());
+    println!("{}", preview_success_message(&receipt));
     Ok(())
+}
+
+fn preview_success_message(receipt: &PreviewReceipt) -> String {
+    format!(
+        "Preview ready: {}\nReview digest: {}",
+        receipt.directory.display(),
+        receipt.digest
+    )
 }
 
 fn git_repository_root(current: &Path) -> Result<PathBuf, CliError> {
@@ -173,9 +210,12 @@ fn parse_repository(value: &str) -> Option<RepoRef> {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use std::path::PathBuf;
 
-    use super::{Cli, ShowcaseCommand, parse_repository};
+    use clap::Parser;
+    use stellr_showcase::PreviewReceipt;
+
+    use super::{Cli, ShowcaseCommand, parse_repository, preview_success_message};
 
     #[test]
     fn preview_cli_requires_one_explicit_release_start() {
@@ -213,6 +253,45 @@ mod tests {
                 "2026-08-02T19:00:00Z",
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn accept_cli_requires_the_preview_and_reviewed_digest() {
+        let accepted = Cli::try_parse_from([
+            "stellr-showcase",
+            "accept",
+            "--preview",
+            "target/readme-showcase/v0.2.0",
+            "--digest",
+            "sha256:abc",
+        ])
+        .unwrap();
+        assert!(matches!(accepted.command, ShowcaseCommand::Accept(_)));
+
+        for missing in [
+            vec!["stellr-showcase", "accept", "--digest", "sha256:abc"],
+            vec![
+                "stellr-showcase",
+                "accept",
+                "--preview",
+                "target/readme-showcase/v0.2.0",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(missing).is_err());
+        }
+    }
+
+    #[test]
+    fn preview_success_output_exposes_the_exact_acceptance_digest() {
+        let message = preview_success_message(&PreviewReceipt {
+            directory: PathBuf::from(r"D:\review\v0.2.0"),
+            digest: "sha256:abc123".to_owned(),
+        });
+
+        assert_eq!(
+            message,
+            "Preview ready: D:\\review\\v0.2.0\nReview digest: sha256:abc123"
         );
     }
 

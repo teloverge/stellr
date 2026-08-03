@@ -39,6 +39,7 @@ impl PreviewRenderer for DefaultPreviewRenderer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewReceipt {
     pub directory: PathBuf,
+    pub digest: String,
 }
 
 /// A preview stage failed before a partial preview could be published.
@@ -92,6 +93,7 @@ where
         return Err(PreviewOperationError::Nondeterministic);
     }
     validate_outputs(&story, &first)?;
+    let digest = crate::preview_digest(&first);
 
     let target = repository_root.join("target");
     let preview_root = target.join("readme-showcase");
@@ -104,6 +106,7 @@ where
         if existing_preview_matches(&destination, &first)? {
             return Ok(PreviewReceipt {
                 directory: destination,
+                digest,
             });
         }
         return Err(PreviewOperationError::ExistingPreviewDiffers { path: destination });
@@ -129,6 +132,7 @@ where
 
     Ok(PreviewReceipt {
         directory: destination,
+        digest,
     })
 }
 
@@ -160,7 +164,7 @@ fn validate_story_identity(
     Ok(())
 }
 
-fn validate_outputs(
+pub(crate) fn validate_outputs(
     story: &ReleaseStory,
     preview: &StaticPreview,
 ) -> Result<(), PreviewOperationError> {
@@ -253,7 +257,7 @@ fn validate_budget(
     Ok(())
 }
 
-fn validate_release_component(value: &str) -> Result<(), PreviewOperationError> {
+pub(crate) fn validate_release_component(value: &str) -> Result<(), PreviewOperationError> {
     let invalid_character = value.chars().any(|character| {
         character.is_control()
             || matches!(
@@ -283,7 +287,10 @@ fn validate_release_component(value: &str) -> Result<(), PreviewOperationError> 
     Ok(())
 }
 
-fn reject_reparse_point(path: &Path, stage: &'static str) -> Result<(), PreviewOperationError> {
+pub(crate) fn reject_reparse_point(
+    path: &Path,
+    stage: &'static str,
+) -> Result<(), PreviewOperationError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if is_reparse_point(&metadata) => {
             Err(PreviewOperationError::OutputValidation {

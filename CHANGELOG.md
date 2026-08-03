@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added explicit digest-gated acceptance for reviewed release previews, with
+  immutable versioned SVG, PNG, and story assets plus a README-last atomic
+  publication step and exact unreferenced-asset failure reporting.
 - Added a native fail-closed live release preview command that acquires complete
   GitHub evidence, proves byte determinism, validates all four review outputs,
   and atomically exposes them under the ignored `target/readme-showcase` tree.

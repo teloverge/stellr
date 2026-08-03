@@ -17,6 +17,7 @@ t3code's preview pane, or any browser.
 No code yet; `reference/` holds assets from the reference implementation that
 port verbatim.
 
+<!-- stellr-release-constellation:start -->
 ## Release constellation compatibility probe
 
 <picture>
@@ -30,6 +31,7 @@ This review-branch compatibility fixture shows three fixed stars moving from
 blocked work to a resolved path. It exists to verify GitHub's animated,
 reduced-motion, and strict-Markdown README delivery paths before the release
 exporter replaces it with a real release story.
+<!-- stellr-release-constellation:end -->
 
 ## Lineage & acknowledgements
 

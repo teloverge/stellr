@@ -9,7 +9,7 @@ use stellr_showcase::{
     LiveReleaseRequest, MilestoneIdentity, PreviewOperationError, PreviewRenderError,
     PreviewRenderer, PreviousRelease, RecordedIssue, ReleaseBoundaries, ReleaseEvidence,
     ReleaseHistoryError, ReleaseHistorySource, ReleaseStory, ReleaseWindowStart, SnapshotState,
-    StartingSnapshot, StaticPreview, UtcTimestamp, generate_release_preview,
+    StartingSnapshot, StaticPreview, UtcTimestamp, generate_release_preview, preview_digest,
 };
 
 fn ts(value: &str) -> UtcTimestamp {
@@ -227,6 +227,12 @@ async fn preview_publishes_all_four_artifacts_and_repeats_byte_identically() {
     .unwrap();
     let first_bytes = ["release.svg", "release.png", "story.json", "review.html"]
         .map(|name| fs::read(first.directory.join(name)).unwrap());
+    let first_review_digest = preview_digest(&StaticPreview {
+        svg: first_bytes[0].clone(),
+        png: first_bytes[1].clone(),
+        manifest: first_bytes[2].clone(),
+        review_html: first_bytes[3].clone(),
+    });
     let entries = fs::read_dir(&first.directory)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
@@ -247,6 +253,8 @@ async fn preview_publishes_all_four_artifacts_and_repeats_byte_identically() {
 
     assert_eq!(first.directory, second.directory);
     assert_eq!(first_bytes, second_bytes);
+    assert_eq!(first.digest, first_review_digest);
+    assert_eq!(second.digest, first.digest);
     assert!(first.directory.ends_with("target/readme-showcase/v0.2.0"));
 }
 
