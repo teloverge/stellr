@@ -1,10 +1,38 @@
 use std::{io, net::SocketAddr, num::NonZeroU64, path::PathBuf, sync::Arc, time::Duration};
 
-use stellr_core::{Model, Provider};
+use stellr_core::{Model, Provider, ProviderError, RawIssue, RepoRef};
 use stellr_github::cache::Cache;
 use stellr_server::{poll::spawn_poller, routes::router, spaces::SpaceStore, state::AppState};
 use thiserror::Error;
-use tokio::{sync::watch, task::JoinHandle};
+use tokio::{
+    sync::{RwLock, watch},
+    task::JoinHandle,
+};
+
+#[derive(Clone)]
+pub struct ProviderSlot {
+    current: Arc<RwLock<Arc<dyn Provider + Send + Sync>>>,
+}
+
+impl ProviderSlot {
+    pub fn new(provider: Arc<dyn Provider + Send + Sync>) -> Self {
+        Self {
+            current: Arc::new(RwLock::new(provider)),
+        }
+    }
+
+    pub async fn replace(&self, provider: Arc<dyn Provider + Send + Sync>) {
+        *self.current.write().await = provider;
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for ProviderSlot {
+    async fn fetch(&self, repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+        let provider = self.current.read().await.clone();
+        provider.fetch(repo).await
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionAuth {

@@ -60,6 +60,9 @@
       <button disabled={busy} onclick={() => run(begin)}>Try again</button>
     {:else}
       <p>GitHub is connected.</p>
+      {#if status.storage_warning !== null}
+        <p class="notice" role="status">{status.storage_warning}</p>
+      {/if}
     {/if}
   </div>
 </section>

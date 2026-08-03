@@ -36,6 +36,12 @@ impl AccessToken {
     }
 }
 
+impl From<String> for AccessToken {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
 impl Deref for AccessToken {
     type Target = str;
 
@@ -186,7 +192,9 @@ pub enum DeviceFlowStatus {
         expires_in_seconds: u64,
         interval_seconds: u64,
     },
-    Authorized,
+    Authorized {
+        storage_warning: Option<String>,
+    },
     Denied,
     Expired,
     Cancelled,
@@ -331,7 +339,9 @@ impl DeviceFlowController {
                     let mut state = self.state.lock().await;
                     if state.generation == generation {
                         state.token = Some(token);
-                        state.status = DeviceFlowStatus::Authorized;
+                        state.status = DeviceFlowStatus::Authorized {
+                            storage_warning: None,
+                        };
                         state.polling = None;
                     }
                     return;

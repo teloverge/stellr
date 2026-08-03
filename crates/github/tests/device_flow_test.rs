@@ -186,7 +186,12 @@ async fn pending_and_slow_down_respect_the_server_interval_and_add_five_seconds(
     tokio::time::advance(std::time::Duration::from_millis(1)).await;
     wait_for_calls(&calls, 3).await;
     settle_http_response().await;
-    assert_eq!(controller.status().await, DeviceFlowStatus::Authorized);
+    assert_eq!(
+        controller.status().await,
+        DeviceFlowStatus::Authorized {
+            storage_warning: None,
+        }
+    );
     assert_eq!(
         controller.take_token().await.as_deref(),
         Some("native-only-token")

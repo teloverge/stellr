@@ -1,9 +1,17 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use stellr_core::{Provider, ProviderError, RawIssue, RepoRef};
 use stellr_github::{
     auth::resolve_token,
     cache::Cache,
+    credentials::{CredentialStore, OsCredentialStore},
     device_flow::{DeviceFlowClient, DeviceFlowController, DeviceFlowStatus},
     sync::GithubProvider,
 };
@@ -11,8 +19,12 @@ use stellr_server::spaces::{SpaceEntry, SpaceStore, detect_repo};
 use tauri::{Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use thiserror::Error;
+use tokio::sync::{Mutex, Notify};
 
-use crate::runtime::{ApplicationRuntime, RuntimeError, RuntimeOptions, SessionAuth, start};
+use crate::{
+    auth_activation::activate_provider_and_store,
+    runtime::{ApplicationRuntime, ProviderSlot, RuntimeError, RuntimeOptions, SessionAuth, start},
+};
 
 const GITHUB_DEVICE_FLOW_BASE: &str = "https://github.com";
 const GITHUB_DEVICE_CLIENT_ID: &str = "Ov23liWXBEZ0ysYu2MxE";
@@ -46,16 +58,64 @@ struct DesktopState {
 
 struct DesktopAuthState {
     controller: DeviceFlowController,
-    credential_present: bool,
+    credential_present: AtomicBool,
+    provider_slot: ProviderSlot,
+    refresh: Arc<Notify>,
+    credential_store: Arc<dyn CredentialStore>,
+    completion: Mutex<()>,
+    storage_warning: Mutex<Option<String>>,
 }
 
 impl DesktopAuthState {
-    async fn public_status(&self) -> DeviceFlowStatus {
+    fn new(
+        controller: DeviceFlowController,
+        credential_present: bool,
+        provider_slot: ProviderSlot,
+        refresh: Arc<Notify>,
+        credential_store: Arc<dyn CredentialStore>,
+    ) -> Self {
+        Self {
+            controller,
+            credential_present: AtomicBool::new(credential_present),
+            provider_slot,
+            refresh,
+            credential_store,
+            completion: Mutex::new(()),
+            storage_warning: Mutex::new(None),
+        }
+    }
+
+    async fn public_status(&self) -> Result<DeviceFlowStatus, ProviderError> {
+        let _completion = self.completion.lock().await;
         let status = self.controller.status().await;
-        if self.credential_present && status == DeviceFlowStatus::Idle {
-            DeviceFlowStatus::Authorized
+        if matches!(status, DeviceFlowStatus::Authorized { .. })
+            && !self.credential_present.load(Ordering::Acquire)
+            && let Some(token) = self.controller.take_token().await
+        {
+            let provider = Arc::new(GithubProvider::new(token.expose().to_owned())?);
+            let warning = activate_provider_and_store(
+                &self.provider_slot,
+                provider,
+                self.refresh.clone(),
+                self.credential_store.clone(),
+                token,
+            )
+            .await;
+            *self.storage_warning.lock().await = warning;
+            self.credential_present.store(true, Ordering::Release);
+        }
+
+        if self.credential_present.load(Ordering::Acquire)
+            && matches!(
+                status,
+                DeviceFlowStatus::Idle | DeviceFlowStatus::Authorized { .. }
+            )
+        {
+            Ok(DeviceFlowStatus::Authorized {
+                storage_warning: self.storage_warning.lock().await.clone(),
+            })
         } else {
-            status
+            Ok(status)
         }
     }
 }
@@ -101,7 +161,10 @@ async fn begin_device_authorization(
 async fn device_authorization_status(
     state: State<'_, DesktopAuthState>,
 ) -> Result<DeviceFlowStatus, String> {
-    Ok(state.public_status().await)
+    state
+        .public_status()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -168,11 +231,19 @@ pub fn run(current_dir: PathBuf) -> Result<(), DesktopHostError> {
         .setup(move |app| {
             let startup = tauri::async_runtime::block_on(async {
                 let (provider, credential_present) = provider_from_environment()?;
-                let auth = DesktopAuthState {
-                    controller: device_flow_controller()?,
+                let provider_slot = ProviderSlot::new(provider);
+                let runtime = start_runtime(
+                    default_options(current_dir.clone()),
+                    Arc::new(provider_slot.clone()),
+                )
+                .await?;
+                let auth = DesktopAuthState::new(
+                    device_flow_controller()?,
                     credential_present,
-                };
-                let runtime = start_runtime(default_options(current_dir.clone()), provider).await?;
+                    provider_slot,
+                    runtime.state().refresh.clone(),
+                    Arc::new(OsCredentialStore::default()),
+                );
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>((runtime, auth))
             });
 

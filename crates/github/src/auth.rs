@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::credentials::{CredentialStore, CredentialStoreError, OsCredentialStore};
+
 #[derive(Debug, Error)]
 pub enum AuthError {
     #[error("no GitHub token: {0}. Run `gh auth login` or set GITHUB_TOKEN.")]
@@ -8,19 +10,25 @@ pub enum AuthError {
 
 pub fn resolve_token() -> Result<String, AuthError> {
     let env = std::env::var("GITHUB_TOKEN").ok();
-    resolve_with(env, || {
-        std::process::Command::new("gh")
-            .args(["auth", "token"])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
-    })
+    let store = OsCredentialStore::default();
+    resolve_with(
+        env,
+        || {
+            std::process::Command::new("gh")
+                .args(["auth", "token"])
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        },
+        || store.load(),
+    )
 }
 
 fn resolve_with(
     env: Option<String>,
     gh_token: impl FnOnce() -> Option<String>,
+    stored_token: impl FnOnce() -> Result<Option<String>, CredentialStoreError>,
 ) -> Result<String, AuthError> {
     if let Some(token) = env.filter(|token| !token.trim().is_empty()) {
         return Ok(token);
@@ -32,8 +40,18 @@ fn resolve_with(
     {
         return Ok(token);
     }
+    match stored_token() {
+        Ok(Some(token)) if !token.trim().is_empty() => return Ok(token),
+        Ok(_) => {}
+        Err(error) => {
+            return Err(AuthError::NotFound(format!(
+                "neither GITHUB_TOKEN nor `gh auth token` yielded one, and {error}"
+            )));
+        }
+    }
     Err(AuthError::NotFound(
-        "neither GITHUB_TOKEN nor `gh auth token` yielded one".into(),
+        "neither GITHUB_TOKEN, `gh auth token`, nor the operating-system credential store yielded one"
+            .into(),
     ))
 }
 
@@ -45,7 +63,12 @@ mod tests {
     #[test]
     fn env_var_wins() {
         assert_eq!(
-            resolve_with(Some("tok_env".into()), || Some("tok_gh".into())).unwrap(),
+            resolve_with(
+                Some("tok_env".into()),
+                || Some("tok_gh".into()),
+                || Ok(Some("tok_store".into())),
+            )
+            .unwrap(),
             "tok_env"
         );
     }
@@ -54,10 +77,14 @@ mod tests {
     fn nonblank_env_does_not_invoke_gh_provider() {
         let gh_calls = Cell::new(0);
 
-        let token = resolve_with(Some("tok_env".into()), || {
-            gh_calls.set(gh_calls.get() + 1);
-            Some("tok_gh".into())
-        })
+        let token = resolve_with(
+            Some("tok_env".into()),
+            || {
+                gh_calls.set(gh_calls.get() + 1);
+                Some("tok_gh".into())
+            },
+            || panic!("credential store must not be read"),
+        )
         .unwrap();
 
         assert_eq!(token, "tok_env");
@@ -67,16 +94,30 @@ mod tests {
     #[test]
     fn falls_back_to_gh_and_trims() {
         assert_eq!(
-            resolve_with(None, || Some("tok_gh\n".into())).unwrap(),
+            resolve_with(
+                None,
+                || Some("tok_gh\n".into()),
+                || Ok(Some("tok_store".into())),
+            )
+            .unwrap(),
             "tok_gh"
         );
     }
 
     #[test]
+    fn falls_back_to_the_operating_system_store_after_github_cli() {
+        assert_eq!(
+            resolve_with(None, || None, || Ok(Some("tok_store".into()))).unwrap(),
+            "tok_store"
+        );
+    }
+
+    #[test]
     fn empty_everything_is_a_helpful_error() {
-        let err = resolve_with(Some("".into()), || None).unwrap_err();
+        let err = resolve_with(Some("".into()), || None, || Ok(None)).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("gh auth login"));
         assert!(message.contains("GITHUB_TOKEN"));
+        assert!(message.contains("operating-system credential store"));
     }
 }

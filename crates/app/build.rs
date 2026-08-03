@@ -1,13 +1,11 @@
 fn main() {
-    tauri_build::try_build(
-        tauri_build::Attributes::new().app_manifest(
-            tauri_build::AppManifest::new().commands(&[
-                "begin_device_authorization",
-                "device_authorization_status",
-                "cancel_device_authorization",
-            ]),
-        ),
-    )
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
+        tauri_build::AppManifest::new().commands(&[
+            "begin_device_authorization",
+            "device_authorization_status",
+            "cancel_device_authorization",
+        ]),
+    ))
     .expect("Tauri build configuration should be valid");
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {

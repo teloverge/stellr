@@ -241,7 +241,7 @@
     class:detail-bottom={activeStar !== null && dock === 'bottom'}
     bind:this={workspace}
   >
-    {#if authStatus !== null && authStatus.state !== 'authorized'}
+    {#if authStatus !== null && (authStatus.state !== 'authorized' || authStatus.storage_warning !== null)}
       <SignInPanel
         status={authStatus}
         begin={beginAuthorization}

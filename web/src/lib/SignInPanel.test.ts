@@ -88,4 +88,14 @@ describe('native GitHub sign-in panel', () => {
     expect(target.textContent).toContain('WXYZ-1234')
     expect(target.textContent).toContain('GitHub asked Stellr to check less often')
   })
+
+  it('keeps the live connection visible when durable credential storage fails', () => {
+    const { target } = render({
+      state: 'authorized',
+      storage_warning: 'GitHub is connected for this run, but Windows Credential Manager failed.',
+    })
+
+    expect(target.textContent).toContain('GitHub is connected')
+    expect(target.textContent).toContain('Windows Credential Manager failed')
+  })
 })

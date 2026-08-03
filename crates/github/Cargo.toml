@@ -9,6 +9,7 @@ repository.workspace = true
 async-trait.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 directories = "6"
+keyring.workspace = true
 octocrab = "0.54"
 reqwest.workspace = true
 serde.workspace = true

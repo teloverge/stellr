@@ -11,7 +11,7 @@ export type DeviceFlowStatus =
   | { state: 'idle' }
   | ({ state: 'pending' } & DeviceFlowPrompt)
   | ({ state: 'slow_down' } & DeviceFlowPrompt)
-  | { state: 'authorized' }
+  | { state: 'authorized'; storage_warning: string | null }
   | { state: 'denied' }
   | { state: 'expired' }
   | { state: 'cancelled' }
