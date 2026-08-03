@@ -2,7 +2,12 @@ use std::{io, net::SocketAddr, num::NonZeroU64, path::PathBuf, sync::Arc, time::
 
 use stellr_core::{Model, Provider, ProviderError, RawIssue, RepoRef};
 use stellr_github::cache::Cache;
-use stellr_server::{poll::spawn_poller, routes::router, spaces::SpaceStore, state::AppState};
+use stellr_server::{
+    poll::{PollingControl, spawn_controlled_poller},
+    routes::router,
+    spaces::SpaceStore,
+    state::AppState,
+};
 use thiserror::Error;
 use tokio::{
     sync::{RwLock, watch},
@@ -67,6 +72,7 @@ pub struct ApplicationRuntime {
     shutdown: RuntimeShutdown,
     server: Option<JoinHandle<io::Result<()>>>,
     poller: Option<JoinHandle<()>>,
+    polling: PollingControl,
 }
 
 impl ApplicationRuntime {
@@ -84,6 +90,10 @@ impl ApplicationRuntime {
 
     pub fn shutdown_handle(&self) -> RuntimeShutdown {
         self.shutdown.clone()
+    }
+
+    pub fn polling_control(&self) -> PollingControl {
+        self.polling.clone()
     }
 
     pub async fn wait(mut self) -> Result<(), RuntimeError> {
@@ -139,6 +149,15 @@ pub async fn start(
     options: RuntimeOptions,
     provider: Arc<dyn Provider + Send + Sync>,
 ) -> Result<ApplicationRuntime, RuntimeError> {
+    let polling = PollingControl::fixed(options.poll_interval);
+    start_with_polling(options, provider, polling).await
+}
+
+pub async fn start_with_polling(
+    options: RuntimeOptions,
+    provider: Arc<dyn Provider + Send + Sync>,
+    polling: PollingControl,
+) -> Result<ApplicationRuntime, RuntimeError> {
     let listener = tokio::net::TcpListener::bind(&options.address)
         .await
         .map_err(RuntimeError::Bind)?;
@@ -155,11 +174,11 @@ pub async fn start(
         spaces: tokio::sync::Mutex::new(spaces),
         refresh: Arc::new(tokio::sync::Notify::new()),
     });
-    let poller = spawn_poller(
+    let poller = spawn_controlled_poller(
         state.clone(),
         provider,
         Cache::new(options.cache_root),
-        options.poll_interval,
+        polling.subscribe(),
     );
 
     let (shutdown_sender, mut shutdown_receiver) = watch::channel(false);
@@ -185,6 +204,7 @@ pub async fn start(
         },
         server: Some(server),
         poller: Some(poller),
+        polling,
     })
 }
 

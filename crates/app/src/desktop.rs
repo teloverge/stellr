@@ -17,6 +17,7 @@ use stellr_github::{
     device_flow::{DeviceFlowClient, DeviceFlowController, DeviceFlowStatus},
     sync::GithubProvider,
 };
+use stellr_server::poll::PollingControl;
 use stellr_server::spaces::{SpaceEntry, SpaceStore, detect_repo};
 use tauri::{Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
@@ -25,13 +26,18 @@ use tokio::sync::{Mutex, Notify};
 
 use crate::{
     auth_activation::activate_provider_and_store,
-    runtime::{ApplicationRuntime, ProviderSlot, RuntimeError, RuntimeOptions, SessionAuth, start},
+    runtime::{
+        ApplicationRuntime, ProviderSlot, RuntimeError, RuntimeOptions, SessionAuth, start,
+        start_with_polling,
+    },
     target::{RouteTarget, TargetResolver},
 };
 
 const GITHUB_DEVICE_FLOW_BASE: &str = "https://github.com";
 const GITHUB_DEVICE_CLIENT_ID: &str = "Ov23liWXBEZ0ysYu2MxE";
 const GITHUB_DEVICE_SCOPE: &str = "repo";
+const FOCUSED_POLL_INTERVAL: Duration = Duration::from_secs(30);
+const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 pub struct DesktopLaunch {
     pub cwd: PathBuf,
@@ -241,13 +247,14 @@ pub async fn start_runtime(
 ) -> Result<ApplicationRuntime, DesktopRuntimeError> {
     let repo = detect_repo(&options.current_dir).map_err(DesktopRuntimeError::CurrentRepository)?;
     let entry = SpaceEntry::new(repo, Some(options.current_dir.clone()));
-    start_runtime_with_entry(options, entry, provider).await
+    start_runtime_with_entry(options, entry, provider, None).await
 }
 
 async fn start_runtime_with_entry(
     options: DesktopRuntimeOptions,
     entry: SpaceEntry,
     provider: Arc<dyn Provider + Send + Sync>,
+    polling: Option<PollingControl>,
 ) -> Result<ApplicationRuntime, DesktopRuntimeError> {
     let mut spaces = SpaceStore::load(options.spaces_file.clone());
     if !spaces
@@ -261,18 +268,18 @@ async fn start_runtime_with_entry(
         spaces.save().map_err(DesktopRuntimeError::SaveSpace)?;
     }
 
-    start(
-        RuntimeOptions {
-            address: "127.0.0.1:0".into(),
-            session_auth: SessionAuth::Required,
-            issue: None,
-            spaces_file: options.spaces_file,
-            cache_root: options.cache_root,
-            poll_interval: Duration::from_secs(30),
-        },
-        provider,
-    )
-    .await
+    let runtime_options = RuntimeOptions {
+        address: "127.0.0.1:0".into(),
+        session_auth: SessionAuth::Required,
+        issue: None,
+        spaces_file: options.spaces_file,
+        cache_root: options.cache_root,
+        poll_interval: FOCUSED_POLL_INTERVAL,
+    };
+    match polling {
+        Some(polling) => start_with_polling(runtime_options, provider, polling).await,
+        None => start(runtime_options, provider).await,
+    }
     .map_err(DesktopRuntimeError::Runtime)
 }
 
@@ -324,10 +331,13 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                 let target = TargetResolver::new(launch.cwd.clone()).resolve(&launch.target)?;
                 let (provider, credential_present) = provider_from_environment()?;
                 let provider_slot = ProviderSlot::new(provider);
+                let polling =
+                    PollingControl::focus_aware(FOCUSED_POLL_INTERVAL, BACKGROUND_POLL_INTERVAL);
                 let runtime = start_runtime_with_entry(
                     default_options(launch.cwd.clone()),
                     target.entry(),
                     Arc::new(provider_slot.clone()),
+                    Some(polling),
                 )
                 .await?;
                 let auth = DesktopAuthState::new(
@@ -353,14 +363,23 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
             };
 
             let url = route_url(runtime.cockpit_url().parse()?, &target);
-            if let Err(error) = create_main_window(app, url) {
-                app.dialog()
-                    .message(error.to_string())
-                    .kind(MessageDialogKind::Error)
-                    .title("Stellr could not open its window")
-                    .blocking_show();
-                return Err(Box::new(error));
-            }
+            let window = match create_main_window(app, url) {
+                Ok(window) => window,
+                Err(error) => {
+                    app.dialog()
+                        .message(error.to_string())
+                        .kind(MessageDialogKind::Error)
+                        .title("Stellr could not open its window")
+                        .blocking_show();
+                    return Err(Box::new(error));
+                }
+            };
+            let polling = runtime.polling_control();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::Focused(focused) = event {
+                    polling.set_focused(*focused);
+                }
+            });
             app.manage(DesktopState { _runtime: runtime });
             app.manage(auth);
             Ok(())
