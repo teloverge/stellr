@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Published the first real M1 release constellation from the frozen live GitHub
+  issue history, with immutable SVG, PNG, and story evidence linked from the
+  README through animated, reduced-motion, and strict-Markdown paths.
 - Added explicit digest-gated acceptance for reviewed release previews, with
   immutable versioned SVG, PNG, and story assets plus a README-last atomic
   publication step and exact unreferenced-asset failure reporting.

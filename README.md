@@ -18,19 +18,16 @@ No code yet; `reference/` holds assets from the reference implementation that
 port verbatim.
 
 <!-- stellr-release-constellation:start -->
-## Release constellation compatibility probe
+## Release constellation
 
 <picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme-showcase/compatibility-probe.png">
-  <img src="docs/assets/readme-showcase/compatibility-probe.svg" alt="Stellr release constellation compatibility probe">
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme-showcase/m1.png">
+  <img src="docs/assets/readme-showcase/m1.svg" alt="Stellr m1 release constellation: 17 issues, 17 resolved">
 </picture>
 
-[View the static release constellation](docs/assets/readme-showcase/compatibility-probe.png).
+[View the static m1 release constellation](docs/assets/readme-showcase/m1.png).
 
-This review-branch compatibility fixture shows three fixed stars moving from
-blocked work to a resolved path. It exists to verify GitHub's animated,
-reduced-motion, and strict-Markdown README delivery paths before the release
-exporter replaces it with a real release story.
+Release m1 charts 17 visible issues, with 17 resolved at the recorded cutoff.
 <!-- stellr-release-constellation:end -->
 
 ## Lineage & acknowledgements
