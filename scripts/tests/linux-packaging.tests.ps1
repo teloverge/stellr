@@ -21,6 +21,8 @@ Assert-True ($workflow.Contains('openbox')) 'Linux smoke jobs must provide a win
 $appImageStart = $workflow.IndexOf('  smoke-appimage:')
 $appImageEnd = $workflow.IndexOf('  smoke-deb:', $appImageStart)
 $appImageJob = $workflow.Substring($appImageStart, $appImageEnd - $appImageStart)
+Assert-True ($appImageJob.Contains('libgles2')) `
+  'The clean AppImage runner must provide the GLES runtime required by WebKitGTK.'
 Assert-True ($appImageJob.Contains('xdg-desktop-portal')) `
   'The clean AppImage runner must provide the desktop portal service used during WebKitGTK startup.'
 Assert-True ($appImageJob.Contains('xdg-desktop-portal-gtk')) `
@@ -34,6 +36,8 @@ $releaseAppImageJob = $releaseWorkflow.Substring(
   $releaseAppImageStart,
   $releaseAppImageEnd - $releaseAppImageStart
 )
+Assert-True ($releaseAppImageJob.Contains('libgles2')) `
+  'Release AppImage smoke must provide the GLES runtime.'
 Assert-True ($releaseAppImageJob.Contains('xdg-desktop-portal')) `
   'Release AppImage smoke must provide the desktop portal service.'
 Assert-True ($releaseAppImageJob.Contains('xdg-desktop-portal-gtk')) `

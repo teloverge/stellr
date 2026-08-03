@@ -186,6 +186,7 @@ jobs:
             iproute2 \
             libegl1 \
             libfuse2 \
+            libgles2 \
             openbox \
             xdg-desktop-portal \
             xdg-desktop-portal-gtk \
