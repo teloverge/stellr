@@ -17,11 +17,17 @@ serde.workspace = true
 stellr-core = { path = "../core" }
 stellr-github = { path = "../github" }
 stellr-server = { path = "../server" }
+tauri.workspace = true
+tauri-plugin-dialog.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
 reqwest = "0.12"
+tauri = { workspace = true, features = ["test"] }
 tempfile = "3"
 tokio.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true

@@ -11,18 +11,21 @@ use crate::cli::{Cli, Command, ServeArgs};
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
+fn main() {
+    if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), DynError> {
+fn run() -> Result<(), DynError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Serve(args) => serve(args).await,
+        Some(Command::Serve(args)) => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(serve(args)),
+        None => stellr_app::desktop::run(std::env::current_dir()?).map_err(Into::into),
     }
 }
 
@@ -61,9 +64,18 @@ mod tests {
     use crate::cli::{Cli, Command};
 
     #[test]
+    fn bare_launch_selects_desktop_mode() {
+        let parsed = Cli::try_parse_from(["stellr"]).unwrap();
+
+        assert!(parsed.command.is_none());
+    }
+
+    #[test]
     fn serve_defaults_to_loopback_port_8787_with_session_auth() {
         let parsed = Cli::try_parse_from(["stellr", "serve"]).unwrap();
-        let Command::Serve(args) = parsed.command;
+        let Some(Command::Serve(args)) = parsed.command else {
+            panic!("serve should select the serve command")
+        };
 
         assert_eq!(args.addr, "127.0.0.1:8787");
         assert!(!args.no_token);
@@ -75,7 +87,9 @@ mod tests {
         let parsed =
             Cli::try_parse_from(["stellr", "serve", "--addr", "127.0.0.1:0", "--no-token"])
                 .unwrap();
-        let Command::Serve(args) = parsed.command;
+        let Some(Command::Serve(args)) = parsed.command else {
+            panic!("serve should select the serve command")
+        };
 
         assert_eq!(args.addr, "127.0.0.1:0");
         assert!(args.no_token);
@@ -86,7 +100,9 @@ mod tests {
         let parsed =
             Cli::try_parse_from(["stellr", "serve", "--addr", "127.0.0.1:0", "--issue", "14"])
                 .unwrap();
-        let Command::Serve(args) = parsed.command;
+        let Some(Command::Serve(args)) = parsed.command else {
+            panic!("serve should select the serve command")
+        };
 
         assert_eq!(args.issue.map(NonZeroU64::get), Some(14));
         assert!(Cli::try_parse_from(["stellr", "serve", "--issue", "0"]).is_err());
