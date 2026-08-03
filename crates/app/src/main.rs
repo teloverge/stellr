@@ -21,6 +21,11 @@ fn main() {
 fn run() -> Result<(), DynError> {
     let cli = Cli::parse();
     match cli.command {
+        #[cfg(debug_assertions)]
+        Some(Command::Acceptance(args)) => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(stellr_app::acceptance::run(args.github_base, args.profile)),
         Some(Command::Serve(args)) => tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?

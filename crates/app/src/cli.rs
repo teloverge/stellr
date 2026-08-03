@@ -1,4 +1,6 @@
 use std::num::NonZeroU64;
+#[cfg(debug_assertions)]
+use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -13,8 +15,20 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    #[cfg(debug_assertions)]
+    #[command(hide = true)]
+    Acceptance(AcceptanceArgs),
     Serve(ServeArgs),
     Open(OpenArgs),
+}
+
+#[cfg(debug_assertions)]
+#[derive(Args)]
+pub struct AcceptanceArgs {
+    #[arg(long)]
+    pub github_base: String,
+    #[arg(long)]
+    pub profile: PathBuf,
 }
 
 #[derive(Args)]

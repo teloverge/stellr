@@ -45,8 +45,8 @@ use crate::{
 const GITHUB_DEVICE_FLOW_BASE: &str = "https://github.com";
 const GITHUB_DEVICE_CLIENT_ID: &str = "Ov23liWXBEZ0ysYu2MxE";
 const GITHUB_DEVICE_SCOPE: &str = "repo";
-const FOCUSED_POLL_INTERVAL: Duration = Duration::from_secs(30);
-const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
+pub(crate) const FOCUSED_POLL_INTERVAL: Duration = Duration::from_secs(30);
+pub(crate) const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 pub struct DesktopLaunch {
     pub cwd: PathBuf,
@@ -433,7 +433,7 @@ pub async fn start_runtime(
     start_runtime_with_entry(options, entry, provider, None).await
 }
 
-async fn start_runtime_with_entry(
+pub(crate) async fn start_runtime_with_entry(
     options: DesktopRuntimeOptions,
     entry: SpaceEntry,
     provider: Arc<dyn Provider + Send + Sync>,
