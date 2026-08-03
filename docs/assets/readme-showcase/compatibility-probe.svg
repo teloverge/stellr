@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" role="img" aria-labelledby="title description">
+  <title id="title">Stellr release constellation compatibility probe</title>
+  <desc id="description">Three fixed fixture stars replay blocked, ready, and resolved states before settling on a completed release path.</desc>
+  <defs>
+    <radialGradient id="field" cx="50%" cy="46%" r="72%">
+      <stop offset="0" stop-color="#0b1220" />
+      <stop offset="0.56" stop-color="#030712" />
+      <stop offset="1" stop-color="#000000" />
+    </radialGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="7" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <marker id="arrow-mint" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6ee7b7" />
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; }
+      .animated { animation-timing-function: linear; animation-iteration-count: infinite; }
+      .hero-copy { animation-name: reveal; animation-duration: 12s; }
+      .edge-a { animation-name: edge-a-state; animation-duration: 12s; }
+      .edge-b { animation-name: edge-b-state; animation-duration: 12s; }
+      .node-a { animation-name: node-a-state; animation-duration: 12s; }
+      .node-b { animation-name: node-b-state; animation-duration: 12s; }
+      .node-c { animation-name: node-c-state; animation-duration: 12s; }
+      .edge-pulse { animation-name: traverse; animation-duration: 12s; }
+      .current-ring { animation-name: current-focus; animation-duration: 12s; }
+      .ready-ring { animation-name: ready-focus; animation-duration: 12s; }
+      .loop-wash { animation-name: loop-wash; animation-duration: 12s; }
+      .status-a-blocked { animation-name: status-a-blocked; animation-duration: 12s; }
+      .status-a-resolved { animation-name: status-a-resolved; animation-duration: 12s; }
+      .status-b-blocked { animation-name: status-b-blocked; animation-duration: 12s; }
+      .status-b-ready { animation-name: status-b-ready; animation-duration: 12s; }
+      .status-b-resolved { animation-name: status-b-resolved; animation-duration: 12s; }
+      .status-c-blocked { animation-name: status-c-blocked; animation-duration: 12s; }
+      .status-c-ready { animation-name: status-c-ready; animation-duration: 12s; }
+      .status-c-resolved { animation-name: status-c-resolved; animation-duration: 12s; }
+      .status-a-blocked,
+      .status-a-resolved,
+      .status-b-blocked,
+      .status-b-ready,
+      .status-b-resolved,
+      .status-c-blocked,
+      .status-c-ready,
+      .status-c-resolved { animation-timing-function: step-end; }
+
+      @keyframes reveal {
+        0% { opacity: 0; }
+        8%, 100% { opacity: 1; }
+      }
+      @keyframes edge-a-state {
+        0%, 20% { stroke: #b8c7d9; stroke-dasharray: 10 12; opacity: 0.42; }
+        28%, 100% { stroke: #6ee7b7; stroke-dasharray: 0; opacity: 0.9; }
+      }
+      @keyframes edge-b-state {
+        0%, 50% { stroke: #b8c7d9; stroke-dasharray: 10 12; opacity: 0.32; }
+        60%, 100% { stroke: #6ee7b7; stroke-dasharray: 0; opacity: 0.9; }
+      }
+      @keyframes node-a-state {
+        0%, 12% { fill: #000000; stroke: #fbbf24; }
+        22%, 100% { fill: #6ee7b7; stroke: #6ee7b7; }
+      }
+      @keyframes node-b-state {
+        0%, 25% { fill: #000000; stroke: #f59e0b; }
+        34%, 50% { fill: #000000; stroke: #c4b5fd; }
+        60%, 100% { fill: #6ee7b7; stroke: #6ee7b7; }
+      }
+      @keyframes node-c-state {
+        0%, 52% { fill: #000000; stroke: #f59e0b; }
+        62%, 68% { fill: #000000; stroke: #c4b5fd; }
+        74%, 100% { fill: #6ee7b7; stroke: #6ee7b7; }
+      }
+      @keyframes traverse {
+        0%, 20%, 45%, 100% { opacity: 0; stroke-dashoffset: 110; }
+        25% { opacity: 0.95; stroke-dashoffset: 110; }
+        36% { opacity: 0; stroke-dashoffset: 0; }
+        55% { opacity: 0.95; stroke-dashoffset: 110; }
+        68% { opacity: 0; stroke-dashoffset: 0; }
+      }
+      @keyframes current-focus {
+        0%, 18%, 35%, 49%, 66%, 100% { opacity: 0; }
+        22%, 31%, 53%, 62% { opacity: 0.92; }
+      }
+      @keyframes ready-focus {
+        0%, 28%, 48%, 58%, 76%, 100% { opacity: 0; }
+        34%, 43%, 62%, 70% { opacity: 0.82; }
+      }
+      @keyframes loop-wash {
+        0%, 91% { opacity: 0; }
+        97% { opacity: 0.7; }
+        100% { opacity: 0; }
+      }
+      @keyframes status-a-blocked {
+        0%, 12% { opacity: 1; }
+        22%, 100% { opacity: 0; }
+      }
+      @keyframes status-a-resolved {
+        0%, 12% { opacity: 0; }
+        22%, 100% { opacity: 1; }
+      }
+      @keyframes status-b-blocked {
+        0%, 25% { opacity: 1; }
+        34%, 100% { opacity: 0; }
+      }
+      @keyframes status-b-ready {
+        0%, 25%, 60%, 100% { opacity: 0; }
+        34%, 50% { opacity: 1; }
+      }
+      @keyframes status-b-resolved {
+        0%, 50% { opacity: 0; }
+        60%, 100% { opacity: 1; }
+      }
+      @keyframes status-c-blocked {
+        0%, 52% { opacity: 1; }
+        62%, 100% { opacity: 0; }
+      }
+      @keyframes status-c-ready {
+        0%, 52%, 74%, 100% { opacity: 0; }
+        62%, 68% { opacity: 1; }
+      }
+      @keyframes status-c-resolved {
+        0%, 68% { opacity: 0; }
+        74%, 100% { opacity: 1; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .animated { animation: none !important; }
+        .edge-pulse, .current-ring, .ready-ring, .loop-wash { opacity: 0; }
+      }
+    </style>
+  </defs>
+
+  <rect width="1200" height="675" fill="url(#field)" />
+  <g class="hero-copy animated">
+    <text x="72" y="80" fill="#f8fafc" font-size="34" font-weight="700">Release constellation</text>
+    <text x="72" y="116" fill="#9fb3c8" font-size="18">How the release came together</text>
+    <text x="1128" y="80" fill="#6ee7b7" font-size="15" text-anchor="end" letter-spacing="2">COMPATIBILITY FIXTURE</text>
+  </g>
+
+  <g fill="none" stroke-linecap="round" stroke-width="3">
+    <path class="edge-a animated" d="M 286 354 C 410 276, 484 258, 557 292" stroke="#6ee7b7" marker-end="url(#arrow-mint)" />
+    <path class="edge-b animated" d="M 643 306 C 745 332, 807 376, 874 402" stroke="#6ee7b7" marker-end="url(#arrow-mint)" />
+    <path class="edge-pulse animated" d="M 286 354 C 410 276, 484 258, 557 292 M 643 306 C 745 332, 807 376, 874 402" stroke="#d6f5e8" stroke-width="5" stroke-dasharray="12 98" opacity="0" />
+  </g>
+
+  <g filter="url(#glow)">
+    <circle class="current-ring animated" cx="244" cy="374" r="39" fill="none" stroke="#ffffff" stroke-width="2" opacity="0" />
+    <circle class="current-ring animated" cx="600" cy="306" r="39" fill="none" stroke="#ffffff" stroke-width="2" opacity="0" />
+    <circle class="ready-ring animated" cx="600" cy="306" r="48" fill="none" stroke="#c4b5fd" stroke-width="2" stroke-dasharray="4 7" opacity="0" />
+    <circle class="ready-ring animated" cx="916" cy="420" r="48" fill="none" stroke="#c4b5fd" stroke-width="2" stroke-dasharray="4 7" opacity="0" />
+  </g>
+
+  <g>
+    <circle class="node-a animated" cx="244" cy="374" r="20" fill="#6ee7b7" stroke="#6ee7b7" stroke-width="5" />
+    <circle class="node-b animated" cx="600" cy="306" r="20" fill="#6ee7b7" stroke="#6ee7b7" stroke-width="5" />
+    <circle class="node-c animated" cx="916" cy="420" r="20" fill="#6ee7b7" stroke="#6ee7b7" stroke-width="5" />
+  </g>
+
+  <g fill="#f8fafc" font-size="19" font-weight="600">
+    <text x="244" y="424" text-anchor="middle">PROBE A · foundation</text>
+    <text x="600" y="356" text-anchor="middle">PROBE B · path opens</text>
+    <text x="916" y="470" text-anchor="middle">PROBE C · release settles</text>
+  </g>
+  <g font-size="15" text-anchor="middle">
+    <text class="status-a-blocked animated" x="244" y="450" fill="#fbbf24" opacity="0">blocked</text>
+    <text class="status-a-resolved animated" x="244" y="450" fill="#8ba3ba">resolved</text>
+    <text class="status-b-blocked animated" x="600" y="382" fill="#fbbf24" opacity="0">blocked</text>
+    <text class="status-b-ready animated" x="600" y="382" fill="#c4b5fd" opacity="0">ready</text>
+    <text class="status-b-resolved animated" x="600" y="382" fill="#8ba3ba">resolved</text>
+    <text class="status-c-blocked animated" x="916" y="496" fill="#fbbf24" opacity="0">blocked</text>
+    <text class="status-c-ready animated" x="916" y="496" fill="#c4b5fd" opacity="0">ready</text>
+    <text class="status-c-resolved animated" x="916" y="496" fill="#8ba3ba">resolved</text>
+  </g>
+
+  <g transform="translate(72 575)">
+    <rect width="1056" height="54" rx="14" fill="#07111e" stroke="#1f3347" />
+    <circle cx="28" cy="27" r="8" fill="#6ee7b7" />
+    <text x="48" y="33" fill="#d6f5e8" font-size="16">Fixed layout · status-only motion · final state available without animation</text>
+    <text x="1028" y="33" fill="#7890a6" font-size="14" text-anchor="end">12 second loop</text>
+  </g>
+
+  <rect class="loop-wash animated" width="1200" height="675" fill="#000000" opacity="0" />
+</svg>

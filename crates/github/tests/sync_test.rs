@@ -402,6 +402,39 @@ async fn fetch_prioritizes_the_first_graphql_error_over_malformed_data() {
 }
 
 #[tokio::test]
+async fn fetch_rejects_a_malformed_graphql_error_collection() {
+    let server = MockServer::start().await;
+    mount_graphql_response(
+        &server,
+        json!({
+            "data": {
+                "repository": {
+                    "issues": {
+                        "pageInfo": { "hasNextPage": false, "endCursor": null },
+                        "nodes": []
+                    }
+                }
+            },
+            "errors": [
+                {},
+                { "message": "denied" }
+            ]
+        }),
+    )
+    .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    match error {
+        ProviderError::Parse(message) => {
+            assert_eq!(message, "malformed GraphQL error response")
+        }
+        other => panic!("expected Parse error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn fetch_maps_a_malformed_response_shape_to_parse() {
     let server = MockServer::start().await;
     mount_graphql_response(&server, json!({ "data": { "repository": null } })).await;

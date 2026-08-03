@@ -109,6 +109,19 @@ unless Windows and macOS signing credentials are configured, pass each native
 install/inspection/launch gate, and complete the full repository validation
 suite.
 
+<!-- stellr-release-constellation:start -->
+## Release constellation
+
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme-showcase/m1.png">
+  <img src="docs/assets/readme-showcase/m1.svg" alt="Stellr m1 release constellation: 17 issues, 17 resolved">
+</picture>
+
+[View the static m1 release constellation](docs/assets/readme-showcase/m1.png).
+
+Release m1 charts 17 visible issues, with 17 resolved at the recorded cutoff.
+<!-- stellr-release-constellation:end -->
+
 ## Lineage and acknowledgements
 
 Stellr is a Rust/Tauri port and generalization of
