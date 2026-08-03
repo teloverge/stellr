@@ -1,6 +1,6 @@
 mod cli;
 
-use std::{io::Write, sync::Arc, time::Duration};
+use std::{ffi::OsString, io::Write, path::PathBuf, sync::Arc, time::Duration};
 
 use clap::Parser;
 use stellr_app::runtime::{RuntimeOptions, SessionAuth, start};
@@ -10,6 +10,29 @@ use stellr_server::spaces::SpaceStore;
 use crate::cli::{Cli, Command, ServeArgs};
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
+
+fn effective_launch_dir(
+    current: PathBuf,
+    appimage: Option<OsString>,
+    original_working_dir: Option<OsString>,
+) -> PathBuf {
+    if appimage.is_some()
+        && let Some(original) = original_working_dir.map(PathBuf::from)
+        && original.is_absolute()
+    {
+        return original;
+    }
+
+    current
+}
+
+fn launch_current_dir() -> std::io::Result<PathBuf> {
+    Ok(effective_launch_dir(
+        std::env::current_dir()?,
+        std::env::var_os("APPIMAGE"),
+        std::env::var_os("OWD"),
+    ))
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -31,7 +54,7 @@ fn run() -> Result<(), DynError> {
             .build()?
             .block_on(serve(args)),
         Some(Command::Open(args)) => {
-            let cwd = std::env::current_dir()?;
+            let cwd = launch_current_dir()?;
             stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch {
                 cwd,
                 target: args.target,
@@ -40,7 +63,7 @@ fn run() -> Result<(), DynError> {
             .map_err(Into::into)
         }
         None => {
-            let cwd = std::env::current_dir()?;
+            let cwd = launch_current_dir()?;
             let restore_route = cli.protocol_target.is_none();
             let target = cli
                 .protocol_target
@@ -159,5 +182,45 @@ mod tests {
 
         assert!(parsed.command.is_none());
         assert_eq!(parsed.protocol_target.as_deref(), Some(link));
+    }
+
+    #[test]
+    fn appimage_launch_uses_the_callers_original_working_directory() {
+        let mounted = std::env::temp_dir().join("mounted-appimage").join("usr");
+        let original = std::env::temp_dir().join("stellr-repository");
+
+        assert_eq!(
+            super::effective_launch_dir(
+                mounted,
+                Some("/tmp/Stellr.AppImage".into()),
+                Some(original.clone().into_os_string()),
+            ),
+            original
+        );
+    }
+
+    #[test]
+    fn unpackaged_launch_ignores_an_unpaired_original_working_directory() {
+        let current = std::env::temp_dir().join("stellr-repository");
+        let unrelated = std::env::temp_dir().join("unrelated");
+
+        assert_eq!(
+            super::effective_launch_dir(current.clone(), None, Some(unrelated.into_os_string()),),
+            current
+        );
+    }
+
+    #[test]
+    fn appimage_launch_rejects_a_relative_original_working_directory() {
+        let mounted = std::env::temp_dir().join("mounted-appimage").join("usr");
+
+        assert_eq!(
+            super::effective_launch_dir(
+                mounted.clone(),
+                Some("/tmp/Stellr.AppImage".into()),
+                Some("relative-repository".into()),
+            ),
+            mounted
+        );
     }
 }
