@@ -7,24 +7,31 @@ function Assert-True([bool]$Condition, [string]$Message) {
 }
 
 $processSmokePath = Join-Path $repo 'scripts\smoke-windows-application-process.ps1'
+$startupHelperPath = Join-Path $repo 'scripts\windows-startup-diagnostics.ps1'
 Assert-True (Test-Path $processSmokePath) 'The real Windows application-process smoke is missing.'
+Assert-True (Test-Path $startupHelperPath) 'The shared Windows startup diagnostics helper is missing.'
 $processSmoke = Get-Content $processSmokePath -Raw
+$startupHelper = Get-Content $startupHelperPath -Raw
 Assert-True ($processSmoke.Contains('GITHUB_TOKEN')) 'The process smoke must prove authenticated startup.'
-Assert-True ($processSmoke.Contains('Start-Process')) 'The process smoke must launch the real Stellr binary.'
+Assert-True ($startupHelper.Contains('Start-Process')) 'The process smoke must launch the real Stellr binary.'
 Assert-True ($processSmoke.Contains('second instance')) 'The process smoke must prove second-instance forwarding.'
 Assert-True ($processSmoke.Contains('ShowWindowAsync')) 'The process smoke must exercise native focus transitions.'
 Assert-True ($processSmoke.Contains('WINDOWS_ROUTE_RESTORED_AFTER_RELAUNCH=true')) `
   'The process smoke must prove route restoration after relaunch.'
 Assert-True ($processSmoke.Contains('[int]$StartupTimeoutSeconds = 90')) `
   'The process smoke must expose the approved 90-second startup budget.'
-Assert-True ($processSmoke.Contains('[Diagnostics.Stopwatch]::StartNew()')) `
+Assert-True ($processSmoke.Contains('windows-startup-diagnostics.ps1')) `
+  'The process smoke must use the shared startup diagnostics boundary.'
+Assert-True ($startupHelper.Contains('[Diagnostics.Stopwatch]::StartNew()')) `
   'The process smoke must measure a startup deadline instead of counting attempts.'
-Assert-True ($processSmoke.Contains('STELLR_STARTUP_DIAGNOSTICS')) `
+Assert-True ($startupHelper.Contains('STELLR_STARTUP_DIAGNOSTICS')) `
   'The process smoke must enable native stage diagnostics for each child.'
-Assert-True ($processSmoke.Contains('RedirectStandardError')) `
+Assert-True ($startupHelper.Contains('RedirectStandardError')) `
   'The process smoke must capture startup diagnostics.'
-Assert-True ($processSmoke.Contains('STELLR_DESKTOP_STARTUP_STAGE')) `
+Assert-True ($startupHelper.Contains('STELLR_DESKTOP_STARTUP_STAGE')) `
   'The process smoke must report the last native startup stage.'
+Assert-True ($processSmoke.Contains('New-StellrStartupLog $startupLogRoot ''second-instance''')) `
+  'The second-instance launch must use per-launch diagnostics too.'
 
 $releasePath = Join-Path $repo '.github\workflows\release.yml'
 Assert-True (Test-Path $releasePath) 'The fail-closed tagged release workflow is missing.'

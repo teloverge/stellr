@@ -74,6 +74,11 @@ jobs:
       - name: Build signed Windows NSIS package
         shell: powershell
         run: .\scripts\build-windows-nsis.ps1 -Channel Release -CertificateThumbprint $env:WINDOWS_CERTIFICATE_THUMBPRINT
+      - name: Prove the companion CLI from PowerShell and cmd.exe
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .\scripts\smoke-windows-cli.ps1 -ExecutablePath target\release\stellr.exe
       - name: Prove the real application-process boundary
         shell: powershell
         env:

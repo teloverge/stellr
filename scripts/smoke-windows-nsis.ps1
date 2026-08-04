@@ -5,39 +5,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows-startup-diagnostics.ps1')
 if ($StartupTimeoutSeconds -le 0) { throw 'StartupTimeoutSeconds must be positive.' }
 $installer = (Resolve-Path $InstallerPath).Path
 $appProcess = $null
 $installedExecutable = $null
 $uninstaller = $null
-$startupLogBase = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
-  [IO.Path]::GetTempPath()
-} else {
-  $env:RUNNER_TEMP
-}
-$startupLogRoot = Join-Path $startupLogBase "stellr-installed-startup-$PID"
-New-Item -ItemType Directory -Path $startupLogRoot -Force | Out-Null
-
-function New-StellrStartupFailure(
-  [System.Diagnostics.Process]$Process,
-  [string]$StdoutPath,
-  [string]$StderrPath,
-  [string]$Reason
-) {
-  $lines = @()
-  foreach ($path in @($StdoutPath, $StderrPath)) {
-    if (Test-Path -LiteralPath $path) {
-      $lines += @(Get-Content -LiteralPath $path -ErrorAction SilentlyContinue)
-    }
-  }
-  $marker = $lines |
-    Where-Object { $_ -match '^STELLR_DESKTOP_STARTUP_(STAGE|ERROR)=' } |
-    Select-Object -Last 1
-  if ([string]::IsNullOrWhiteSpace($marker)) { $marker = 'STELLR_DESKTOP_STARTUP_STAGE=<none captured>' }
-  $state = if ($Process.HasExited) { "exited with code $($Process.ExitCode)" } else { 'remained running' }
-  $diagnostics = if ($lines.Count -eq 0) { '<no startup output captured>' } else { $lines -join [Environment]::NewLine }
-  return "$Reason Process $($Process.Id) $state. Last startup marker: $marker`n$diagnostics"
-}
+$routeFile = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'stellr\config\desktop-route.json'
+$startupLogRoot = New-StellrStartupLogRoot "stellr-installed-startup-$PID"
 
 function Get-StellrUninstallRecord {
   $roots = @(
@@ -70,7 +45,17 @@ function Get-WebView2Version {
   return $null
 }
 
+function Get-StellrShortcutTarget {
+  $programs = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs'
+  $shortcut = Get-ChildItem -LiteralPath $programs -Filter 'Stellr.lnk' -File -Recurse |
+    Select-Object -First 1
+  if ($null -eq $shortcut) { throw 'The installed Stellr Start menu shortcut is missing.' }
+  $shell = New-Object -ComObject WScript.Shell
+  $shell.CreateShortcut($shortcut.FullName).TargetPath
+}
+
 try {
+  Remove-Item -LiteralPath $routeFile -Force -ErrorAction SilentlyContinue
   if ($null -ne (Get-StellrUninstallRecord)) {
     throw 'A Stellr installation already exists; refusing to overwrite it during a clean-runner smoke test.'
   }
@@ -97,8 +82,22 @@ try {
   if ([string]::IsNullOrWhiteSpace($installedExecutable) -or -not (Test-Path -LiteralPath $installedExecutable)) {
     throw 'The installed Stellr desktop executable could not be located.'
   }
+  if ((Split-Path -Leaf $installedExecutable) -ne 'stellr-desktop.exe') {
+    throw "The uninstall DisplayIcon does not target stellr-desktop.exe: $installedExecutable"
+  }
   $installedCli = Join-Path (Split-Path -Parent $installedExecutable) 'stellr.exe'
   if (-not (Test-Path -LiteralPath $installedCli)) { throw 'The installed companion Stellr CLI is missing.' }
+
+  $shortcutTarget = Get-StellrShortcutTarget
+  if ((Resolve-Path $shortcutTarget).Path -ne (Resolve-Path $installedExecutable).Path) {
+    throw "The Start menu shortcut does not target stellr-desktop.exe: $shortcutTarget"
+  }
+  $protocolKey = 'Registry::HKEY_CURRENT_USER\Software\Classes\stellr\shell\open\command'
+  $protocolCommand = (Get-Item -LiteralPath $protocolKey -ErrorAction Stop).GetValue('')
+  $protocolTarget = Get-ExecutableFromCommand $protocolCommand
+  if ((Resolve-Path $protocolTarget).Path -ne (Resolve-Path $installedExecutable).Path) {
+    throw "The stellr protocol does not target stellr-desktop.exe: $protocolCommand"
+  }
 
   $webViewVersion = Get-WebView2Version
   if ([string]::IsNullOrWhiteSpace($webViewVersion)) {
@@ -106,39 +105,34 @@ try {
   }
 
   $installDirectory = Split-Path -Parent $installedExecutable
-  $stdoutPath = Join-Path $startupLogRoot 'installed-stdout.log'
-  $stderrPath = Join-Path $startupLogRoot 'installed-stderr.log'
-  $previousDiagnostics = [Environment]::GetEnvironmentVariable('STELLR_STARTUP_DIAGNOSTICS', 'Process')
-  try {
-    $env:STELLR_STARTUP_DIAGNOSTICS = '1'
-    $appProcess = Start-Process -FilePath $installedExecutable `
-      -WorkingDirectory $installDirectory `
-      -RedirectStandardOutput $stdoutPath `
-      -RedirectStandardError $stderrPath `
-      -PassThru
-  } finally {
-    if ($null -eq $previousDiagnostics) {
-      Remove-Item Env:\STELLR_STARTUP_DIAGNOSTICS -ErrorAction SilentlyContinue
-    } else {
-      $env:STELLR_STARTUP_DIAGNOSTICS = $previousDiagnostics
-    }
+  $startupLog = New-StellrStartupLog $startupLogRoot 'installed'
+  $start = @{
+    FilePath = $installedExecutable
+    WorkingDirectory = $installDirectory
   }
-  $windowReady = $false
-  $startup = [Diagnostics.Stopwatch]::StartNew()
-  while ($startup.Elapsed.TotalSeconds -lt $StartupTimeoutSeconds) {
+  $appProcess = Start-StellrProcessWithDiagnostics $start $startupLog
+  $appProcess = Wait-StellrDesktopWindow `
+    $appProcess `
+    $startupLog `
+    $StartupTimeoutSeconds `
+    'Installed Stellr exited during startup.' `
+    "Installed Stellr did not show its native window within $StartupTimeoutSeconds seconds."
+
+  $protocolUri = 'stellr://space?repo=teloverge%2Fstellr&issue=57'
+  Start-Process -FilePath $protocolUri | Out-Null
+  $protocolRoute = $null
+  for ($attempt = 0; $attempt -lt 60; $attempt++) {
+    if (Test-Path -LiteralPath $routeFile) {
+      $protocolRoute = Get-Content -LiteralPath $routeFile -Raw | ConvertFrom-Json
+      if ($protocolRoute.space -eq 'teloverge-stellr' -and $protocolRoute.issue -eq 57) { break }
+    }
     Start-Sleep -Milliseconds 500
-    $appProcess.Refresh()
-    if ($appProcess.HasExited) {
-      throw (New-StellrStartupFailure $appProcess $stdoutPath $stderrPath 'Installed Stellr exited during startup.')
-    }
-    if ($appProcess.MainWindowTitle -eq 'Stellr' -and $appProcess.MainWindowHandle -ne 0) {
-      $windowReady = $true
-      break
-    }
   }
-  if (-not $windowReady) {
-    throw (New-StellrStartupFailure $appProcess $stdoutPath $stderrPath "Installed Stellr did not show its native window within $StartupTimeoutSeconds seconds.")
+  if ($null -eq $protocolRoute -or $protocolRoute.space -ne 'teloverge-stellr' -or $protocolRoute.issue -ne 57) {
+    throw 'The installed stellr:// activation did not reach and persist the desktop route.'
   }
+  $appProcess.Refresh()
+  if ($appProcess.HasExited) { throw 'The installed desktop exited during protocol activation.' }
 
   $webViewProcess = $null
   for ($attempt = 0; $attempt -lt 20; $attempt++) {
@@ -165,6 +159,10 @@ try {
   $uninstaller = $null
 
   Write-Output "WEBVIEW2_VERSION=$webViewVersion"
+  Write-Output 'WINDOWS_DISPLAY_ICON_TARGET=stellr-desktop.exe'
+  Write-Output 'WINDOWS_START_MENU_TARGET=stellr-desktop.exe'
+  Write-Output 'WINDOWS_PROTOCOL_TARGET=stellr-desktop.exe'
+  Write-Output 'WINDOWS_PROTOCOL_ACTIVATION_PASSED=true'
   Write-Output 'WINDOWS_COMPANION_CLI_INSTALLED=true'
   Write-Output 'WINDOWS_BARE_INSTALL_DIRECTORY_STARTUP_PASSED=true'
   Write-Output 'WINDOWS_NSIS_SMOKE_PASSED=true'
@@ -175,4 +173,5 @@ try {
   if ($null -ne $uninstaller -and (Test-Path -LiteralPath $uninstaller)) {
     Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
   }
+  Remove-Item -LiteralPath $routeFile -Force -ErrorAction SilentlyContinue
 }

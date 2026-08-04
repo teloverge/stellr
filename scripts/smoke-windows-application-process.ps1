@@ -11,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows-startup-diagnostics.ps1')
 if ($env:CI -ne 'true') {
   throw 'This smoke modifies the desktop profile and may run only on a disposable CI account.'
 }
@@ -33,69 +34,24 @@ $executable = (Resolve-Path $ExecutablePath).Path
 $workingDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $routeFile = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'stellr\config\desktop-route.json'
 $primary = $null
-$startupLogBase = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
-  [IO.Path]::GetTempPath()
-} else {
-  $env:RUNNER_TEMP
-}
-$startupLogRoot = Join-Path $startupLogBase "stellr-application-startup-$PID"
-New-Item -ItemType Directory -Path $startupLogRoot -Force | Out-Null
+$startupLogRoot = New-StellrStartupLogRoot "stellr-application-startup-$PID"
 $startupSequence = 0
-
-function New-StellrStartupFailure(
-  [System.Diagnostics.Process]$Process,
-  [string]$StdoutPath,
-  [string]$StderrPath,
-  [string]$Reason
-) {
-  $lines = @()
-  foreach ($path in @($StdoutPath, $StderrPath)) {
-    if (Test-Path -LiteralPath $path) {
-      $lines += @(Get-Content -LiteralPath $path -ErrorAction SilentlyContinue)
-    }
-  }
-  $marker = $lines |
-    Where-Object { $_ -match '^STELLR_DESKTOP_STARTUP_(STAGE|ERROR)=' } |
-    Select-Object -Last 1
-  if ([string]::IsNullOrWhiteSpace($marker)) { $marker = 'STELLR_DESKTOP_STARTUP_STAGE=<none captured>' }
-  $state = if ($Process.HasExited) { "exited with code $($Process.ExitCode)" } else { 'remained running' }
-  $diagnostics = if ($lines.Count -eq 0) { '<no startup output captured>' } else { $lines -join [Environment]::NewLine }
-  return "$Reason Process $($Process.Id) $state. Last startup marker: $marker`n$diagnostics"
-}
 
 function Start-Stellr([string[]]$Arguments) {
   $script:startupSequence++
-  $stdoutPath = Join-Path $startupLogRoot "launch-$($script:startupSequence)-stdout.log"
-  $stderrPath = Join-Path $startupLogRoot "launch-$($script:startupSequence)-stderr.log"
+  $startupLog = New-StellrStartupLog $startupLogRoot "launch-$($script:startupSequence)"
   $start = @{
     FilePath = $executable
     WorkingDirectory = $workingDirectory
-    PassThru = $true
-    RedirectStandardOutput = $stdoutPath
-    RedirectStandardError = $stderrPath
   }
   if ($Arguments.Count -gt 0) { $start.ArgumentList = $Arguments }
-  $previousDiagnostics = [Environment]::GetEnvironmentVariable('STELLR_STARTUP_DIAGNOSTICS', 'Process')
-  try {
-    $env:STELLR_STARTUP_DIAGNOSTICS = '1'
-    $process = Start-Process @start
-  } finally {
-    if ($null -eq $previousDiagnostics) {
-      Remove-Item Env:\STELLR_STARTUP_DIAGNOSTICS -ErrorAction SilentlyContinue
-    } else {
-      $env:STELLR_STARTUP_DIAGNOSTICS = $previousDiagnostics
-    }
-  }
-  $startup = [Diagnostics.Stopwatch]::StartNew()
-  while ($startup.Elapsed.TotalSeconds -lt $StartupTimeoutSeconds) {
-    Start-Sleep -Milliseconds 500
-    $process.Refresh()
-    if ($process.HasExited) {
-      throw (New-StellrStartupFailure $process $stdoutPath $stderrPath 'Stellr exited during startup.')
-    }
-    if ($process.MainWindowTitle -eq 'Stellr' -and $process.MainWindowHandle -ne 0) { return $process }
-  }
-  throw (New-StellrStartupFailure $process $stdoutPath $stderrPath "Stellr did not create its desktop window within $StartupTimeoutSeconds seconds.")
+  $process = Start-StellrProcessWithDiagnostics $start $startupLog
+  Wait-StellrDesktopWindow `
+    $process `
+    $startupLog `
+    $StartupTimeoutSeconds `
+    'Stellr exited during startup.' `
+    "Stellr did not create its desktop window within $StartupTimeoutSeconds seconds."
 }
 
 function Find-Element([System.Diagnostics.Process]$Process, [string]$Name) {
@@ -145,12 +101,20 @@ try {
   }
 
   $forwardedUrl = "https://github.com/$Repository/issues/$ForwardedIssue"
-  $second = Start-Process -FilePath $executable -WorkingDirectory $workingDirectory -ArgumentList @('open', $forwardedUrl) -PassThru
+  $secondLog = New-StellrStartupLog $startupLogRoot 'second-instance'
+  $secondStart = @{
+    FilePath = $executable
+    WorkingDirectory = $workingDirectory
+    ArgumentList = @('open', $forwardedUrl)
+  }
+  $second = Start-StellrProcessWithDiagnostics $secondStart $secondLog
   if (-not $second.WaitForExit(15000)) {
     Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
-    throw 'The second instance did not forward its route and exit.'
+    throw (Get-StellrStartupFailure $second $secondLog 'The second instance did not forward its route and exit.')
   }
-  if ($second.ExitCode -ne 0) { throw "The second instance exited with code $($second.ExitCode)." }
+  if ($second.ExitCode -ne 0) {
+    throw (Get-StellrStartupFailure $second $secondLog 'The second instance failed while forwarding its route.')
+  }
   Find-Element $primary $ForwardedIssueTitle | Out-Null
 
   [StellrWindowControl]::ShowWindowAsync($primary.MainWindowHandle, 6) | Out-Null

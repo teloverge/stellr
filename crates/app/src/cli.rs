@@ -9,8 +9,20 @@ use clap::{Args, Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
-    #[arg(value_name = "STELLR_LINK", hide = true)]
+    #[arg(
+        value_name = "STELLR_LINK",
+        hide = true,
+        value_parser = parse_protocol_target
+    )]
     pub protocol_target: Option<String>,
+}
+
+fn parse_protocol_target(value: &str) -> Result<String, String> {
+    if value.starts_with("stellr://") {
+        Ok(value.to_owned())
+    } else {
+        Err("expected a Stellr subcommand or stellr:// link".to_owned())
+    }
 }
 
 #[derive(Subcommand)]

@@ -245,6 +245,11 @@ mod tests {
     }
 
     #[test]
+    fn an_arbitrary_root_argument_is_an_invalid_console_command() {
+        assert!(Cli::try_parse_from(["stellr", "not-a-command"]).is_err());
+    }
+
+    #[test]
     fn appimage_launch_uses_the_callers_original_working_directory() {
         let mounted = std::env::temp_dir().join("mounted-appimage").join("usr");
         let original = std::env::temp_dir().join("stellr-repository");
