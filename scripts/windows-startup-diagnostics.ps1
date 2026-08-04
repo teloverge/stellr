@@ -57,7 +57,9 @@ function Start-StellrProcessWithDiagnostics(
   $previousDiagnostics = [Environment]::GetEnvironmentVariable('STELLR_STARTUP_DIAGNOSTICS', 'Process')
   try {
     $env:STELLR_STARTUP_DIAGNOSTICS = '1'
-    Start-Process @parameters
+    $process = Start-Process @parameters
+    [void]$process.Handle
+    $process
   } finally {
     if ($null -eq $previousDiagnostics) {
       Remove-Item Env:\STELLR_STARTUP_DIAGNOSTICS -ErrorAction SilentlyContinue

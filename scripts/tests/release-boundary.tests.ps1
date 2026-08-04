@@ -32,6 +32,8 @@ Assert-True ($startupHelper.Contains('STELLR_DESKTOP_STARTUP_STAGE')) `
   'The process smoke must report the last native startup stage.'
 Assert-True ($startupHelper.Contains('GetExitCodeProcess')) `
   'The process smoke must read redirected child exit codes through the native Windows handle.'
+Assert-True ($startupHelper.Contains('[void]$process.Handle')) `
+  'The process launcher must retain the native handle before a short-lived child exits.'
 Assert-True ($processSmoke.Contains('New-StellrStartupLog $startupLogRoot ''second-instance''')) `
   'The second-instance launch must use per-launch diagnostics too.'
 Assert-True ($processSmoke.Contains('$second.WaitForExit()')) `
