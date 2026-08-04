@@ -83,7 +83,6 @@ impl RouteInbox {
 }
 
 pub struct DesktopRuntimeOptions {
-    pub current_dir: PathBuf,
     pub spaces_file: PathBuf,
     pub cache_root: PathBuf,
 }
@@ -490,9 +489,8 @@ async fn start_runtime_with_initial_entry(
     .map_err(DesktopRuntimeError::Runtime)
 }
 
-pub fn default_options(current_dir: PathBuf) -> DesktopRuntimeOptions {
+pub fn default_options() -> DesktopRuntimeOptions {
     DesktopRuntimeOptions {
-        current_dir,
         spaces_file: SpaceStore::default_file(),
         cache_root: Cache::default_root(),
     }
@@ -576,7 +574,7 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                 let polling =
                     PollingControl::focus_aware(FOCUSED_POLL_INTERVAL, BACKGROUND_POLL_INTERVAL);
                 let runtime = start_runtime_with_initial_entry(
-                    default_options(launch.cwd.clone()),
+                    default_options(),
                     target.as_ref().map(RouteTarget::entry),
                     Arc::new(provider_slot.clone()),
                     Some(polling),

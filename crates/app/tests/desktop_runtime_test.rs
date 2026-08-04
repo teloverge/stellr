@@ -24,15 +24,12 @@ fn git(repo: &Path, arguments: &[&str]) {
 }
 
 #[tokio::test]
-async fn desktop_runtime_starts_without_treating_the_working_directory_as_a_repository() {
+async fn desktop_runtime_starts_with_an_empty_store_without_persisting_a_repository() {
     let profile = tempfile::tempdir().unwrap();
-    let working_directory = profile.path().join("installed-app");
-    std::fs::create_dir(&working_directory).unwrap();
     let spaces_file = profile.path().join("spaces.toml");
 
     let runtime = start_runtime(
         DesktopRuntimeOptions {
-            current_dir: working_directory,
             spaces_file: spaces_file.clone(),
             cache_root: profile.path().join("cache"),
         },
@@ -65,7 +62,6 @@ async fn desktop_runtime_opens_and_persists_the_callers_github_repository() {
 
     let runtime = start_runtime_with_entry(
         DesktopRuntimeOptions {
-            current_dir: repo.clone(),
             spaces_file: profile.path().join("spaces.toml"),
             cache_root: profile.path().join("cache"),
         },
