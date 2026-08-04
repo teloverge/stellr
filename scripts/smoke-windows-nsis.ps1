@@ -1,13 +1,43 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string]$InstallerPath
+  [string]$InstallerPath,
+  [int]$StartupTimeoutSeconds = 90
 )
 
 $ErrorActionPreference = 'Stop'
+if ($StartupTimeoutSeconds -le 0) { throw 'StartupTimeoutSeconds must be positive.' }
 $installer = (Resolve-Path $InstallerPath).Path
 $appProcess = $null
 $installedExecutable = $null
 $uninstaller = $null
+$startupLogBase = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+  [IO.Path]::GetTempPath()
+} else {
+  $env:RUNNER_TEMP
+}
+$startupLogRoot = Join-Path $startupLogBase "stellr-installed-startup-$PID"
+New-Item -ItemType Directory -Path $startupLogRoot -Force | Out-Null
+
+function New-StellrStartupFailure(
+  [System.Diagnostics.Process]$Process,
+  [string]$StdoutPath,
+  [string]$StderrPath,
+  [string]$Reason
+) {
+  $lines = @()
+  foreach ($path in @($StdoutPath, $StderrPath)) {
+    if (Test-Path -LiteralPath $path) {
+      $lines += @(Get-Content -LiteralPath $path -ErrorAction SilentlyContinue)
+    }
+  }
+  $marker = $lines |
+    Where-Object { $_ -match '^STELLR_DESKTOP_STARTUP_(STAGE|ERROR)=' } |
+    Select-Object -Last 1
+  if ([string]::IsNullOrWhiteSpace($marker)) { $marker = 'STELLR_DESKTOP_STARTUP_STAGE=<none captured>' }
+  $state = if ($Process.HasExited) { "exited with code $($Process.ExitCode)" } else { 'remained running' }
+  $diagnostics = if ($lines.Count -eq 0) { '<no startup output captured>' } else { $lines -join [Environment]::NewLine }
+  return "$Reason Process $($Process.Id) $state. Last startup marker: $marker`n$diagnostics"
+}
 
 function Get-StellrUninstallRecord {
   $roots = @(
@@ -76,20 +106,39 @@ try {
   }
 
   $installDirectory = Split-Path -Parent $installedExecutable
-  $appProcess = Start-Process -FilePath $installedExecutable `
-    -WorkingDirectory $installDirectory `
-    -PassThru
+  $stdoutPath = Join-Path $startupLogRoot 'installed-stdout.log'
+  $stderrPath = Join-Path $startupLogRoot 'installed-stderr.log'
+  $previousDiagnostics = [Environment]::GetEnvironmentVariable('STELLR_STARTUP_DIAGNOSTICS', 'Process')
+  try {
+    $env:STELLR_STARTUP_DIAGNOSTICS = '1'
+    $appProcess = Start-Process -FilePath $installedExecutable `
+      -WorkingDirectory $installDirectory `
+      -RedirectStandardOutput $stdoutPath `
+      -RedirectStandardError $stderrPath `
+      -PassThru
+  } finally {
+    if ($null -eq $previousDiagnostics) {
+      Remove-Item Env:\STELLR_STARTUP_DIAGNOSTICS -ErrorAction SilentlyContinue
+    } else {
+      $env:STELLR_STARTUP_DIAGNOSTICS = $previousDiagnostics
+    }
+  }
   $windowReady = $false
-  for ($attempt = 0; $attempt -lt 60; $attempt++) {
+  $startup = [Diagnostics.Stopwatch]::StartNew()
+  while ($startup.Elapsed.TotalSeconds -lt $StartupTimeoutSeconds) {
     Start-Sleep -Milliseconds 500
     $appProcess.Refresh()
-    if ($appProcess.HasExited) { throw "Installed Stellr exited early with code $($appProcess.ExitCode)." }
+    if ($appProcess.HasExited) {
+      throw (New-StellrStartupFailure $appProcess $stdoutPath $stderrPath 'Installed Stellr exited during startup.')
+    }
     if ($appProcess.MainWindowTitle -eq 'Stellr' -and $appProcess.MainWindowHandle -ne 0) {
       $windowReady = $true
       break
     }
   }
-  if (-not $windowReady) { throw 'Installed Stellr did not show its native window.' }
+  if (-not $windowReady) {
+    throw (New-StellrStartupFailure $appProcess $stdoutPath $stderrPath "Installed Stellr did not show its native window within $StartupTimeoutSeconds seconds.")
+  }
 
   $webViewProcess = $null
   for ($attempt = 0; $attempt -lt 20; $attempt++) {

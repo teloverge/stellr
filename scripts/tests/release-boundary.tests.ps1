@@ -15,6 +15,16 @@ Assert-True ($processSmoke.Contains('second instance')) 'The process smoke must 
 Assert-True ($processSmoke.Contains('ShowWindowAsync')) 'The process smoke must exercise native focus transitions.'
 Assert-True ($processSmoke.Contains('WINDOWS_ROUTE_RESTORED_AFTER_RELAUNCH=true')) `
   'The process smoke must prove route restoration after relaunch.'
+Assert-True ($processSmoke.Contains('[int]$StartupTimeoutSeconds = 90')) `
+  'The process smoke must expose the approved 90-second startup budget.'
+Assert-True ($processSmoke.Contains('[Diagnostics.Stopwatch]::StartNew()')) `
+  'The process smoke must measure a startup deadline instead of counting attempts.'
+Assert-True ($processSmoke.Contains('STELLR_STARTUP_DIAGNOSTICS')) `
+  'The process smoke must enable native stage diagnostics for each child.'
+Assert-True ($processSmoke.Contains('RedirectStandardError')) `
+  'The process smoke must capture startup diagnostics.'
+Assert-True ($processSmoke.Contains('STELLR_DESKTOP_STARTUP_STAGE')) `
+  'The process smoke must report the last native startup stage.'
 
 $releasePath = Join-Path $repo '.github\workflows\release.yml'
 Assert-True (Test-Path $releasePath) 'The fail-closed tagged release workflow is missing.'
@@ -48,7 +58,12 @@ foreach ($required in @(
 $changelog = Get-Content (Join-Path $repo 'CHANGELOG.md')
 $unreleased = [Array]::IndexOf($changelog, '## Unreleased')
 Assert-True ($unreleased -ge 0) 'The changelog must retain an Unreleased section.'
-Assert-True ($changelog[$unreleased + 2].Contains('native desktop shell')) `
-  'The newest Unreleased entry must describe the completed native desktop shell.'
+$nextRelease = $unreleased + 1
+while ($nextRelease -lt $changelog.Count -and -not $changelog[$nextRelease].StartsWith('## ')) {
+  $nextRelease++
+}
+$unreleasedBody = $changelog[($unreleased + 1)..($nextRelease - 1)] -join "`n"
+Assert-True ($unreleasedBody.Contains('native desktop shell')) `
+  'Unreleased must retain the completed native desktop shell entry.'
 
 Write-Output 'RELEASE_BOUNDARY_CONTRACT_PASSED=true'

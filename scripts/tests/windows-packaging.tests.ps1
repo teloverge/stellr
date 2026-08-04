@@ -62,6 +62,16 @@ Assert-True ($smokeContract.Contains('stellr-desktop.exe')) `
   'The installed smoke fallback must select the desktop entry point.'
 Assert-True ($smokeContract.Contains('WINDOWS_COMPANION_CLI_INSTALLED=true')) `
   'The installed smoke must prove the companion CLI is present.'
+Assert-True ($smokeContract.Contains('[int]$StartupTimeoutSeconds = 90')) `
+  'The installed smoke must expose the approved 90-second startup budget.'
+Assert-True ($smokeContract.Contains('[Diagnostics.Stopwatch]::StartNew()')) `
+  'The installed smoke must measure a startup deadline instead of counting attempts.'
+Assert-True ($smokeContract.Contains('STELLR_STARTUP_DIAGNOSTICS')) `
+  'The installed smoke must enable native stage diagnostics for the child.'
+Assert-True ($smokeContract.Contains('RedirectStandardError')) `
+  'The installed smoke must capture startup diagnostics.'
+Assert-True ($smokeContract.Contains('STELLR_DESKTOP_STARTUP_STAGE')) `
+  'The installed smoke must report the last native startup stage.'
 
 $signingRejected = $false
 try {

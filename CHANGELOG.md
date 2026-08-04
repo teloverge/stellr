@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Hardened Windows application startup smokes with a measured 90-second cold
+  start budget and captured native startup-stage diagnostics on failure.
 - Split the Windows desktop and CLI entry points so installed shortcuts and
   protocol launches open without a terminal while `stellr serve` retains
   native PowerShell and Command Prompt behavior.
