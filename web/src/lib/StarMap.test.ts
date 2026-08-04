@@ -17,7 +17,7 @@ afterEach(async () => {
   }
   document.body.innerHTML = ''
   document.head.querySelectorAll('[data-test-app-css]').forEach((style) => style.remove())
-  document.documentElement.style.removeProperty('--background')
+  document.documentElement.style.removeProperty('--map-background')
   vi.restoreAllMocks()
 })
 
@@ -47,7 +47,7 @@ function space(number: number): SpaceModel {
 }
 
 describe('StarMap wrapper', () => {
-  it('defines pure black as the default document background', () => {
+  it('defines pure black as the chart background in every shell mode', () => {
     const style = document.createElement('style')
     style.dataset.testAppCss = ''
     style.textContent = readFileSync(resolve(process.cwd(), 'src/app.css'), 'utf8').replace(
@@ -56,13 +56,16 @@ describe('StarMap wrapper', () => {
     )
     document.head.appendChild(style)
 
-    expect(getComputedStyle(document.documentElement).getPropertyValue('--background').trim()).toBe(
-      '#000',
-    )
+    for (const theme of ['light', 'dark']) {
+      document.documentElement.dataset.theme = theme
+      expect(
+        getComputedStyle(document.documentElement).getPropertyValue('--map-background').trim(),
+      ).toBe('#000')
+    }
   })
 
   it('sets the initial renderer background from the mounted document token', () => {
-    document.documentElement.style.setProperty('--background', 'rgb(12, 34, 56)')
+    document.documentElement.style.setProperty('--map-background', 'rgb(12, 34, 56)')
     const setBackground = vi.spyOn(Renderer.prototype, 'setBackground')
     const target = document.createElement('div')
     document.body.appendChild(target)

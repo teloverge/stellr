@@ -1,13 +1,29 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte'
   import DetailPane from './lib/DetailPane.svelte'
+  import SignInPanel from './lib/SignInPanel.svelte'
   import Sidebar from './lib/Sidebar.svelte'
+  import StatePanel from './lib/StatePanel.svelte'
   import StarMap from './lib/StarMap.svelte'
-  import { removeSpace } from './lib/api'
+  import { addSpace, removeSpace } from './lib/api'
   import { Control, pageIssue, takePageToken } from './lib/control.svelte'
   import type { Model } from './lib/model'
   import { Route } from './lib/route.svelte'
+  import { ThemeController } from './lib/theme.svelte'
   import { decideDock, type Dock } from './lib/starmap/dock'
+  import {
+    beginDeviceAuthorization,
+    cancelDeviceAuthorization,
+    deviceAuthorizationStatus,
+    hasNativeAuth,
+    type DeviceFlowStatus,
+  } from './lib/native-auth'
+  import {
+    applyNativeRouteEvent,
+    hasNativeRoutePersistence,
+    persistNativeRoute,
+    takeNativeRouteEvent,
+  } from './lib/native-route'
 
   interface RemovalIntent {
     id: string
@@ -42,6 +58,7 @@
   const sessionToken = takePageToken()
   const control = new Control(sessionToken)
   const route = new Route()
+  const theme = new ThemeController()
   let pendingAddedId = $state<string | null>(null)
   const spaces = $derived(control.model?.spaces ?? [])
   const resolvedRoute = $derived(
@@ -57,6 +74,68 @@
   let workspace: HTMLElement
   let dock = $state<Dock>('right')
   let pendingRemovals = $state.raw<Record<string, RemovalIntent>>({})
+  let authStatus = $state<DeviceFlowStatus | null>(null)
+  let nativeRouteNotice = $state<string | null>(null)
+  let nativeRouteBusy = false
+  let persistedRouteKey: string | null = null
+  const nativeRoutePersistence = hasNativeRoutePersistence()
+  const modelLoading = $derived(
+    control.model === null ||
+      (nativeRoutePersistence && control.revision === 1 && spaces.length === 0 && route.space !== null),
+  )
+
+  async function pollNativeRoute(): Promise<void> {
+    if (nativeRouteBusy) return
+    nativeRouteBusy = true
+    try {
+      const event = await takeNativeRouteEvent()
+      if (event === null) return
+      const outcome = await applyNativeRouteEvent(
+        event,
+        spaces.map((space) => space.id),
+        addSpace,
+      )
+      if (outcome.error !== null) {
+        nativeRouteNotice = outcome.error
+        return
+      }
+      if (outcome.route !== null) {
+        nativeRouteNotice = null
+        if (!spaces.some((space) => space.id === outcome.route?.space)) {
+          pendingAddedId = outcome.route.space
+        }
+        route.go(outcome.route.space, outcome.route.issue)
+      }
+    } catch (error) {
+      nativeRouteNotice = String(error)
+    } finally {
+      nativeRouteBusy = false
+    }
+  }
+
+  async function refreshAuthorization(): Promise<void> {
+    try {
+      authStatus = await deviceAuthorizationStatus()
+    } catch (error) {
+      authStatus = { state: 'failed', message: String(error) }
+    }
+  }
+
+  async function beginAuthorization(): Promise<void> {
+    try {
+      authStatus = await beginDeviceAuthorization()
+    } catch (error) {
+      authStatus = { state: 'failed', message: String(error) }
+    }
+  }
+
+  async function cancelAuthorization(): Promise<void> {
+    try {
+      authStatus = await cancelDeviceAuthorization()
+    } catch (error) {
+      authStatus = { state: 'failed', message: String(error) }
+    }
+  }
 
   function reconcileModel(modelSnapshot: Model): void {
     if (pendingAddedId !== null) {
@@ -104,8 +183,37 @@
   $effect(() => {
     const modelSnapshot = control.model
     if (modelSnapshot === null) return
+    if (
+      nativeRoutePersistence &&
+      control.revision === 1 &&
+      modelSnapshot.spaces.length === 0 &&
+      route.space !== null
+    ) {
+      return
+    }
 
     untrack(() => reconcileModel(modelSnapshot))
+  })
+
+  $effect(() => {
+    const modelSnapshot = control.model
+    const spaceId = route.space
+    const issueNumber = route.issue
+    if (!nativeRoutePersistence || modelSnapshot === null) return
+    if (control.revision === 1 && modelSnapshot.spaces.length === 0 && spaceId !== null) return
+    if (spaceId === null && modelSnapshot.spaces.length > 0) return
+
+    const validated = resolveRoute(modelSnapshot, spaceId, issueNumber, false)
+    if (spaceId !== null && validated.space?.id !== spaceId) return
+    if (issueNumber !== null && validated.star?.number !== issueNumber) return
+
+    const key = JSON.stringify([spaceId, issueNumber])
+    if (key === persistedRouteKey) return
+    persistedRouteKey = key
+    void persistNativeRoute(spaceId, issueNumber).catch((error) => {
+      persistedRouteKey = null
+      nativeRouteNotice = `Could not remember the current route: ${String(error)}`
+    })
   })
 
   function addedSpace(addedId: string): void {
@@ -164,7 +272,13 @@
   }
 
   onMount(() => {
+    void theme.start()
     control.connect()
+    const nativeAuth = hasNativeAuth()
+    if (nativeAuth) void refreshAuthorization()
+    if (nativeAuth) void pollNativeRoute()
+    const authPoller = nativeAuth ? window.setInterval(refreshAuthorization, 1_000) : undefined
+    const routePoller = nativeAuth ? window.setInterval(pollNativeRoute, 250) : undefined
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return
       dock = decideDock(
@@ -178,14 +292,23 @@
     observer.observe(workspace)
 
     return () => {
+      if (authPoller !== undefined) window.clearInterval(authPoller)
+      if (routePoller !== undefined) window.clearInterval(routePoller)
       observer.disconnect()
       control.destroy()
       route.destroy()
+      theme.destroy()
     }
   })
 </script>
 
 <main class="app-shell">
+  {#if nativeRouteNotice !== null}
+    <div class="route-notice" role="alert">
+      <span>{nativeRouteNotice}</span>
+      <button aria-label="Dismiss routing error" onclick={() => (nativeRouteNotice = null)}>×</button>
+    </div>
+  {/if}
   <div class="sidebar-region">
     <Sidebar
       {spaces}
@@ -195,6 +318,8 @@
       added={addedSpace}
       removed={removedSpace}
       removeRequest={requestRemoveSpace}
+      themePreference={theme.preference}
+      selectTheme={(preference) => theme.setPreference(preference)}
     />
   </div>
 
@@ -204,8 +329,21 @@
     class:detail-bottom={activeStar !== null && dock === 'bottom'}
     bind:this={workspace}
   >
+    {#if authStatus !== null && (authStatus.state !== 'authorized' || authStatus.storage_warning !== null)}
+      <SignInPanel
+        status={authStatus}
+        begin={beginAuthorization}
+        cancel={cancelAuthorization}
+      />
+    {/if}
     <section class="map-region" aria-label="Issue map">
-      {#if activeSpace}
+      {#if modelLoading}
+        <StatePanel
+          kind="loading"
+          title="Opening observatory"
+          description="Loading cached spaces and the latest GitHub issue state."
+        />
+      {:else if activeSpace}
         <StarMap
           space={activeSpace}
           {currentIssue}
@@ -213,7 +351,11 @@
           select={(issueNumber) => route.go(activeSpace.id, issueNumber)}
         />
       {:else}
-        <p class="empty-map">No spaces yet. Add a local path or GitHub repository to begin.</p>
+        <StatePanel
+          kind="empty"
+          title="No spaces yet"
+          description="Add a local path or GitHub repository to begin."
+        />
       {/if}
     </section>
 
@@ -227,6 +369,7 @@
 
 <style>
   .app-shell {
+    position: relative;
     display: grid;
     grid-template-columns: clamp(14rem, 24vw, 20rem) minmax(0, 1fr);
     width: 100%;
@@ -234,6 +377,31 @@
     min-width: 0;
     min-height: 0;
     overflow: hidden;
+  }
+
+  .route-notice {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    z-index: 10;
+    display: flex;
+    max-width: min(28rem, calc(100% - 2rem));
+    gap: 0.75rem;
+    align-items: flex-start;
+    padding: 0.8rem 1rem;
+    border: 1px solid var(--destructive);
+    border-radius: 0.7rem;
+    color: var(--foreground);
+    background: color-mix(in oklch, var(--surface-raised) 88%, var(--destructive));
+    box-shadow: 0 0.75rem 2rem var(--shadow-color);
+  }
+
+  .route-notice button {
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    cursor: pointer;
   }
 
   .sidebar-region {
@@ -251,6 +419,7 @@
   }
 
   .workspace {
+    position: relative;
     display: grid;
     grid-template-areas: "map";
     grid-template-columns: minmax(0, 1fr);
@@ -258,6 +427,7 @@
     width: 100%;
     min-height: 0;
     overflow: hidden;
+    background: var(--map-background);
   }
 
   .workspace.detail-right {
@@ -287,16 +457,4 @@
     grid-area: detail;
   }
 
-  .empty-map {
-    display: flex;
-    box-sizing: border-box;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-    margin: 0;
-    padding: 2rem;
-    color: var(--muted-foreground);
-    text-align: center;
-  }
 </style>

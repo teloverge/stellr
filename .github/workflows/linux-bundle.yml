@@ -1,0 +1,94 @@
+name: linux-bundle
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install Tauri Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+      - run: npm --prefix web ci
+      - name: Build unsigned Linux x86_64 packages
+        run: bash scripts/build-linux-packages.sh
+      - name: Mark development artifacts as unsigned
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ## Linux development packages
+
+          The AppImage and deb in `Stellr-Linux-x86_64-packages-UNSIGNED-NOT-FOR-RELEASE` are intentionally unsigned development artifacts and must not be published as an official release.
+          SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stellr-Linux-x86_64-packages-UNSIGNED-NOT-FOR-RELEASE
+          path: artifacts/linux-x86_64/*
+          if-no-files-found: error
+
+  smoke-appimage:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: Stellr-Linux-x86_64-packages-UNSIGNED-NOT-FOR-RELEASE
+          path: artifacts/linux-x86_64
+      - name: Install clean-runner AppImage smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dbus-x11 \
+            iproute2 \
+            libayatana-appindicator3-1 \
+            libegl1 \
+            libfuse2 \
+            libgles2 \
+            openbox \
+            xdg-desktop-portal \
+            xdg-desktop-portal-gtk \
+            xdotool \
+            xvfb
+      - name: Directly launch AppImage and prove the native boundary
+        run: bash scripts/smoke-linux-package.sh AppImage artifacts/linux-x86_64/*.AppImage
+
+  smoke-deb:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: Stellr-Linux-x86_64-packages-UNSIGNED-NOT-FOR-RELEASE
+          path: artifacts/linux-x86_64
+      - name: Install clean-runner deb smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dbus-x11 iproute2 libegl1 openbox xdotool xvfb
+      - name: Install deb, launch it, and prove the native boundary
+        run: bash scripts/smoke-linux-package.sh Deb artifacts/linux-x86_64/*.deb

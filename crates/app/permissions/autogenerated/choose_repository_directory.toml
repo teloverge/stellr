@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-choose-repository-directory"
+description = "Enables the choose_repository_directory command without any pre-configured scope."
+commands.allow = ["choose_repository_directory"]
+
+[[permission]]
+identifier = "deny-choose-repository-directory"
+description = "Denies the choose_repository_directory command without any pre-configured scope."
+commands.deny = ["choose_repository_directory"]

@@ -1,97 +1,107 @@
 mod cli;
 
-use std::{io::Write, sync::Arc, time::Duration};
+use std::{ffi::OsString, io::Write, path::PathBuf, sync::Arc, time::Duration};
 
 use clap::Parser;
-use stellr_core::Model;
+use stellr_app::runtime::{RuntimeOptions, SessionAuth, start};
 use stellr_github::{auth::resolve_token, cache::Cache, sync::GithubProvider};
-use stellr_server::{poll::spawn_poller, routes::router, spaces::SpaceStore, state::AppState};
+use stellr_server::spaces::SpaceStore;
 
 use crate::cli::{Cli, Command, ServeArgs};
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
+fn effective_launch_dir(
+    current: PathBuf,
+    appimage: Option<OsString>,
+    original_working_dir: Option<OsString>,
+) -> PathBuf {
+    if appimage.is_some()
+        && let Some(original) = original_working_dir.map(PathBuf::from)
+        && original.is_absolute()
+    {
+        return original;
+    }
+
+    current
+}
+
+fn launch_current_dir() -> std::io::Result<PathBuf> {
+    Ok(effective_launch_dir(
+        std::env::current_dir()?,
+        std::env::var_os("APPIMAGE"),
+        std::env::var_os("OWD"),
+    ))
+}
+
+fn main() {
+    if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<(), DynError> {
+fn run() -> Result<(), DynError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Serve(args) => serve(args).await,
+        #[cfg(debug_assertions)]
+        Some(Command::Acceptance(args)) => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(stellr_app::acceptance::run(args.github_base, args.profile)),
+        Some(Command::Serve(args)) => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(serve(args)),
+        Some(Command::Open(args)) => {
+            let cwd = launch_current_dir()?;
+            stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch {
+                cwd,
+                target: args.target,
+                restore_route: false,
+            })
+            .map_err(Into::into)
+        }
+        None => {
+            let cwd = launch_current_dir()?;
+            let restore_route = cli.protocol_target.is_none();
+            let target = cli
+                .protocol_target
+                .unwrap_or_else(|| cwd.to_string_lossy().into_owned());
+            stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch {
+                target,
+                cwd,
+                restore_route,
+            })
+            .map_err(Into::into)
+        }
     }
 }
 
 async fn serve(args: ServeArgs) -> Result<(), DynError> {
     let provider_token = resolve_token()?;
     let provider = Arc::new(GithubProvider::new(provider_token)?);
-    let session_token = if args.no_token {
-        None
-    } else {
-        Some(session_token().map_err(|error| {
-            std::io::Error::other(format!("could not generate session token: {error}"))
-        })?)
-    };
-    let spaces = SpaceStore::load(SpaceStore::default_file());
-    let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
-    let state = Arc::new(AppState {
-        hub,
-        token: session_token.clone(),
-        spaces: tokio::sync::Mutex::new(spaces),
-        refresh: Arc::new(tokio::sync::Notify::new()),
-    });
-    spawn_poller(
-        state.clone(),
+    let runtime = start(
+        RuntimeOptions {
+            address: args.addr,
+            session_auth: if args.no_token {
+                SessionAuth::Disabled
+            } else {
+                SessionAuth::Required
+            },
+            issue: args.issue,
+            spaces_file: SpaceStore::default_file(),
+            cache_root: Cache::default_root(),
+            poll_interval: Duration::from_secs(30),
+        },
         provider,
-        Cache::new(Cache::default_root()),
-        Duration::from_secs(30),
-    );
-
-    let listener = tokio::net::TcpListener::bind(&args.addr).await?;
-    let address = listener.local_addr()?;
-    let url = cockpit_url(address, session_token.as_deref(), args.issue);
-    println!("stellr cockpit: {url}");
+    )
+    .await?;
+    println!("stellr cockpit: {}", runtime.cockpit_url());
     std::io::stdout().flush()?;
 
-    axum::serve(listener, router(state)).await?;
+    runtime.wait().await?;
     Ok(())
-}
-
-fn cockpit_url(
-    address: std::net::SocketAddr,
-    token: Option<&str>,
-    issue: Option<std::num::NonZeroU64>,
-) -> String {
-    let mut query = Vec::new();
-    if let Some(token) = token {
-        query.push(format!("token={token}"));
-    }
-    if let Some(issue) = issue {
-        query.push(format!("issue={issue}"));
-    }
-    let suffix = if query.is_empty() {
-        String::new()
-    } else {
-        format!("?{}", query.join("&"))
-    };
-    format!("http://{address}/{suffix}")
-}
-
-fn session_token() -> Result<String, getrandom::Error> {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes)?;
-    let mut token = String::with_capacity(32);
-    for byte in bytes {
-        token.push(HEX[(byte >> 4) as usize] as char);
-        token.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    Ok(token)
 }
 
 #[cfg(test)]
@@ -100,15 +110,21 @@ mod tests {
 
     use clap::Parser;
 
-    use crate::{
-        cli::{Cli, Command},
-        session_token,
-    };
+    use crate::cli::{Cli, Command};
+
+    #[test]
+    fn bare_launch_selects_desktop_mode() {
+        let parsed = Cli::try_parse_from(["stellr"]).unwrap();
+
+        assert!(parsed.command.is_none());
+    }
 
     #[test]
     fn serve_defaults_to_loopback_port_8787_with_session_auth() {
         let parsed = Cli::try_parse_from(["stellr", "serve"]).unwrap();
-        let Command::Serve(args) = parsed.command;
+        let Some(Command::Serve(args)) = parsed.command else {
+            panic!("serve should select the serve command")
+        };
 
         assert_eq!(args.addr, "127.0.0.1:8787");
         assert!(!args.no_token);
@@ -120,7 +136,9 @@ mod tests {
         let parsed =
             Cli::try_parse_from(["stellr", "serve", "--addr", "127.0.0.1:0", "--no-token"])
                 .unwrap();
-        let Command::Serve(args) = parsed.command;
+        let Some(Command::Serve(args)) = parsed.command else {
+            panic!("serve should select the serve command")
+        };
 
         assert_eq!(args.addr, "127.0.0.1:0");
         assert!(args.no_token);
@@ -131,21 +149,78 @@ mod tests {
         let parsed =
             Cli::try_parse_from(["stellr", "serve", "--addr", "127.0.0.1:0", "--issue", "14"])
                 .unwrap();
-        let Command::Serve(args) = parsed.command;
+        let Some(Command::Serve(args)) = parsed.command else {
+            panic!("serve should select the serve command")
+        };
 
         assert_eq!(args.issue.map(NonZeroU64::get), Some(14));
         assert!(Cli::try_parse_from(["stellr", "serve", "--issue", "0"]).is_err());
     }
 
     #[test]
-    fn session_token_is_32_lowercase_hex_characters() {
-        let token = session_token().unwrap();
+    fn open_accepts_one_path_url_slug_or_stellr_target() {
+        for target in [
+            r"D:\dev\stellr",
+            "teloverge/stellr",
+            "https://github.com/teloverge/stellr/issues/62",
+            "stellr://space?repo=teloverge%2Fstellr&issue=62",
+        ] {
+            let parsed = Cli::try_parse_from(["stellr", "open", target]).unwrap();
+            let Some(Command::Open(args)) = parsed.command else {
+                panic!("open should select the desktop open command")
+            };
+            assert_eq!(args.target, target);
+        }
+        assert!(Cli::try_parse_from(["stellr", "open"]).is_err());
+        assert!(Cli::try_parse_from(["stellr", "open", "one", "two"]).is_err());
+    }
 
-        assert_eq!(token.len(), 32);
-        assert!(
-            token
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    #[test]
+    fn a_registered_stellr_protocol_link_is_accepted_as_the_hidden_root_target() {
+        let link = "stellr://space?repo=teloverge%2Fstellr&issue=62";
+        let parsed = Cli::try_parse_from(["stellr", link]).unwrap();
+
+        assert!(parsed.command.is_none());
+        assert_eq!(parsed.protocol_target.as_deref(), Some(link));
+    }
+
+    #[test]
+    fn appimage_launch_uses_the_callers_original_working_directory() {
+        let mounted = std::env::temp_dir().join("mounted-appimage").join("usr");
+        let original = std::env::temp_dir().join("stellr-repository");
+
+        assert_eq!(
+            super::effective_launch_dir(
+                mounted,
+                Some("/tmp/Stellr.AppImage".into()),
+                Some(original.clone().into_os_string()),
+            ),
+            original
+        );
+    }
+
+    #[test]
+    fn unpackaged_launch_ignores_an_unpaired_original_working_directory() {
+        let current = std::env::temp_dir().join("stellr-repository");
+        let unrelated = std::env::temp_dir().join("unrelated");
+
+        assert_eq!(
+            super::effective_launch_dir(current.clone(), None, Some(unrelated.into_os_string()),),
+            current
+        );
+    }
+
+    #[test]
+    fn appimage_launch_rejects_a_relative_original_working_directory() {
+        let mounted = std::env::temp_dir().join("mounted-appimage").join("usr");
+
+        assert_eq!(
+            super::effective_launch_dir(
+                mounted.clone(),
+                Some("/tmp/Stellr.AppImage".into()),
+                Some("relative-repository".into()),
+            ),
+            mounted
         );
     }
 }

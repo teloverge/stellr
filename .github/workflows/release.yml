@@ -1,0 +1,238 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci
+      - run: npm --prefix web run check
+      - run: npm --prefix web test
+      - run: npm --prefix web run build
+      - name: Verify packaging and release contracts
+        shell: powershell
+        run: Get-ChildItem scripts\tests -Filter *.tests.ps1 | ForEach-Object { & $_.FullName }
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --workspace
+      - name: Require the tag to match the application version
+        shell: powershell
+        run: |
+          $version = (Get-Content crates\app\tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match Tauri version $version."
+          }
+
+  windows:
+    needs: validate
+    runs-on: windows-latest
+    env:
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Fail closed unless Windows signing credentials exist
+        shell: powershell
+        run: .\scripts\assert-windows-signing.ps1 -CertificateBase64 $env:WINDOWS_CERTIFICATE_BASE64 -CertificatePassword $env:WINDOWS_CERTIFICATE_PASSWORD
+      - name: Import Windows signing certificate
+        shell: powershell
+        run: |
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'stellr-windows-signing.pfx'
+          [IO.File]::WriteAllBytes($certificatePath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $certificate = Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password |
+            Where-Object HasPrivateKey |
+            Select-Object -First 1
+          if ($null -eq $certificate -or [string]::IsNullOrWhiteSpace($certificate.Thumbprint)) { throw 'Windows certificate import failed.' }
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - run: npm --prefix web ci
+      - name: Build signed Windows NSIS package
+        shell: powershell
+        run: .\scripts\build-windows-nsis.ps1 -Channel Release -CertificateThumbprint $env:WINDOWS_CERTIFICATE_THUMBPRINT
+      - name: Prove the real application-process boundary
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .\scripts\smoke-windows-application-process.ps1 -ExecutablePath target\release\stellr.exe
+      - name: Smoke signed install, WebView2 launch, and uninstall
+        shell: powershell
+        run: |
+          $installer = Get-ChildItem artifacts\windows-x64\*.exe -File | Select-Object -ExpandProperty FullName -First 1
+          .\scripts\smoke-windows-nsis.ps1 -InstallerPath $installer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: artifacts/windows-x64/*
+          if-no-files-found: error
+      - name: Remove imported signing certificate
+        if: always()
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_THUMBPRINT)) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:WINDOWS_CERTIFICATE_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+          }
+
+  macos:
+    needs: validate
+    runs-on: macos-latest
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Fail closed unless macOS signing credentials exist
+        run: bash scripts/assert-macos-signing.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Import Developer ID certificate
+        run: |
+          keychain="$RUNNER_TEMP/stellr-signing.keychain-db"
+          certificate="$RUNNER_TEMP/stellr-signing.p12"
+          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A -out "$certificate"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security default-keychain -s "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -t 3600 -u "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/{print $2; exit}')"
+          test -n "$identity" || { echo 'No Developer ID Application identity was imported.' >&2; exit 1; }
+          printf 'APPLE_SIGNING_IDENTITY=%s\n' "$identity" >> "$GITHUB_ENV"
+      - run: npm --prefix web ci
+      - name: Build signed universal macOS DMG
+        run: bash scripts/build-macos-universal.sh Release
+      - name: Verify signature, slices, and signed launch
+        run: bash scripts/inspect-macos-dmg.sh artifacts/macos-universal/*.dmg Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: artifacts/macos-universal/*
+          if-no-files-found: error
+      - name: Remove ephemeral signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/stellr-signing.keychain-db" 2>/dev/null || true
+
+  linux-build:
+    needs: validate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install Tauri Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential curl file libayatana-appindicator3-dev librsvg2-dev \
+            libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf wget
+      - run: npm --prefix web ci
+      - name: Build Linux release packages
+        run: bash scripts/build-linux-packages.sh Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: artifacts/linux-x86_64/*
+          if-no-files-found: error
+
+  linux-appimage-smoke:
+    needs: linux-build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-linux
+          path: artifacts/linux-x86_64
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dbus-x11 \
+            iproute2 \
+            libayatana-appindicator3-1 \
+            libegl1 \
+            libfuse2 \
+            libgles2 \
+            openbox \
+            xdg-desktop-portal \
+            xdg-desktop-portal-gtk \
+            xdotool \
+            xvfb
+      - run: bash scripts/smoke-linux-package.sh AppImage artifacts/linux-x86_64/*.AppImage
+
+  linux-deb-smoke:
+    needs: linux-build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-linux
+          path: artifacts/linux-x86_64
+      - run: sudo apt-get update && sudo apt-get install -y dbus-x11 iproute2 libegl1 openbox xdotool xvfb
+      - run: bash scripts/smoke-linux-package.sh Deb artifacts/linux-x86_64/*.deb
+
+  publish-draft:
+    needs: [windows, macos, linux-build, linux-appimage-smoke, linux-deb-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: artifacts
+      - name: Reject development artifacts
+        run: |
+          if find artifacts -type f -name '*UNSIGNED-NOT-FOR-RELEASE*' -print -quit | grep -q .; then
+            echo 'Refusing to attach an unsigned development artifact.' >&2
+            exit 1
+          fi
+      - name: Create the gated draft release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" artifacts/* --draft --verify-tag --generate-notes --title "Stellr $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+      - name: Link package evidence from Issue 70
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME"
+          gh issue comment 70 --repo "$GITHUB_REPOSITORY" --body "Package evidence for $GITHUB_REF_NAME: [native release workflow]($run_url) and [gated draft release]($release_url)."

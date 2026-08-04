@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added the M2 native desktop shell with GitHub device authorization, OS-backed
+  credential persistence, single-instance deep-link routing, focus-aware
+  synchronization, restorable window and route state, native tray/settings
+  actions, and gated Windows, universal macOS, and Linux packages.
 - Published the first real M1 release constellation from the frozen live GitHub
   issue history, with immutable SVG, PNG, and story evidence linked from the
   README through animated, reduced-motion, and strict-Markdown paths.

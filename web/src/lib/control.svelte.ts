@@ -41,6 +41,7 @@ function controlUrl(token: string | null, url?: string): string {
 
 export class Control {
   model = $state<Model | null>(null)
+  revision = $state(0)
   status = $state<ConnectionStatus>('connecting')
 
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -105,6 +106,7 @@ export class Control {
     socket.onmessage = (event) => {
       if (this.#socket === socket && typeof event.data === 'string') {
         this.model = JSON.parse(event.data) as Model
+        this.revision += 1
       }
     }
 

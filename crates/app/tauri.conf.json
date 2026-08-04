@@ -1,0 +1,65 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Stellr",
+  "version": "0.1.0",
+  "identifier": "com.teloverge.stellr",
+  "build": {
+    "frontendDist": "../../web/dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'",
+      "capabilities": [
+        {
+          "identifier": "main-loopback-native-bridge",
+          "description": "Allows only Stellr's loopback-hosted main window to use the narrow M2 native bridge.",
+          "windows": ["main"],
+          "remote": {
+            "urls": ["http://127.0.0.1:*"]
+          },
+          "permissions": [
+            "allow-begin-device-authorization",
+            "allow-device-authorization-status",
+            "allow-cancel-device-authorization",
+            "allow-take-route-event",
+            "allow-persist-route-state",
+            "allow-get-theme-preference",
+            "allow-set-theme-preference",
+            "allow-choose-repository-directory",
+            "allow-open-external-url"
+          ]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1 | libappindicator3-1"
+        ]
+      }
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["stellr"]
+      }
+    }
+  }
+}

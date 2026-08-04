@@ -1,6 +1,13 @@
 <script lang="ts">
+  import FolderOpenIcon from 'phosphor-svelte/lib/FolderOpenIcon'
   import { addSpace, refreshSpace, removeSpace } from './api'
+  import AppearanceMenu from './AppearanceMenu.svelte'
   import type { SpaceModel } from './model'
+  import {
+    chooseRepositoryDirectory,
+    hasNativeShell,
+    type ThemePreference,
+  } from './native-shell'
 
   type Status = 'connecting' | 'open' | 'closed'
   type RowAction = 'refresh' | 'remove'
@@ -21,6 +28,10 @@
     addRequest?: typeof addSpace
     removeRequest?: typeof removeSpace
     refreshRequest?: typeof refreshSpace
+    themePreference?: ThemePreference
+    selectTheme?: (preference: ThemePreference) => Promise<void>
+    nativeShell?: boolean
+    chooseDirectory?: typeof chooseRepositoryDirectory
   }
 
   let {
@@ -33,15 +44,37 @@
     addRequest = addSpace,
     removeRequest = removeSpace,
     refreshRequest = refreshSpace,
+    themePreference = 'system',
+    selectTheme = async () => undefined,
+    nativeShell = hasNativeShell(),
+    chooseDirectory = chooseRepositoryDirectory,
   }: SidebarProps = $props()
 
   let path = $state('')
   let repo = $state('')
   let adding = $state(false)
   let addError = $state<string | null>(null)
+  let choosingDirectory = $state(false)
   let pendingRows = $state<Record<string, Partial<Record<RowAction, boolean>>>>({})
   let rowErrors = $state<Record<string, string | null>>({})
   const canAdd = $derived(Boolean(path.trim()) !== Boolean(repo.trim()))
+
+  async function browse(): Promise<void> {
+    if (choosingDirectory) return
+    choosingDirectory = true
+    addError = null
+    try {
+      const selected = await chooseDirectory()
+      if (selected !== null) {
+        path = selected
+        repo = ''
+      }
+    } catch (error) {
+      addError = error instanceof Error ? error.message : String(error)
+    } finally {
+      choosingDirectory = false
+    }
+  }
 
   function syncAge(syncedAt: number | null): string {
     if (syncedAt === null) return 'Never synced'
@@ -122,13 +155,30 @@
 <aside aria-label="Spaces">
   <header>
     <h1>Spaces</h1>
-    <p class="connection-status">{connectionLabel(connectionStatus)}</p>
+    <div class="header-actions">
+      <p class="connection-status">{connectionLabel(connectionStatus)}</p>
+      <AppearanceMenu preference={themePreference} select={selectTheme} />
+    </div>
   </header>
 
   <form onsubmit={submitAdd}>
     <label>
       Local path
-      <input name="path" bind:value={path} disabled={adding} />
+      <span class="path-field">
+        <input name="path" bind:value={path} disabled={adding || choosingDirectory} />
+        {#if nativeShell}
+          <button
+            class="browse"
+            type="button"
+            aria-label="Browse for local repository"
+            title="Browse for local repository"
+            disabled={adding || choosingDirectory}
+            onclick={browse}
+          >
+            <FolderOpenIcon size={18} aria-hidden="true" />
+          </button>
+        {/if}
+      </span>
     </label>
     <span class="or">or</span>
     <label>
@@ -153,8 +203,11 @@
             <span class="space-name">{space.name}</span>
             <span class="space-repo">{space.repo}</span>
             <span class="space-age">{syncAge(space.synced_at)}</span>
-            {#if space.stale}<span class="stale">Stale</span>{/if}
-            {#if space.error}<span class="provider-error">{space.error}</span>{/if}
+            {#if space.stale || space.error}
+              <span class="sync-warning" role="status">
+                {space.stale ? 'Stale' : ''}{space.stale && space.error ? ' · ' : ''}{space.error ?? ''}
+              </span>
+            {/if}
           </button>
           <div class="row-actions">
             <button
@@ -185,7 +238,7 @@
     min-height: 0;
     flex-direction: column;
     border-right: 1px solid var(--border);
-    background: var(--background);
+    background: var(--surface);
     color: var(--foreground);
   }
 
@@ -207,6 +260,12 @@
     font-size: 1rem;
   }
 
+  .header-actions {
+    display: flex;
+    gap: 0.65rem;
+    align-items: center;
+  }
+
   form {
     display: grid;
     gap: 0.5rem;
@@ -226,8 +285,22 @@
     padding: 0.5rem;
     border: 1px solid var(--border);
     color: var(--foreground);
-    background: var(--muted);
+    border-radius: 0.45rem;
+    background: var(--surface-raised);
     font: inherit;
+  }
+
+  .path-field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.4rem;
+  }
+
+  .browse {
+    display: grid;
+    width: 2.25rem;
+    padding: 0;
+    place-items: center;
   }
 
   input:focus-visible,
@@ -240,6 +313,7 @@
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--border);
     color: var(--foreground);
+    border-radius: 0.45rem;
     background: var(--muted);
     font: inherit;
     cursor: pointer;
@@ -284,7 +358,7 @@
   }
 
   li.active {
-    background: var(--muted);
+    background: var(--primary-soft);
   }
 
   .space-select {
@@ -319,7 +393,8 @@
     padding: 0.25rem 0.5rem;
     border: 1px solid var(--border);
     color: var(--muted-foreground);
-    background: var(--background);
+    border-radius: 0.4rem;
+    background: var(--surface-raised);
     font: inherit;
     font-size: 0.75rem;
     cursor: pointer;
@@ -334,10 +409,9 @@
     cursor: not-allowed;
   }
 
-  .stale,
-  .provider-error,
+  .sync-warning,
   .row-error {
-    color: var(--destructive);
+    color: var(--warning);
     font-size: 0.75rem;
   }
 

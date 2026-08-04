@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-begin-device-authorization"
+description = "Enables the begin_device_authorization command without any pre-configured scope."
+commands.allow = ["begin_device_authorization"]
+
+[[permission]]
+identifier = "deny-begin-device-authorization"
+description = "Denies the begin_device_authorization command without any pre-configured scope."
+commands.deny = ["begin_device_authorization"]
