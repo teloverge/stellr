@@ -2,6 +2,8 @@
 
 **Date:** 2026-08-03
 **Status:** Approved for implementation
+**Amended:** 2026-08-04 - approved separate desktop and CLI entry points after
+confirming Windows shell wait semantics are fixed by the PE subsystem.
 
 ## Problem
 
@@ -11,10 +13,12 @@ therefore creates a terminal window before the native Stellr window appears.
 That terminal is an implementation detail and should not be visible during an
 ordinary desktop launch.
 
-Stellr is also a real command-line application. The same executable provides
-`serve`, help, version, and error output. Switching the executable to the
-Windows GUI subsystem without preserving those console paths would fix the
-desktop symptom by silently breaking supported CLI behavior.
+Stellr is also a real command-line application. The current executable
+provides `serve`, help, version, and error output. Switching that executable to
+the Windows GUI subsystem would fix the desktop symptom by silently breaking
+supported CLI behavior: interactive `cmd.exe` does not wait for a GUI-subsystem
+process, and attaching that process to the parent console cannot change the
+shell's wait and exit-code decision.
 
 The Windows application-process smoke test has a separate reliability gap. It
 uses a fixed 30-second polling loop and reports only that no window appeared.
@@ -30,17 +34,20 @@ setting to suppress.
 
 ## Product Decision
 
-Release builds of `stellr.exe` are Windows GUI-subsystem applications. Normal
-desktop launches do not allocate or display a console window. Debug builds
-remain console-subsystem applications so developers retain ordinary terminal
-diagnostics.
+Windows packages contain two thin entry points backed by the same application
+assembly:
 
-Release invocations that intentionally use the CLI attach to their parent
-console before argument parsing or output. This preserves one installed
-executable and the existing `stellr serve` command. If parent-console
-attachment cannot preserve native PowerShell and `cmd.exe` behavior, the
-implementation must stop and revisit the executable boundary; it must not ship
-a quiet or detached `serve` command.
+- `stellr-desktop.exe` is the packaged GUI entry point. Release builds use the
+  Windows GUI subsystem, and the installer shortcut, display icon, and `stellr`
+  protocol registration target it.
+- `stellr.exe` remains the console-subsystem CLI entry point. It preserves
+  `serve`, help, version, invalid-command output, native shell waiting, and exit
+  codes from PowerShell and `cmd.exe`.
+
+Debug builds of both entry points remain console-subsystem applications so
+developers retain ordinary terminal diagnostics. The Windows installer
+includes the CLI beside the desktop executable; it does not duplicate runtime
+or domain logic between them.
 
 Windows startup smoke tests allow a measured 90-second cold-start budget and
 capture existing startup diagnostics on failure. A larger legitimate startup
@@ -54,8 +61,8 @@ than hiding, filtering, or ignoring it.
 ## Goals
 
 - Launch the installed desktop application without a visible terminal window.
-- Preserve interactive release CLI behavior from native PowerShell and
-  `cmd.exe`.
+- Preserve the installed `stellr` CLI and its interactive behavior from native
+  PowerShell and `cmd.exe`.
 - Keep debug-build console behavior unchanged.
 - Make Windows startup failures report the last known native startup stage.
 - Tolerate legitimate cold-run variance without accepting a missing window.
@@ -72,16 +79,19 @@ than hiding, filtering, or ignoring it.
 - Silence, filter, or waive GitHub Actions runtime warnings.
 - Change desktop navigation, repository selection, authentication, or server
   semantics.
-- Split Stellr into separate GUI and CLI products unless console attachment is
-  proven inadequate during implementation.
+- Split the desktop and CLI into separate products or duplicated application
+  implementations; they remain two entry points into one Stellr product and
+  shared assembly.
 - Change installer signing or release-signing policy.
 
 ## Design
 
-### Release subsystem
+### Executable boundary and release subsystem
 
-The app crate declares the Windows GUI subsystem only when compiling a release
-build for Windows. Conceptually, the crate-level contract is equivalent to:
+The app crate exposes a desktop binary in addition to the existing CLI binary.
+Only the desktop entry point declares the Windows GUI subsystem, and only when
+compiling a release build for Windows. Conceptually, its crate-level contract
+is equivalent to:
 
 ```rust
 #![cfg_attr(
@@ -91,41 +101,35 @@ build for Windows. Conceptually, the crate-level contract is equivalent to:
 ```
 
 The target predicate keeps non-Windows builds untouched. The debug predicate
-keeps local `cargo run` and test diagnostics attached to the developer's
-console. The final packaged executable must have PE subsystem
-`IMAGE_SUBSYSTEM_WINDOWS_GUI` (value 2), verified from the built binary rather
-than inferred from source text.
+keeps local desktop-entry diagnostics attached to the developer's console. The
+final packaged desktop executable must have PE subsystem
+`IMAGE_SUBSYSTEM_WINDOWS_GUI` (value 2), while the CLI executable must retain
+`IMAGE_SUBSYSTEM_WINDOWS_CUI` (value 3). Both values are verified from the
+built binaries rather than inferred from source text.
 
-### Launch classification and console attachment
+### Shared launch assembly
 
-Launch classification happens from raw process arguments before Clap parses
-them, because Clap may print help, version, or parse errors and terminate. The
-classifier has only two outcomes:
+The desktop and CLI entry points are dispatch adapters, not separate
+applications. Existing command parsing, working-directory resolution, desktop
+launch construction, runtime startup, and error behavior move behind shared
+application interfaces where both entry points need them.
 
-- **desktop-oriented:** no arguments, `open ...`, or a direct `stellr://...`
-  activation;
-- **console-oriented:** `serve ...`, `--help`, `-h`, `--version`, `-V`, or an
-  unrecognized/invalid command whose error belongs in the invoking console.
+The desktop entry point accepts the launch shapes supplied by Windows desktop
+integration: bare startup, `open <target>`, and a direct `stellr://...`
+activation. It never exposes `serve`, help, version, or general parser errors
+through a nonexistent console. Controlled desktop startup failures continue to
+use the existing native error dialog.
 
-On Windows release builds, a console-oriented launch attempts to attach to the
-parent process's console using `AttachConsole(ATTACH_PARENT_PROCESS)` before
-any parser or application output. Standard output and standard error are then
-made usable against that attached console when Windows did not establish
-usable standard handles automatically. The logic is Windows-specific and is a
-no-op for debug and non-Windows builds.
+The console entry point owns the complete CLI grammar. `serve`, help, version,
+and invalid-command paths remain ordinary console operations. A CLI `open`
+invocation may host the desktop in the console process the user deliberately
+started; it does not create an additional terminal window.
 
-Failure to attach must produce a testable non-zero CLI failure rather than
-pretend the command succeeded without visible output. Desktop-oriented launch
-does not attach, allocate, show, or later hide a console.
-
-The implementation must explicitly validate native shell behavior. A GUI
-subsystem process has different shell waiting semantics from a console
-subsystem process, so acceptance is not satisfied merely because bytes can be
-redirected from a child process. From PowerShell and `cmd.exe`, the release
-`serve` command must print its normal startup information, remain controllable,
-and return an observable exit status. If the single-executable approach cannot
-meet that behavior reliably, implementation pauses for a revised product
-decision, with a separate console entry-point as the likely fallback.
+On Windows, Tauri bundles `stellr-desktop.exe` as the main application binary
+and includes `stellr.exe` as the companion CLI. The Start menu shortcut,
+uninstall metadata display icon, and deep-link registration resolve to the
+desktop binary. The installed CLI remains independently launchable for users
+who intentionally choose the command line.
 
 ### Windows startup smoke diagnostics
 
@@ -170,18 +174,16 @@ runtime warning is absent.
 
 Implementation follows red-green-refactor.
 
-1. Add focused Rust tests for raw launch classification: bare/open/protocol
-   inputs are desktop-oriented; serve/help/version/invalid inputs are
-   console-oriented.
-2. Add Windows-specific tests around the console-preparation seam without
-   attaching the test runner itself to a different console.
-3. Add or extend script contract tests to require the 90-second named timeout,
+1. Add focused Rust tests for shared desktop launch construction and the
+   desktop entry point's bare/open/protocol argument shapes.
+2. Add Windows packaging tests that inspect the actual release PE headers,
+   require GUI subsystem value 2 for `stellr-desktop.exe`, and require console
+   subsystem value 3 for `stellr.exe`.
+3. Add an installed-package contract proving the shortcut/display icon and
+   protocol activation use the desktop binary while the CLI is also installed.
+4. Add or extend script contract tests to require the 90-second named timeout,
    deadline-based polling, child-scoped startup diagnostics, failure log
    emission, and non-zero timeout behavior.
-4. Add a native PowerShell PE-header assertion for the release executable and
-   call it after the Windows release build. It must initially observe the
-   current `WINDOWS_CUI` value and pass only after the subsystem change produces
-   `WINDOWS_GUI`.
 5. Add workflow contract coverage requiring exactly six
    `actions/upload-artifact@v7` uses and no `@v4` uses.
 6. Run the focused native tests, full Rust test suite, frontend checks, and
@@ -203,8 +205,8 @@ release executable.
   prints its captured startup diagnostics.
 - A desktop process that remains alive without a visible window for 90 seconds
   fails with its last recorded startup stage.
-- A release CLI process that cannot attach to the invoking console does not
-  silently continue as if output were available.
+- A missing or wrongly linked companion CLI fails the packaging contract; the
+  desktop executable is never used as a quiet CLI fallback.
 - An artifact upload regression fails its owning workflow; no warning filter or
   `continue-on-error` is introduced.
 - If `upload-artifact@v7` requires a real input or consumption change, update
@@ -222,12 +224,17 @@ made cumulative.
 
 - Launching installed Stellr normally creates the native window without a
   terminal window appearing or remaining visible.
-- The packaged release PE subsystem is `IMAGE_SUBSYSTEM_WINDOWS_GUI`.
+- The packaged desktop PE subsystem is `IMAGE_SUBSYSTEM_WINDOWS_GUI`, and the
+  companion CLI subsystem is `IMAGE_SUBSYSTEM_WINDOWS_CUI`.
 - Debug builds retain their ordinary console subsystem and diagnostics.
 - Release `stellr serve`, help, version, and invalid-command paths remain
-  visible and usable from native PowerShell and `cmd.exe`.
-- Bare, `open`, and protocol desktop launches never attach or allocate a
-  console.
+  visible and usable from native PowerShell and `cmd.exe` through the companion
+  CLI.
+- The installed shortcut and protocol registration launch
+  `stellr-desktop.exe`; bare, `open`, and protocol desktop launches never
+  allocate a console.
+- The Windows package installs both entry points without duplicating runtime or
+  domain logic.
 - Both Windows startup smokes use a named 90-second deadline and fail with the
   captured startup stage when the real window does not appear.
 - All six artifact upload steps use `actions/upload-artifact@v7`; no `@v4`
