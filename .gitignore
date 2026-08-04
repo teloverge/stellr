@@ -11,3 +11,7 @@ crates/app/gen/
 # Editor / OS
 .DS_Store
 Thumbs.db
+
+.env
+
+.superpowers/
