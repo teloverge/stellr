@@ -104,14 +104,14 @@ existing HTTP and control-WebSocket interfaces.
 The public command surface becomes:
 
 ```text
-stellr                    open or focus the desktop app on the current directory
+stellr                    open or focus the desktop app without requiring a repository
 stellr serve [options]    run the browser/IDE host
 stellr open <path|url>    open or focus a path, owner/repo, GitHub URL, or stellr link
 stellr --version          print the application version
 ```
 
-Bare launch captures the caller's current working directory as the requested
-space. `open` accepts:
+Bare launch restores persisted spaces when available and otherwise exposes the
+existing empty repository-selection shell. `open` accepts:
 
 - a local repository path;
 - an `owner/repo` slug;
@@ -341,7 +341,7 @@ than rewriting an older one.
 
 M2 is complete when:
 
-- bare `stellr` opens the native shell on the current repository;
+- bare `stellr` opens the native shell without requiring a repository;
 - `serve` retains its documented browser behavior;
 - `open` and `stellr://` route into one running instance;
 - device flow signs in without exposing the access token to the webview;

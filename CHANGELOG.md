@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed installed desktop startup so a no-argument launch opens the existing
+  empty repository-selection shell instead of treating the installation
+  directory as a Git repository.
 - Added the M2 native desktop shell with GitHub device authorization, OS-backed
   credential persistence, single-instance deep-link routing, focus-aware
   synchronization, restorable window and route state, native tray/settings
