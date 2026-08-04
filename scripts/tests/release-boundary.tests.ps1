@@ -32,6 +32,10 @@ Assert-True ($startupHelper.Contains('STELLR_DESKTOP_STARTUP_STAGE')) `
   'The process smoke must report the last native startup stage.'
 Assert-True ($processSmoke.Contains('New-StellrStartupLog $startupLogRoot ''second-instance''')) `
   'The second-instance launch must use per-launch diagnostics too.'
+Assert-True ($processSmoke.Contains('$second.WaitForExit()')) `
+  'The second-instance smoke must complete the native process wait before reading ExitCode.'
+Assert-True ($processSmoke.Contains('$second.Refresh()')) `
+  'The second-instance smoke must refresh the native process before reading ExitCode.'
 
 $releasePath = Join-Path $repo '.github\workflows\release.yml'
 Assert-True (Test-Path $releasePath) 'The fail-closed tagged release workflow is missing.'

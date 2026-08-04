@@ -110,8 +110,12 @@ try {
   $second = Start-StellrProcessWithDiagnostics $secondStart $secondLog
   if (-not $second.WaitForExit(15000)) {
     Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
+    $second.WaitForExit()
+    $second.Refresh()
     throw (Get-StellrStartupFailure $second $secondLog 'The second instance did not forward its route and exit.')
   }
+  $second.WaitForExit()
+  $second.Refresh()
   if ($second.ExitCode -ne 0) {
     throw (Get-StellrStartupFailure $second $secondLog 'The second instance failed while forwarding its route.')
   }
