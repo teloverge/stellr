@@ -1,0 +1,52 @@
+name: windows-bundle
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-development:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci
+      - name: Verify Windows packaging contract
+        shell: powershell
+        run: .\scripts\tests\windows-packaging.tests.ps1
+      - name: Build unsigned Windows x64 NSIS installer
+        shell: powershell
+        run: .\scripts\build-windows-nsis.ps1 -Channel Development
+      - name: Prove the real desktop application-process boundary
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .\scripts\smoke-windows-application-process.ps1 -ExecutablePath target\release\stellr.exe
+      - name: Smoke install, WebView2 launch, and uninstall
+        shell: powershell
+        run: |
+          $installer = Get-ChildItem artifacts\windows-x64\*UNSIGNED-NOT-FOR-RELEASE.exe -File | Select-Object -ExpandProperty FullName -First 1
+          .\scripts\smoke-windows-nsis.ps1 -InstallerPath $installer
+      - name: Mark development artifact as unsigned
+        shell: powershell
+        run: |
+          @"
+          ## Windows development bundle
+
+          `Stellr-Windows-x64-NSIS-UNSIGNED-NOT-FOR-RELEASE` is intentionally unsigned and must not be published as an official release.
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stellr-Windows-x64-NSIS-UNSIGNED-NOT-FOR-RELEASE
+          path: artifacts/windows-x64/*UNSIGNED-NOT-FOR-RELEASE*
+          if-no-files-found: error

@@ -7,14 +7,28 @@ repository.workspace = true
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
+chrono = "0.4"
+directories = "6"
+mime_guess = "2"
+rust-embed = "8"
 serde.workspace = true
 serde_json.workspace = true
 stellr-core = { path = "../core" }
+stellr-github = { path = "../github" }
 thiserror.workspace = true
 tokio.workspace = true
 subtle = "2"
+toml = "0.8"
 tower = "0.5"
 url = "2"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
+async-trait.workspace = true
+futures-util = "0.3"
 reqwest = { version = "0.12", features = ["json", "cookies"] }
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite = "0.24"

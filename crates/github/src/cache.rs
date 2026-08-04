@@ -253,6 +253,7 @@ mod tests {
         Snapshot {
             issues: vec![RawIssue {
                 number: 1,
+                parent_issue: None,
                 title: title.into(),
                 body: String::new(),
                 state: IssueState::Open,
@@ -288,6 +289,35 @@ mod tests {
         std::fs::write(dir.path().join("o__r.json"), b"{not json").unwrap();
 
         assert!(cache.load(&repo).is_none());
+    }
+
+    #[test]
+    fn load_accepts_older_snapshot_without_parent_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path().to_path_buf());
+        let repo = repo();
+        std::fs::write(
+            dir.path().join("o__r.json"),
+            br#"{
+                "issues": [{
+                    "number": 1,
+                    "title": "Older snapshot",
+                    "body": "",
+                    "state": "open",
+                    "assignees": [],
+                    "milestone": null,
+                    "labels": [],
+                    "blocked_by": [],
+                    "url": "u"
+                }],
+                "synced_at": 1753000000
+            }"#,
+        )
+        .unwrap();
+
+        let snapshot = cache.load(&repo).unwrap();
+
+        assert_eq!(snapshot.issues[0].parent_issue, None);
     }
 
     #[test]

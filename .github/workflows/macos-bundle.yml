@@ -1,0 +1,41 @@
+name: macos-bundle
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-development:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci
+      - name: Build unsigned universal macOS DMG
+        run: bash scripts/build-macos-universal.sh Development
+      - name: Inspect app bundle and architecture slices
+        run: bash scripts/inspect-macos-dmg.sh artifacts/macos-universal/*UNSIGNED-NOT-FOR-RELEASE.dmg Development
+      - name: Mark development artifact as unsigned
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ## macOS development bundle
+
+          `Stellr-macOS-universal-DMG-UNSIGNED-NOT-FOR-RELEASE` has no trusted Developer ID identity and must not be published as an official release.
+          SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Stellr-macOS-universal-DMG-UNSIGNED-NOT-FOR-RELEASE
+          path: artifacts/macos-universal/*UNSIGNED-NOT-FOR-RELEASE*
+          if-no-files-found: error

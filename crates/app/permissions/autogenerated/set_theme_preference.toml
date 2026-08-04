@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-theme-preference"
+description = "Enables the set_theme_preference command without any pre-configured scope."
+commands.allow = ["set_theme_preference"]
+
+[[permission]]
+identifier = "deny-set-theme-preference"
+description = "Denies the set_theme_preference command without any pre-configured scope."
+commands.deny = ["set_theme_preference"]

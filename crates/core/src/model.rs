@@ -13,6 +13,8 @@ pub enum Status {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Star {
     pub number: u64,
+    #[serde(default)]
+    pub parent_issue: Option<u64>,
     pub title: String,
     pub status: Status,
     pub blocked_by: Vec<u64>,
@@ -34,6 +36,8 @@ pub enum IssueState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RawIssue {
     pub number: u64,
+    #[serde(default)]
+    pub parent_issue: Option<u64>,
     pub title: String,
     pub body: String,
     pub state: IssueState,
@@ -81,6 +85,7 @@ mod tests {
                 name: "hello".into(),
                 stars: vec![Star {
                     number: 7,
+                    parent_issue: Some(16),
                     title: "Fix login".into(),
                     status: Status::Frontier,
                     blocked_by: vec![],
@@ -100,5 +105,36 @@ mod tests {
         let round_tripped: Model = serde_json::from_str(&json).unwrap();
 
         assert_eq!(round_tripped, model);
+    }
+
+    #[test]
+    fn old_models_without_parent_issue_deserialize_as_none() {
+        let old_model = r#"
+        {
+          "spaces": [{
+            "id": "abc",
+            "repo": "octocat/hello",
+            "name": "hello",
+            "stars": [{
+              "number": 7,
+              "title": "Fix login",
+              "status": "frontier",
+              "blocked_by": [],
+              "milestone": null,
+              "labels": [],
+              "assignees": [],
+              "url": "https://github.com/octocat/hello/issues/7",
+              "body": ""
+            }],
+            "synced_at": null,
+            "stale": false,
+            "error": null
+          }]
+        }
+        "#;
+
+        let model: Model = serde_json::from_str(old_model).unwrap();
+
+        assert_eq!(model.spaces[0].stars[0].parent_issue, None);
     }
 }

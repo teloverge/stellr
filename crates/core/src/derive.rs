@@ -31,6 +31,7 @@ pub fn derive(issues: &[RawIssue]) -> Vec<Star> {
 
             Star {
                 number: issue.number,
+                parent_issue: issue.parent_issue.filter(|parent| *parent != issue.number),
                 title: issue.title.clone(),
                 status,
                 blocked_by,
@@ -51,9 +52,16 @@ mod tests {
     use super::*;
     use crate::model::*;
 
-    fn issue(number: u64, state: IssueState, assignees: &[&str], blocked_by: &[u64]) -> RawIssue {
+    fn issue(
+        number: u64,
+        state: IssueState,
+        assignees: &[&str],
+        blocked_by: &[u64],
+        parent_issue: Option<u64>,
+    ) -> RawIssue {
         RawIssue {
             number,
+            parent_issue,
             title: format!("issue {number}"),
             body: String::new(),
             state,
@@ -79,11 +87,11 @@ mod tests {
     #[test]
     fn derives_statuses_in_precedence_order() {
         let stars = derive(&[
-            issue(1, IssueState::Closed, &[], &[]),
-            issue(2, IssueState::ClosedNotPlanned, &[], &[]),
-            issue(3, IssueState::Open, &["me"], &[4]),
-            issue(4, IssueState::Open, &[], &[5]),
-            issue(5, IssueState::Open, &[], &[1, 2]),
+            issue(1, IssueState::Closed, &[], &[], None),
+            issue(2, IssueState::ClosedNotPlanned, &[], &[], None),
+            issue(3, IssueState::Open, &["me"], &[4], None),
+            issue(4, IssueState::Open, &[], &[5], None),
+            issue(5, IssueState::Open, &[], &[1, 2], None),
         ]);
 
         assert_eq!(status_of(&stars, 1), Status::Resolved);
@@ -96,8 +104,8 @@ mod tests {
     #[test]
     fn removes_self_unknown_and_duplicate_blocker_references() {
         let stars = derive(&[
-            issue(1, IssueState::Open, &[], &[1, 99, 2, 2]),
-            issue(2, IssueState::Open, &[], &[]),
+            issue(1, IssueState::Open, &[], &[1, 99, 2, 2], None),
+            issue(2, IssueState::Open, &[], &[], None),
         ]);
 
         assert_eq!(stars[0].blocked_by, vec![2]);
@@ -105,10 +113,22 @@ mod tests {
     }
 
     #[test]
+    fn copies_parent_identity_without_affecting_blocker_status() {
+        let stars = derive(&[
+            issue(16, IssueState::Open, &[], &[], None),
+            issue(39, IssueState::Open, &[], &[], Some(16)),
+            issue(40, IssueState::Open, &[], &[39], Some(40)),
+        ]);
+        assert_eq!(stars[1].parent_issue, Some(16));
+        assert_eq!(stars[2].parent_issue, None);
+        assert_eq!(stars[2].status, Status::Blocked);
+    }
+
+    #[test]
     fn classifies_mutual_open_blockers_as_blocked() {
         let stars = derive(&[
-            issue(1, IssueState::Open, &[], &[2]),
-            issue(2, IssueState::Open, &[], &[1]),
+            issue(1, IssueState::Open, &[], &[2], None),
+            issue(2, IssueState::Open, &[], &[1], None),
         ]);
 
         assert_eq!(status_of(&stars, 1), Status::Blocked);
@@ -118,8 +138,8 @@ mod tests {
     #[test]
     fn sorts_output_by_issue_number() {
         let stars = derive(&[
-            issue(9, IssueState::Open, &[], &[]),
-            issue(1, IssueState::Open, &[], &[]),
+            issue(9, IssueState::Open, &[], &[], None),
+            issue(1, IssueState::Open, &[], &[], None),
         ]);
 
         assert_eq!(
@@ -148,7 +168,7 @@ mod tests {
                     } else {
                         IssueState::Open
                     };
-                    issue(number, state, &[], &blockers)
+                    issue(number, state, &[], &blockers, None)
                 })
                 .collect();
             let frontier_before: Vec<u64> = derive(&issues)
