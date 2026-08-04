@@ -73,7 +73,10 @@ try {
     throw 'The Microsoft Edge WebView2 Runtime is not available after installation.'
   }
 
-  $appProcess = Start-Process -FilePath $installedExecutable -PassThru
+  $installDirectory = Split-Path -Parent $installedExecutable
+  $appProcess = Start-Process -FilePath $installedExecutable `
+    -WorkingDirectory $installDirectory `
+    -PassThru
   $windowReady = $false
   for ($attempt = 0; $attempt -lt 60; $attempt++) {
     Start-Sleep -Milliseconds 500
@@ -111,6 +114,7 @@ try {
   $uninstaller = $null
 
   Write-Output "WEBVIEW2_VERSION=$webViewVersion"
+  Write-Output 'WINDOWS_BARE_INSTALL_DIRECTORY_STARTUP_PASSED=true'
   Write-Output 'WINDOWS_NSIS_SMOKE_PASSED=true'
 } finally {
   if ($null -ne $appProcess -and -not $appProcess.HasExited) {

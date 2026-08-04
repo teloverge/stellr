@@ -150,7 +150,6 @@ pub async fn run(github_base: String, profile: PathBuf) -> Result<(), DynError> 
     );
     let runtime = start_runtime_with_entry(
         DesktopRuntimeOptions {
-            current_dir: profile.clone(),
             spaces_file: profile.join("spaces.toml"),
             cache_root: profile.join("cache"),
         },

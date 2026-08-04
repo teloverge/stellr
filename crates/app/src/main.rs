@@ -34,6 +34,18 @@ fn launch_current_dir() -> std::io::Result<PathBuf> {
     ))
 }
 
+fn default_desktop_launch(
+    cwd: PathBuf,
+    protocol_target: Option<String>,
+) -> stellr_app::desktop::DesktopLaunch {
+    let restore_route = protocol_target.is_none();
+    stellr_app::desktop::DesktopLaunch {
+        cwd,
+        target: protocol_target,
+        restore_route,
+    }
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
@@ -57,23 +69,15 @@ fn run() -> Result<(), DynError> {
             let cwd = launch_current_dir()?;
             stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch {
                 cwd,
-                target: args.target,
+                target: Some(args.target),
                 restore_route: false,
             })
             .map_err(Into::into)
         }
         None => {
             let cwd = launch_current_dir()?;
-            let restore_route = cli.protocol_target.is_none();
-            let target = cli
-                .protocol_target
-                .unwrap_or_else(|| cwd.to_string_lossy().into_owned());
-            stellr_app::desktop::run(stellr_app::desktop::DesktopLaunch {
-                target,
-                cwd,
-                restore_route,
-            })
-            .map_err(Into::into)
+            stellr_app::desktop::run(default_desktop_launch(cwd, cli.protocol_target))
+                .map_err(Into::into)
         }
     }
 }
@@ -113,10 +117,16 @@ mod tests {
     use crate::cli::{Cli, Command};
 
     #[test]
-    fn bare_launch_selects_desktop_mode() {
+    fn bare_launch_selects_desktop_mode_without_a_repository_target() {
         let parsed = Cli::try_parse_from(["stellr"]).unwrap();
 
         assert!(parsed.command.is_none());
+        let launch = super::default_desktop_launch(
+            std::path::PathBuf::from(r"D:\Apps\Stellr"),
+            parsed.protocol_target,
+        );
+        assert!(launch.target.is_none());
+        assert!(launch.restore_route);
     }
 
     #[test]
