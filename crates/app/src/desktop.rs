@@ -50,7 +50,7 @@ pub(crate) const BACKGROUND_POLL_INTERVAL: Duration = Duration::from_secs(5 * 60
 
 pub struct DesktopLaunch {
     pub cwd: PathBuf,
-    pub target: String,
+    pub target: Option<String>,
     pub restore_route: bool,
 }
 
@@ -254,25 +254,27 @@ fn device_flow_controller() -> Result<DeviceFlowController, Box<dyn std::error::
     Ok(DeviceFlowController::new(client))
 }
 
-fn forwarded_route_event(args: &[String], cwd: &str) -> NativeRouteEvent {
+fn forwarded_route_event(args: &[String], cwd: &str) -> Option<NativeRouteEvent> {
     let forwarded = args.get(1..).unwrap_or_default();
     let raw = match forwarded {
-        [] => cwd.to_owned(),
+        [] => return None,
         [command, target] if command == "open" => target.clone(),
         [target] if target.starts_with("stellr:") => target.clone(),
         _ => {
-            return NativeRouteEvent::Error {
+            return Some(NativeRouteEvent::Error {
                 message: "Use `stellr` or `stellr open <path|url>` to route the running app."
                     .to_owned(),
-            };
+            });
         }
     };
-    match TargetResolver::new(PathBuf::from(cwd)).resolve(&raw) {
-        Ok(target) => NativeRouteEvent::Target { target },
-        Err(error) => NativeRouteEvent::Error {
-            message: error.to_string(),
+    Some(
+        match TargetResolver::new(PathBuf::from(cwd)).resolve(&raw) {
+            Ok(target) => NativeRouteEvent::Target { target },
+            Err(error) => NativeRouteEvent::Error {
+                message: error.to_string(),
+            },
         },
-    }
+    )
 }
 
 #[cfg(any(test, target_os = "macos"))]
@@ -519,15 +521,14 @@ fn route_url(mut url: tauri::Url, route: &PersistedRoute) -> tauri::Url {
 }
 
 fn initial_route(
-    target: &RouteTarget,
+    target: Option<&RouteTarget>,
     restored: Option<PersistedRoute>,
     restore_route: bool,
-) -> PersistedRoute {
+) -> Option<PersistedRoute> {
     if restore_route && let Some(restored) = restored {
-        return restored;
+        return Some(restored);
     }
-    PersistedRoute::new(target.space_id.clone(), target.issue)
-        .expect("a resolved target always has a space")
+    target.and_then(|target| PersistedRoute::new(target.space_id.clone(), target.issue))
 }
 
 pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
@@ -539,7 +540,9 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
         .manage(route_state.clone())
         .manage(theme_state)
         .plugin(tauri_plugin_single_instance::init(move |app, args, cwd| {
-            route_inbox.push(forwarded_route_event(&args, &cwd));
+            if let Some(event) = forwarded_route_event(&args, &cwd) {
+                route_inbox.push(event);
+            }
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
@@ -561,16 +564,20 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
         .setup(move |app| {
             startup_diagnostic("setup-begin");
             let startup = tauri::async_runtime::block_on(async {
-                let target = TargetResolver::new(launch.cwd.clone()).resolve(&launch.target)?;
+                let target = launch
+                    .target
+                    .as_deref()
+                    .map(|raw| TargetResolver::new(launch.cwd.clone()).resolve(raw))
+                    .transpose()?;
                 startup_diagnostic("target-resolved");
                 let (provider, credential_present) = provider_from_environment()?;
                 startup_diagnostic("provider-ready");
                 let provider_slot = ProviderSlot::new(provider);
                 let polling =
                     PollingControl::focus_aware(FOCUSED_POLL_INTERVAL, BACKGROUND_POLL_INTERVAL);
-                let runtime = start_runtime_with_entry(
+                let runtime = start_runtime_with_initial_entry(
                     default_options(launch.cwd.clone()),
-                    target.entry(),
+                    target.as_ref().map(RouteTarget::entry),
                     Arc::new(provider_slot.clone()),
                     Some(polling),
                 )
@@ -600,8 +607,12 @@ pub fn run(launch: DesktopLaunch) -> Result<(), DesktopHostError> {
                 }
             };
 
-            let startup_route = initial_route(&target, route_state.load(), launch.restore_route);
-            let url = route_url(runtime.cockpit_url().parse()?, &startup_route);
+            let startup_route =
+                initial_route(target.as_ref(), route_state.load(), launch.restore_route);
+            let mut url = runtime.cockpit_url().parse()?;
+            if let Some(startup_route) = startup_route.as_ref() {
+                url = route_url(url, startup_route);
+            }
             let window = match create_main_window(app, url) {
                 Ok(window) => {
                     startup_diagnostic("window-created");
@@ -732,6 +743,11 @@ mod tests {
     }
 
     #[test]
+    fn bare_second_instance_only_reveals_the_existing_window() {
+        assert!(forwarded_route_event(&["stellr.exe".into()], r"D:\Apps\Stellr").is_none());
+    }
+
+    #[test]
     fn forwarded_open_and_protocol_arguments_share_the_target_resolver() {
         let cwd = std::env::current_dir().unwrap();
         let cwd = cwd.to_string_lossy();
@@ -753,22 +769,27 @@ mod tests {
 
         assert!(matches!(
             open,
-            NativeRouteEvent::Target {
+            Some(NativeRouteEvent::Target {
                 target: RouteTarget {
                     issue: Some(62),
                     ..
                 }
-            }
+            })
         ));
         assert!(matches!(
             protocol,
-            NativeRouteEvent::Target {
+            Some(NativeRouteEvent::Target {
                 target: RouteTarget {
                     issue: Some(62),
                     ..
                 }
-            }
+            })
         ));
+    }
+
+    #[test]
+    fn startup_without_a_target_or_restored_route_leaves_the_cockpit_unaddressed() {
+        assert_eq!(initial_route(None, None, true), None);
     }
 
     #[test]
@@ -782,7 +803,7 @@ mod tests {
             ],
             ".",
         );
-        assert!(matches!(event, NativeRouteEvent::Error { .. }));
+        assert!(matches!(event, Some(NativeRouteEvent::Error { .. })));
     }
 
     #[test]
@@ -811,12 +832,12 @@ mod tests {
         let restored = PersistedRoute::new("remembered-space", Some(64)).unwrap();
 
         assert_eq!(
-            initial_route(&target, Some(restored.clone()), true),
-            restored
+            initial_route(Some(&target), Some(restored.clone()), true),
+            Some(restored.clone())
         );
         assert_eq!(
-            initial_route(&target, Some(restored), false),
-            PersistedRoute::new("explicit-space", Some(70)).unwrap()
+            initial_route(Some(&target), Some(restored), false),
+            PersistedRoute::new("explicit-space", Some(70))
         );
     }
 
