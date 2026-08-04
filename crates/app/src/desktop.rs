@@ -18,7 +18,7 @@ use stellr_github::{
     sync::GithubProvider,
 };
 use stellr_server::poll::PollingControl;
-use stellr_server::spaces::{SpaceEntry, SpaceStore, detect_repo};
+use stellr_server::spaces::{SpaceEntry, SpaceStore};
 use tauri::{
     AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     menu::{Menu, MenuItem},
@@ -442,22 +442,30 @@ pub async fn start_runtime(
     options: DesktopRuntimeOptions,
     provider: Arc<dyn Provider + Send + Sync>,
 ) -> Result<ApplicationRuntime, DesktopRuntimeError> {
-    let repo = detect_repo(&options.current_dir).map_err(DesktopRuntimeError::CurrentRepository)?;
-    let entry = SpaceEntry::new(repo, Some(options.current_dir.clone()));
-    start_runtime_with_entry(options, entry, provider, None).await
+    start_runtime_with_initial_entry(options, None, provider, None).await
 }
 
-pub(crate) async fn start_runtime_with_entry(
+pub async fn start_runtime_with_entry(
     options: DesktopRuntimeOptions,
     entry: SpaceEntry,
     provider: Arc<dyn Provider + Send + Sync>,
     polling: Option<PollingControl>,
 ) -> Result<ApplicationRuntime, DesktopRuntimeError> {
+    start_runtime_with_initial_entry(options, Some(entry), provider, polling).await
+}
+
+async fn start_runtime_with_initial_entry(
+    options: DesktopRuntimeOptions,
+    entry: Option<SpaceEntry>,
+    provider: Arc<dyn Provider + Send + Sync>,
+    polling: Option<PollingControl>,
+) -> Result<ApplicationRuntime, DesktopRuntimeError> {
     let mut spaces = SpaceStore::load(options.spaces_file.clone());
-    if !spaces
-        .entries()
-        .iter()
-        .any(|existing| existing.id == entry.id)
+    if let Some(entry) = entry
+        && !spaces
+            .entries()
+            .iter()
+            .any(|existing| existing.id == entry.id)
     {
         spaces
             .add(entry)
