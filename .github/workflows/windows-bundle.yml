@@ -31,7 +31,7 @@ jobs:
         shell: powershell
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: .\scripts\smoke-windows-application-process.ps1 -ExecutablePath target\release\stellr.exe
+        run: .\scripts\smoke-windows-application-process.ps1 -ExecutablePath target\release\stellr-desktop.exe
       - name: Smoke install, WebView2 launch, and uninstall
         shell: powershell
         run: |

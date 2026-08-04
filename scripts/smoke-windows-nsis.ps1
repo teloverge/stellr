@@ -62,11 +62,13 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($record.DisplayIcon)) {
     $installedExecutable = Get-ExecutableFromCommand $record.DisplayIcon
   } elseif (-not [string]::IsNullOrWhiteSpace($record.InstallLocation)) {
-    $installedExecutable = Join-Path $record.InstallLocation 'stellr.exe'
+    $installedExecutable = Join-Path $record.InstallLocation 'stellr-desktop.exe'
   }
   if ([string]::IsNullOrWhiteSpace($installedExecutable) -or -not (Test-Path -LiteralPath $installedExecutable)) {
-    throw 'The installed Stellr executable could not be located.'
+    throw 'The installed Stellr desktop executable could not be located.'
   }
+  $installedCli = Join-Path (Split-Path -Parent $installedExecutable) 'stellr.exe'
+  if (-not (Test-Path -LiteralPath $installedCli)) { throw 'The installed companion Stellr CLI is missing.' }
 
   $webViewVersion = Get-WebView2Version
   if ([string]::IsNullOrWhiteSpace($webViewVersion)) {
@@ -114,6 +116,7 @@ try {
   $uninstaller = $null
 
   Write-Output "WEBVIEW2_VERSION=$webViewVersion"
+  Write-Output 'WINDOWS_COMPANION_CLI_INSTALLED=true'
   Write-Output 'WINDOWS_BARE_INSTALL_DIRECTORY_STARTUP_PASSED=true'
   Write-Output 'WINDOWS_NSIS_SMOKE_PASSED=true'
 } finally {

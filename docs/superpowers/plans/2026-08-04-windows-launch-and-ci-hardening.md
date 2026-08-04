@@ -202,10 +202,10 @@ Extend the Windows packaging contract to require the platform configuration, dua
 $windowsConfig = Get-Content (Join-Path $repo 'crates\app\tauri.windows.conf.json') -Raw | ConvertFrom-Json
 Assert-True ($windowsConfig.mainBinaryName -eq 'stellr-desktop') `
   'Windows packages must use the console-free desktop entry point.'
-Assert-True ($windowsConfig.bundle.externalBin -contains 'binaries/stellr') `
-  'Windows packages must include the companion Stellr CLI.'
 Assert-True ($workflow.Contains('target\release\stellr-desktop.exe')) `
   'The application-process smoke must launch the desktop entry point.'
+Assert-True ($buildContract.Contains('binaries/stellr')) `
+  'The Windows package must include the companion Stellr CLI.'
 Assert-True ($buildContract.Contains('WindowsGui')) 'The build must verify the desktop PE subsystem.'
 Assert-True ($buildContract.Contains('WindowsCui')) 'The build must verify the CLI PE subsystem.'
 ```
@@ -242,14 +242,13 @@ Set base `mainBinaryName` to `stellr` so Linux and macOS retain their current ma
 
 ```json
 {
-  "mainBinaryName": "stellr-desktop",
-  "bundle": {
-    "externalBin": ["binaries/stellr"]
-  }
+  "mainBinaryName": "stellr-desktop"
 }
 ```
 
-Before invoking Tauri on Windows, build `stellr.exe`, obtain the native host tuple from `rustc --print host-tuple`, and copy the CLI to the Tauri sidecar name `crates/app/binaries/stellr-<host-tuple>.exe`. Remove only that generated copy in the build script's `finally` block. After Tauri builds the desktop binary, assert:
+Set the Cargo package `default-run` to `stellr-desktop` so Tauri can select the application target when two binaries exist. Route that target through the desktop-only dispatcher solely for Windows release builds; debug Windows and every non-Windows build retain the full CLI dispatcher so existing `cargo run -- serve` and packaged Linux/macOS behavior remain compatible.
+
+Before invoking Tauri on Windows, build `stellr.exe`, obtain the native host tuple from `rustc --print host-tuple`, and copy the CLI to the Tauri sidecar name `crates/app/binaries/stellr-<host-tuple>.exe`. Pass `bundle.externalBin = ["binaries/stellr"]` through a temporary Tauri CLI config only during packaging, because a static sidecar declaration would make ordinary Cargo tests require a generated release binary. Remove only that generated copy and temporary config in the build script's `finally` block. After Tauri builds the desktop binary, assert:
 
 ```powershell
 & $peAssertion -ExecutablePath (Join-Path $repo 'target\release\stellr-desktop.exe') -ExpectedSubsystem WindowsGui

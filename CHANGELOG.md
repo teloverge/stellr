@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Split the Windows desktop and CLI entry points so installed shortcuts and
+  protocol launches open without a terminal while `stellr serve` retains
+  native PowerShell and Command Prompt behavior.
 - Fixed installed desktop startup so a no-argument launch opens the existing
   empty repository-selection shell instead of treating the installation
   directory as a Git repository.

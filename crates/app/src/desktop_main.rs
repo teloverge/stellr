@@ -4,9 +4,14 @@
 )]
 
 fn main() {
-    if let Err(error) = stellr_app::entrypoints::run_desktop() {
+    #[cfg(not(all(target_os = "windows", not(debug_assertions))))]
+    let result = stellr_app::entrypoints::run_cli();
+    #[cfg(all(target_os = "windows", not(debug_assertions)))]
+    let result = stellr_app::entrypoints::run_desktop();
+
+    if let Err(_error) = result {
         #[cfg(debug_assertions)]
-        eprintln!("{error}");
+        eprintln!("{_error}");
         std::process::exit(1);
     }
 }
