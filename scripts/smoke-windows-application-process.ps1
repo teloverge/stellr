@@ -116,7 +116,8 @@ try {
   }
   $second.WaitForExit()
   $second.Refresh()
-  if ($second.ExitCode -ne 0) {
+  $secondExitCode = Get-StellrProcessExitCode $second
+  if ($secondExitCode -ne 0) {
     throw (Get-StellrStartupFailure $second $secondLog 'The second instance failed while forwarding its route.')
   }
   Find-Element $primary $ForwardedIssueTitle | Out-Null

@@ -1,3 +1,30 @@
+if ($null -eq ('StellrNativeProcess' -as [type])) {
+  Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
+public static class StellrNativeProcess {
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+
+  public static int ReadExitCode(Process process) {
+    uint exitCode;
+    if (!GetExitCodeProcess(process.Handle, out exitCode)) {
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+    return unchecked((int)exitCode);
+  }
+}
+'@
+}
+
+function Get-StellrProcessExitCode([System.Diagnostics.Process]$Process) {
+  if (-not $Process.HasExited) { throw "Process $($Process.Id) is still running." }
+  [StellrNativeProcess]::ReadExitCode($Process)
+}
+
 function New-StellrStartupLogRoot([string]$Name) {
   $base = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
     [IO.Path]::GetTempPath()
@@ -55,7 +82,15 @@ function Get-StellrStartupFailure(
     Where-Object { $_ -match '^STELLR_DESKTOP_STARTUP_(STAGE|ERROR)=' } |
     Select-Object -Last 1
   if ([string]::IsNullOrWhiteSpace($marker)) { $marker = 'STELLR_DESKTOP_STARTUP_STAGE=<none captured>' }
-  $state = if ($Process.HasExited) { "exited with code $($Process.ExitCode)" } else { 'remained running' }
+  $state = if ($Process.HasExited) {
+    try {
+      "exited with code $(Get-StellrProcessExitCode $Process)"
+    } catch {
+      "exited with an unreadable code: $($_.Exception.Message)"
+    }
+  } else {
+    'remained running'
+  }
   $diagnostics = if ($lines.Count -eq 0) { '<no startup output captured>' } else { $lines -join [Environment]::NewLine }
   "$Reason Process $($Process.Id) $state. Last startup marker: $marker`n$diagnostics"
 }
