@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "stellr")]
+#[command(name = "stellr", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,

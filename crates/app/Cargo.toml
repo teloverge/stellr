@@ -9,6 +9,10 @@ repository.workspace = true
 name = "stellr"
 path = "src/main.rs"
 
+[[bin]]
+name = "stellr-desktop"
+path = "src/desktop_main.rs"
+
 [dependencies]
 async-trait.workspace = true
 axum = "0.8"
