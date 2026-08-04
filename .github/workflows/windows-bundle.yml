@@ -45,7 +45,7 @@ jobs:
 
           `Stellr-Windows-x64-NSIS-UNSIGNED-NOT-FOR-RELEASE` is intentionally unsigned and must not be published as an official release.
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Stellr-Windows-x64-NSIS-UNSIGNED-NOT-FOR-RELEASE
           path: artifacts/windows-x64/*UNSIGNED-NOT-FOR-RELEASE*

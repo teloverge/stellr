@@ -44,7 +44,7 @@ jobs:
 
           The AppImage and deb in `Stellr-Linux-x86_64-packages-UNSIGNED-NOT-FOR-RELEASE` are intentionally unsigned development artifacts and must not be published as an official release.
           SUMMARY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Stellr-Linux-x86_64-packages-UNSIGNED-NOT-FOR-RELEASE
           path: artifacts/linux-x86_64/*

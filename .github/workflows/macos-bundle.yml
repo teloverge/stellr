@@ -34,7 +34,7 @@ jobs:
 
           `Stellr-macOS-universal-DMG-UNSIGNED-NOT-FOR-RELEASE` has no trusted Developer ID identity and must not be published as an official release.
           SUMMARY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Stellr-macOS-universal-DMG-UNSIGNED-NOT-FOR-RELEASE
           path: artifacts/macos-universal/*UNSIGNED-NOT-FOR-RELEASE*

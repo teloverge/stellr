@@ -84,7 +84,7 @@ jobs:
         run: |
           $installer = Get-ChildItem artifacts\windows-x64\*.exe -File | Select-Object -ExpandProperty FullName -First 1
           .\scripts\smoke-windows-nsis.ps1 -InstallerPath $installer
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-windows
           path: artifacts/windows-x64/*
@@ -135,7 +135,7 @@ jobs:
         run: bash scripts/build-macos-universal.sh Release
       - name: Verify signature, slices, and signed launch
         run: bash scripts/inspect-macos-dmg.sh artifacts/macos-universal/*.dmg Release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-macos
           path: artifacts/macos-universal/*
@@ -164,7 +164,7 @@ jobs:
       - run: npm --prefix web ci
       - name: Build Linux release packages
         run: bash scripts/build-linux-packages.sh Release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-linux
           path: artifacts/linux-x86_64/*

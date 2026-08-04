@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Upgraded all bundle artifact uploads to `actions/upload-artifact@v7`, removing
+  the obsolete action-runtime warning without suppressing it.
 - Hardened Windows application startup smokes with a measured 90-second cold
   start budget and captured native startup-stage diagnostics on failure.
 - Split the Windows desktop and CLI entry points so installed shortcuts and

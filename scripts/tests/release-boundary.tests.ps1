@@ -37,6 +37,13 @@ Assert-True ($release.Contains('APPLE_CERTIFICATE')) 'Tagged releases must requi
 Assert-True ($release.Contains('UNSIGNED-NOT-FOR-RELEASE')) 'Publication must explicitly reject development artifacts.'
 Assert-True ($release.Contains('gh release create')) 'Only the final gated job may create the draft release.'
 
+$workflowText = (Get-ChildItem (Join-Path $repo '.github\workflows') -File |
+  ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+$v7Uploads = [regex]::Matches($workflowText, 'actions/upload-artifact@v7').Count
+$v4Uploads = [regex]::Matches($workflowText, 'actions/upload-artifact@v4').Count
+Assert-True ($v7Uploads -eq 6) "Expected six v7 artifact uploads; found $v7Uploads."
+Assert-True ($v4Uploads -eq 0) "Obsolete v4 artifact uploads remain: $v4Uploads."
+
 $ci = Get-Content (Join-Path $repo '.github\workflows\ci.yml') -Raw
 Assert-True ($ci.Contains('libwebkit2gtk-4.1-dev')) 'Linux CI must install the native Tauri WebKitGTK toolchain.'
 Assert-True ($ci.Contains('cargo clippy --workspace --all-targets -- -D warnings')) `
