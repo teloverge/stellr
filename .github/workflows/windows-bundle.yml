@@ -27,11 +27,16 @@ jobs:
       - name: Build unsigned Windows x64 NSIS installer
         shell: powershell
         run: .\scripts\build-windows-nsis.ps1 -Channel Development
+      - name: Prove the companion CLI from PowerShell and cmd.exe
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .\scripts\smoke-windows-cli.ps1 -ExecutablePath target\release\stellr.exe
       - name: Prove the real desktop application-process boundary
         shell: powershell
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: .\scripts\smoke-windows-application-process.ps1 -ExecutablePath target\release\stellr.exe
+        run: .\scripts\smoke-windows-application-process.ps1 -ExecutablePath target\release\stellr-desktop.exe
       - name: Smoke install, WebView2 launch, and uninstall
         shell: powershell
         run: |
@@ -45,7 +50,7 @@ jobs:
 
           `Stellr-Windows-x64-NSIS-UNSIGNED-NOT-FOR-RELEASE` is intentionally unsigned and must not be published as an official release.
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Stellr-Windows-x64-NSIS-UNSIGNED-NOT-FOR-RELEASE
           path: artifacts/windows-x64/*UNSIGNED-NOT-FOR-RELEASE*

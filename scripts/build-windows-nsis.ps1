@@ -26,21 +26,40 @@ if ($Channel -eq 'Release' -and [string]::IsNullOrWhiteSpace($CertificateThumbpr
 if ($LASTEXITCODE -ne 0) { throw "Frontend build failed with exit code $LASTEXITCODE." }
 
 $tauriArguments = @('build', '--bundles', 'nsis')
-$temporarySigningConfig = $null
-if ($Channel -eq 'Release') {
-  $temporarySigningConfig = Join-Path ([IO.Path]::GetTempPath()) "stellr-windows-signing-$PID.json"
-  $signingConfig = @{
-    bundle = @{
-      windows = @{
-        certificateThumbprint = $CertificateThumbprint
-        digestAlgorithm = 'sha256'
-        timestampUrl = 'http://timestamp.digicert.com'
-      }
-    }
-  } | ConvertTo-Json -Depth 4
-  [IO.File]::WriteAllText($temporarySigningConfig, $signingConfig)
-  $tauriArguments += @('--config', $temporarySigningConfig)
+$temporaryBundleConfig = $null
+$hostTuple = (& rustc --print host-tuple).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($hostTuple)) {
+  throw 'Could not resolve the native Rust host tuple for the companion CLI.'
 }
+if ($hostTuple -ne 'x86_64-pc-windows-msvc') {
+  throw "The supported Windows sidecar target is x86_64-pc-windows-msvc; detected $hostTuple."
+}
+
+& cargo build --package stellr-app --release --bin stellr
+if ($LASTEXITCODE -ne 0) { throw "Companion Stellr CLI build failed with exit code $LASTEXITCODE." }
+
+$cliBinary = Join-Path $repo 'target\release\stellr.exe'
+$sidecarDirectory = Join-Path $repo 'crates\app\binaries'
+$sidecarBinary = Join-Path $sidecarDirectory "stellr-$hostTuple.exe"
+New-Item -ItemType Directory -Path $sidecarDirectory -Force | Out-Null
+Copy-Item -LiteralPath $cliBinary -Destination $sidecarBinary -Force
+
+$bundleConfig = @{
+  externalBin = @('binaries/stellr')
+}
+if ($Channel -eq 'Release') {
+  $bundleConfig.windows = @{
+    certificateThumbprint = $CertificateThumbprint
+    digestAlgorithm = 'sha256'
+    timestampUrl = 'http://timestamp.digicert.com'
+  }
+}
+$temporaryBundleConfig = Join-Path ([IO.Path]::GetTempPath()) "stellr-windows-bundle-$PID.json"
+$configOverride = @{
+  bundle = $bundleConfig
+} | ConvertTo-Json -Depth 4
+[IO.File]::WriteAllText($temporaryBundleConfig, $configOverride)
+$tauriArguments += @('--config', $temporaryBundleConfig)
 
 try {
   Push-Location (Join-Path $repo 'crates\app')
@@ -48,10 +67,15 @@ try {
   if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS build failed with exit code $LASTEXITCODE." }
 } finally {
   Pop-Location
-  if ($null -ne $temporarySigningConfig) {
-    Remove-Item -LiteralPath $temporarySigningConfig -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $sidecarBinary -Force -ErrorAction SilentlyContinue
+  if ($null -ne $temporaryBundleConfig) {
+    Remove-Item -LiteralPath $temporaryBundleConfig -Force -ErrorAction SilentlyContinue
   }
 }
+
+$peAssertion = Join-Path $repo 'scripts\assert-windows-pe-subsystem.ps1'
+& $peAssertion -ExecutablePath (Join-Path $repo 'target\release\stellr-desktop.exe') -ExpectedSubsystem WindowsGui
+& $peAssertion -ExecutablePath $cliBinary -ExpectedSubsystem WindowsCui
 
 $bundleDirectory = Join-Path $repo 'target\release\bundle\nsis'
 $installer = Get-ChildItem -LiteralPath $bundleDirectory -Filter '*-setup.exe' |

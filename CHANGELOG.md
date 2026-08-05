@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Upgraded all bundle artifact uploads to `actions/upload-artifact@v7` and
+  downloads to `actions/download-artifact@v8`, removing the obsolete
+  action-runtime warnings without suppressing them.
+- Hardened Windows application startup smokes with a measured 90-second cold
+  start budget and captured native startup-stage diagnostics on failure.
+- Split the Windows desktop and CLI entry points so installed shortcuts and
+  protocol launches open without a terminal while `stellr serve` retains
+  native PowerShell and Command Prompt behavior.
 - Fixed installed desktop startup so a no-argument launch opens the existing
   empty repository-selection shell instead of treating the installation
   directory as a Git repository.
