@@ -58,8 +58,12 @@ $workflowText = (Get-ChildItem (Join-Path $repo '.github\workflows') -File |
   ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
 $v7Uploads = [regex]::Matches($workflowText, 'actions/upload-artifact@v7').Count
 $v4Uploads = [regex]::Matches($workflowText, 'actions/upload-artifact@v4').Count
+$v8Downloads = [regex]::Matches($workflowText, 'actions/download-artifact@v8').Count
+$v4Downloads = [regex]::Matches($workflowText, 'actions/download-artifact@v4').Count
 Assert-True ($v7Uploads -eq 6) "Expected six v7 artifact uploads; found $v7Uploads."
 Assert-True ($v4Uploads -eq 0) "Obsolete v4 artifact uploads remain: $v4Uploads."
+Assert-True ($v8Downloads -eq 5) "Expected five v8 artifact downloads; found $v8Downloads."
+Assert-True ($v4Downloads -eq 0) "Obsolete v4 artifact downloads remain: $v4Downloads."
 
 $ci = Get-Content (Join-Path $repo '.github\workflows\ci.yml') -Raw
 Assert-True ($ci.Contains('libwebkit2gtk-4.1-dev')) 'Linux CI must install the native Tauri WebKitGTK toolchain.'

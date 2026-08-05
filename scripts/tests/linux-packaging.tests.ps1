@@ -13,7 +13,8 @@ Assert-True ($workflow.Contains('runs-on: ubuntu-22.04')) 'Linux packages must u
 Assert-True ($workflow.Contains('libwebkit2gtk-4.1-dev')) 'The workflow must install the Tauri WebKitGTK 4.1 toolchain.'
 Assert-True ($workflow.Contains('UNSIGNED-NOT-FOR-RELEASE')) 'Development packages must be unmistakably unsigned.'
 Assert-True ($workflow.Contains('GITHUB_STEP_SUMMARY')) 'The workflow summary must warn that development packages are unsigned.'
-Assert-True ($workflow.Contains('actions/download-artifact@v4')) 'Smoke jobs must download packages into clean runners.'
+Assert-True ([regex]::Matches($workflow, 'actions/download-artifact@v8').Count -eq 2) `
+  'Both smoke jobs must download packages with the current Node 24 artifact action.'
 Assert-True ($workflow.Contains('smoke-appimage')) 'The AppImage must have its own clean-runner smoke job.'
 Assert-True ($workflow.Contains('smoke-deb')) 'The deb must have its own clean-runner smoke job.'
 Assert-True ($workflow.Contains('libegl1')) 'The clean AppImage runner must install the EGL runtime required by WebKitGTK.'

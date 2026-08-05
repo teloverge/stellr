@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: Stellr-Linux-x86_64-packages-UNSIGNED-NOT-FOR-RELEASE
           path: artifacts/linux-x86_64
@@ -82,7 +82,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: Stellr-Linux-x86_64-packages-UNSIGNED-NOT-FOR-RELEASE
           path: artifacts/linux-x86_64
