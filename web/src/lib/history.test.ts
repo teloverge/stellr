@@ -101,3 +101,60 @@ describe('temporal creation projection', () => {
     expect(after.stars.map((star) => star.blocked_by)).toEqual([[], [1]])
   })
 })
+
+describe('temporal lifecycle projection', () => {
+  const lifecycle: HistoryEvent[] = [
+    ...events,
+    {
+      sequence: 3,
+      repository_id: 'R_repo',
+      issue_id: 'I_1',
+      issue_number: 1,
+      provider_event_id: 'E_close',
+      occurred_at: 150,
+      kind: 'issue_closed',
+    },
+    {
+      sequence: 4,
+      repository_id: 'R_repo',
+      issue_id: 'I_1',
+      issue_number: 1,
+      provider_event_id: 'E_reopen',
+      occurred_at: 175,
+      kind: 'issue_reopened',
+    },
+  ]
+
+  it('applies close and reopen at their exact boundaries', () => {
+    expect(projectTemporalSpace(space, lifecycle, 149).stars[0].status).toBe('open')
+    expect(projectTemporalSpace(space, lifecycle, 150).stars[0].status).toBe('resolved')
+    expect(projectTemporalSpace(space, lifecycle, 174).stars[0].status).toBe('resolved')
+    expect(projectTemporalSpace(space, lifecycle, 175).stars[0].status).toBe('open')
+  })
+
+  it('orders same-timestamp transitions by provider event identity', () => {
+    const tied: HistoryEvent[] = [
+      events[0],
+      {
+        sequence: 2,
+        repository_id: 'R_repo',
+        issue_id: 'I_1',
+        issue_number: 1,
+        provider_event_id: 'z-close',
+        occurred_at: 150,
+        kind: 'issue_closed',
+      },
+      {
+        sequence: 3,
+        repository_id: 'R_repo',
+        issue_id: 'I_1',
+        issue_number: 1,
+        provider_event_id: 'a-reopen',
+        occurred_at: 150,
+        kind: 'issue_reopened',
+      },
+    ]
+
+    expect(projectTemporalSpace(space, tied, 150).stars[0].status).toBe('resolved')
+  })
+})

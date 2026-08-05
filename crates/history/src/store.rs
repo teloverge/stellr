@@ -8,14 +8,32 @@ use stellr_core::{
     HistoryEvent, HistoryEventKind, HistoryImportState, HistorySummary, IssueSyncMetadata,
 };
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySeed {
     pub space_id: String,
     pub provider_repository_id: String,
     pub verified_through: i64,
+    pub timeline_required: bool,
     pub issues: Vec<IssueSyncMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingHistoryIssue {
+    pub issue_id: String,
+    pub issue_number: u64,
+    pub cursor: Option<String>,
+    pub cutoff: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageCheckpoint {
+    pub space_id: String,
+    pub issue_id: String,
+    pub events: Vec<HistoryEvent>,
+    pub next_cursor: Option<String>,
+    pub complete: bool,
 }
 
 #[derive(Clone)]
@@ -56,29 +74,43 @@ impl HistoryStore {
                 .cmp(&(right.created_at, HistoryEvent::creation_id(&right.issue_id)))
         });
         let total_issues = i64::try_from(issues.len())?;
+        let timeline_required = seed.timeline_required && total_issues > 0;
+        let import_state = if timeline_required {
+            "building"
+        } else {
+            "complete"
+        };
+        let completed_issues = if timeline_required { 0 } else { total_issues };
+        let verified_through = (!timeline_required).then_some(seed.verified_through);
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
 
         transaction.execute(
             "INSERT INTO repositories (
                  space_id, provider_repository_id, import_state, total_issues,
-                 completed_issues, verified_through, diagnostic, resume_at
-             ) VALUES (?1, ?2, 'complete', ?3, ?3, ?4, NULL, NULL)
-             ON CONFLICT(space_id) DO UPDATE SET
-                 provider_repository_id = excluded.provider_repository_id,
-                 import_state = excluded.import_state,
-                 total_issues = excluded.total_issues,
-                 completed_issues = excluded.completed_issues,
-                 verified_through = excluded.verified_through,
-                 diagnostic = NULL,
-                 resume_at = NULL",
+                 completed_issues, verified_through, diagnostic, resume_at, cutoff
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7)
+             ON CONFLICT(space_id) DO NOTHING",
             params![
                 seed.space_id,
                 seed.provider_repository_id,
+                import_state,
                 total_issues,
+                completed_issues,
+                verified_through,
                 seed.verified_through
             ],
         )?;
+        let stored_repository_id: String = transaction.query_row(
+            "SELECT provider_repository_id FROM repositories WHERE space_id = ?1",
+            params![seed.space_id],
+            |row| row.get(0),
+        )?;
+        if stored_repository_id != seed.provider_repository_id {
+            return Err(StoreError::Invalid(
+                "provider repository identity changed for an existing space".into(),
+            ));
+        }
 
         for issue in issues {
             let issue_number = i64::try_from(issue.number)?;
@@ -91,7 +123,7 @@ impl HistoryStore {
                 "INSERT INTO issues (
                      space_id, provider_issue_id, issue_number, created_at, updated_at,
                      milestone_id, milestone_title, cursor, complete
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 1)
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8)
                  ON CONFLICT(space_id, provider_issue_id) DO UPDATE SET
                      issue_number = excluded.issue_number,
                      created_at = excluded.created_at,
@@ -105,7 +137,8 @@ impl HistoryStore {
                     issue.created_at,
                     issue.updated_at,
                     milestone_id,
-                    milestone_title
+                    milestone_title,
+                    !timeline_required
                 ],
             )?;
 
@@ -193,6 +226,173 @@ impl HistoryStore {
         Ok(events)
     }
 
+    pub fn pending_issue(&self, space_id: &str) -> Result<Option<PendingHistoryIssue>, StoreError> {
+        let connection = self.connection()?;
+        let row = connection
+            .query_row(
+                "SELECT i.provider_issue_id, i.issue_number, i.cursor, r.cutoff
+                 FROM issues i
+                 JOIN repositories r ON r.space_id = i.space_id
+                 WHERE i.space_id = ?1 AND i.complete = 0
+                 ORDER BY i.issue_number
+                 LIMIT 1",
+                params![space_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(issue_id, issue_number, cursor, cutoff)| {
+            Ok(PendingHistoryIssue {
+                issue_id,
+                issue_number: u64::try_from(issue_number)?,
+                cursor,
+                cutoff,
+            })
+        })
+        .transpose()
+    }
+
+    pub fn checkpoint_page(
+        &self,
+        checkpoint: &PageCheckpoint,
+    ) -> Result<HistorySummary, StoreError> {
+        if checkpoint.space_id.trim().is_empty() || checkpoint.issue_id.trim().is_empty() {
+            return Err(StoreError::Invalid(
+                "checkpoint identities must not be empty".into(),
+            ));
+        }
+        if checkpoint.complete && checkpoint.next_cursor.is_some() {
+            return Err(StoreError::Invalid(
+                "a complete history page cannot retain a next cursor".into(),
+            ));
+        }
+        if !checkpoint.complete && checkpoint.next_cursor.is_none() {
+            return Err(StoreError::Invalid(
+                "an incomplete history page requires a next cursor".into(),
+            ));
+        }
+
+        let mut events = checkpoint.events.clone();
+        events.sort();
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let (repository_id, cutoff): (String, i64) = transaction.query_row(
+            "SELECT provider_repository_id, cutoff
+             FROM repositories WHERE space_id = ?1",
+            params![checkpoint.space_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let issue_number: i64 = transaction.query_row(
+            "SELECT issue_number FROM issues
+             WHERE space_id = ?1 AND provider_issue_id = ?2",
+            params![checkpoint.space_id, checkpoint.issue_id],
+            |row| row.get(0),
+        )?;
+        let issue_number = u64::try_from(issue_number)?;
+
+        for event in events {
+            if event.repository_id != repository_id
+                || event.issue_id != checkpoint.issue_id
+                || event.issue_number != issue_number
+            {
+                return Err(StoreError::Invalid(
+                    "history event does not match its repository checkpoint".into(),
+                ));
+            }
+            if event.occurred_at > cutoff {
+                return Err(StoreError::Invalid(
+                    "history event is later than the repository cutoff".into(),
+                ));
+            }
+            transaction.execute(
+                "INSERT OR IGNORE INTO events (
+                     space_id, provider_event_id, provider_issue_id, issue_number,
+                     occurred_at, payload
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    checkpoint.space_id,
+                    event.provider_event_id,
+                    checkpoint.issue_id,
+                    i64::try_from(issue_number)?,
+                    event.occurred_at,
+                    serde_json::to_string(&event.kind)?
+                ],
+            )?;
+        }
+
+        transaction.execute(
+            "UPDATE issues
+             SET cursor = ?3, complete = ?4
+             WHERE space_id = ?1 AND provider_issue_id = ?2",
+            params![
+                checkpoint.space_id,
+                checkpoint.issue_id,
+                checkpoint.next_cursor,
+                checkpoint.complete
+            ],
+        )?;
+        let (completed, total): (i64, i64) = transaction.query_row(
+            "SELECT SUM(CASE WHEN complete = 1 THEN 1 ELSE 0 END), COUNT(*)
+             FROM issues WHERE space_id = ?1",
+            params![checkpoint.space_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let repository_complete = completed == total;
+        transaction.execute(
+            "UPDATE repositories
+             SET import_state = ?2,
+                 completed_issues = ?3,
+                 verified_through = ?4,
+                 diagnostic = NULL,
+                 resume_at = NULL
+             WHERE space_id = ?1",
+            params![
+                checkpoint.space_id,
+                if repository_complete {
+                    "complete"
+                } else {
+                    "building"
+                },
+                completed,
+                repository_complete.then_some(cutoff)
+            ],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.summary(&checkpoint.space_id)?.ok_or_else(|| {
+            StoreError::Invalid("checkpoint repository disappeared from the ledger".into())
+        })
+    }
+
+    pub fn mark_failed(
+        &self,
+        space_id: &str,
+        diagnostic: impl Into<String>,
+    ) -> Result<HistorySummary, StoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE repositories
+             SET import_state = 'failed', diagnostic = ?2, resume_at = NULL
+             WHERE space_id = ?1",
+            params![space_id, diagnostic.into()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::Invalid(
+                "cannot fail unknown history repository".into(),
+            ));
+        }
+        drop(connection);
+        self.summary(space_id)?.ok_or_else(|| {
+            StoreError::Invalid("failed repository disappeared from the ledger".into())
+        })
+    }
+
     pub fn remove_repository(&self, space_id: &str) -> Result<bool, StoreError> {
         let connection = self.connection()?;
         Ok(connection.execute(
@@ -226,17 +426,15 @@ fn validate_seed(seed: &RepositorySeed) -> Result<(), StoreError> {
 }
 
 fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
-    let version =
+    let mut version =
         connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
-    if version == SCHEMA_VERSION {
-        return Ok(());
-    }
-    if version != 0 {
+    if version > SCHEMA_VERSION {
         return Err(StoreError::UnsupportedSchema(version));
     }
-    let transaction = connection.transaction()?;
-    transaction.execute_batch(
-        "CREATE TABLE repositories (
+    if version == 0 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE repositories (
              space_id TEXT PRIMARY KEY,
              provider_repository_id TEXT NOT NULL,
              import_state TEXT NOT NULL,
@@ -270,9 +468,27 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
          );
          CREATE INDEX events_space_time
              ON events(space_id, occurred_at, provider_event_id);",
-    )?;
-    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-    transaction.commit()?;
+        )?;
+        transaction.pragma_update(None, "user_version", 1)?;
+        transaction.commit()?;
+        version = 1;
+    }
+    if version == 1 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch("ALTER TABLE repositories ADD COLUMN cutoff INTEGER;")?;
+        transaction.execute_batch(
+            "UPDATE repositories SET cutoff = verified_through WHERE cutoff IS NULL;
+             UPDATE issues SET complete = 0;
+             UPDATE repositories
+             SET import_state = CASE WHEN total_issues = 0 THEN 'complete' ELSE 'building' END,
+                 completed_issues = 0,
+                 verified_through = CASE WHEN total_issues = 0 THEN cutoff ELSE NULL END,
+                 diagnostic = NULL,
+                 resume_at = NULL;",
+        )?;
+        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        transaction.commit()?;
+    }
     Ok(())
 }
 

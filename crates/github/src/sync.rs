@@ -152,6 +152,14 @@ impl Provider for GithubProvider {
     async fn fetch_snapshot(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         self.fetch_all(repo).await
     }
+
+    async fn fetch_history_page(
+        &self,
+        repo: &RepoRef,
+        request: &stellr_core::HistoryPageRequest,
+    ) -> Result<stellr_core::HistoryPage, ProviderError> {
+        crate::history::fetch_history_page(&self.client, repo, request).await
+    }
 }
 
 impl GithubProvider {

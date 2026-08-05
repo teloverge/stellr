@@ -9,8 +9,9 @@ use std::{
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use stellr_core::{
-    HistoryImportState, IssueState, IssueSyncMetadata, Model, Provider, ProviderError,
-    ProviderSnapshot, RawIssue, RepoRef, SpaceModel,
+    HistoryEvent, HistoryEventKind, HistoryImportState, HistoryPage, HistoryPageRequest,
+    IssueState, IssueSyncMetadata, Model, Provider, ProviderError, ProviderSnapshot, RawIssue,
+    RepoRef, SpaceModel,
 };
 use stellr_github::cache::{Cache, Snapshot};
 use stellr_history::{HistoryStore, RepositorySeed};
@@ -175,6 +176,7 @@ async fn history_endpoint_is_authenticated_scoped_and_sequence_incremental() {
             space_id: "o-r".into(),
             provider_repository_id: "R_repo".into(),
             verified_through: 500,
+            timeline_required: false,
             issues: vec![
                 IssueSyncMetadata {
                     issue_id: "I_2".into(),
@@ -274,6 +276,87 @@ impl Provider for HistorySnapshotProvider {
             }],
         })
     }
+
+    async fn fetch_history_page(
+        &self,
+        _repo: &RepoRef,
+        _request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        Ok(HistoryPage {
+            events: vec![],
+            next_cursor: None,
+            complete: true,
+        })
+    }
+}
+
+struct LifecycleSnapshotProvider(AtomicUsize);
+
+#[async_trait::async_trait]
+impl Provider for LifecycleSnapshotProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+        unreachable!("the poller should consume the richer provider snapshot")
+    }
+
+    async fn fetch_snapshot(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        Ok(ProviderSnapshot {
+            repository_id: Some("R_repo".into()),
+            issues: vec![RawIssue {
+                number: 79,
+                parent_issue: None,
+                title: "Lifecycle".into(),
+                body: String::new(),
+                state: IssueState::Open,
+                assignees: vec![],
+                milestone: None,
+                labels: vec![],
+                blocked_by: vec![],
+                url: "https://github.com/o/r/issues/79".into(),
+            }],
+            history: vec![IssueSyncMetadata {
+                issue_id: "I_79".into(),
+                number: 79,
+                created_at: 100,
+                updated_at: 400,
+                milestone: None,
+            }],
+        })
+    }
+
+    async fn fetch_history_page(
+        &self,
+        _repo: &RepoRef,
+        request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        assert_eq!(request.issue_id, "I_79");
+        assert_eq!(request.issue_number, 79);
+        assert_eq!(request.cursor, None);
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(HistoryPage {
+            events: vec![
+                HistoryEvent {
+                    sequence: 0,
+                    repository_id: "R_repo".into(),
+                    issue_id: "I_79".into(),
+                    issue_number: 79,
+                    provider_event_id: "E_close".into(),
+                    occurred_at: 200,
+                    kind: HistoryEventKind::IssueClosed,
+                },
+                HistoryEvent {
+                    sequence: 0,
+                    repository_id: "R_repo".into(),
+                    issue_id: "I_79".into(),
+                    issue_number: 79,
+                    provider_event_id: "E_reopen".into(),
+                    occurred_at: 300,
+                    kind: HistoryEventKind::IssueReopened,
+                },
+            ],
+            next_cursor: None,
+            complete: true,
+        })
+    }
 }
 
 #[tokio::test]
@@ -315,6 +398,68 @@ async fn successful_current_sync_seeds_creation_history_and_publishes_its_summar
     assert_eq!(model.spaces[0].history.state, HistoryImportState::Complete);
     assert_eq!(model.spaces[0].history.completed_issues, 1);
     assert_eq!(history.events_after("o-r", 0).unwrap().len(), 1);
+
+    poller.abort();
+}
+
+#[tokio::test]
+async fn lifecycle_import_publishes_building_then_complete_without_blocking_current_stars() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open(directory.path().join("history.sqlite3")).unwrap();
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+        history: history.clone(),
+    });
+    let provider = Arc::new(LifecycleSnapshotProvider(AtomicUsize::new(0)));
+
+    let poller = spawn_poller(
+        state,
+        provider.clone(),
+        Cache::new(directory.path().join("cache")),
+        Duration::from_secs(60),
+    );
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            receiver.changed().await.unwrap();
+            let model = receiver.borrow().clone();
+            assert_eq!(model.spaces[0].stars[0].number, 79);
+            if model.spaces[0].history.state == HistoryImportState::Complete {
+                break;
+            }
+            assert_eq!(model.spaces[0].history.state, HistoryImportState::Building);
+        }
+    })
+    .await
+    .expect("the lifecycle import should complete");
+
+    assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        history
+            .events_after("o-r", 0)
+            .unwrap()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            HistoryEventKind::IssueCreated { milestone: None },
+            HistoryEventKind::IssueClosed,
+            HistoryEventKind::IssueReopened,
+        ]
+    );
 
     poller.abort();
 }

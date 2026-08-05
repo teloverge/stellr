@@ -12,7 +12,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
-use stellr_core::{HistoryEvent, HistorySummary, Model};
+use stellr_core::{HistoryEvent, HistoryImportState, HistorySummary, Model};
 use subtle::ConstantTimeEq;
 
 use crate::{
@@ -75,15 +75,19 @@ async fn history(
                 .into_response();
         }
     };
-    let events = match state.history.events_after(&id, query.after.unwrap_or(0)) {
-        Ok(events) => events,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("could not read history events: {error}"),
-            )
-                .into_response();
+    let events = if summary.state == HistoryImportState::Complete {
+        match state.history.events_after(&id, query.after.unwrap_or(0)) {
+            Ok(events) => events,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("could not read history events: {error}"),
+                )
+                    .into_response();
+            }
         }
+    } else {
+        Vec::new()
     };
     Json(HistoryResponse { summary, events }).into_response()
 }

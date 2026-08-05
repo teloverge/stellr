@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added resumable, one-issue-at-a-time close/reopen history import with
+  transactional page checkpoints, stable lifecycle replay, and schema migration
+  from creation-only ledgers without repository-wide history refetches.
 - Added a durable local SQLite issue-creation ledger, authenticated history
   deltas, and a bottom timeline that scrubs historical issue visibility without
   moving the constellation or querying GitHub during scrubbing.

@@ -53,8 +53,23 @@ export function projectTemporalSpace(
   }
 
   const creationByIssue = new Map<number, Extract<HistoryEvent, { kind: 'issue_created' }>>()
-  for (const event of events) {
-    if (event.kind === 'issue_created') creationByIssue.set(event.issue_number, event)
+  const statusByIssue = new Map<number, 'open' | 'resolved'>()
+  const ordered = events
+    .filter((event) => event.occurred_at <= playhead)
+    .toSorted(
+      (left, right) =>
+        left.occurred_at - right.occurred_at ||
+        left.provider_event_id.localeCompare(right.provider_event_id),
+    )
+  for (const event of ordered) {
+    if (event.kind === 'issue_created') {
+      creationByIssue.set(event.issue_number, event)
+      statusByIssue.set(event.issue_number, 'open')
+    } else if (event.kind === 'issue_closed') {
+      statusByIssue.set(event.issue_number, 'resolved')
+    } else if (event.kind === 'issue_reopened') {
+      statusByIssue.set(event.issue_number, 'open')
+    }
   }
 
   return {
@@ -64,9 +79,9 @@ export function projectTemporalSpace(
       return {
         ...star,
         live_status: star.status,
-        status: 'open',
+        status: statusByIssue.get(star.number) ?? 'open',
         milestone: creation?.milestone?.title ?? null,
-        temporal_visible: creation !== undefined && creation.occurred_at <= playhead,
+        temporal_visible: creation !== undefined,
       }
     }),
   }

@@ -1,7 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
-use stellr_core::{HistoryImportState, HistorySummary, Model, Provider, SpaceModel, derive};
+use stellr_core::{
+    HistoryImportState, HistoryPageRequest, HistorySummary, Model, Provider, SpaceModel, derive,
+};
 use stellr_github::cache::{Cache, Snapshot};
 use stellr_history::RepositorySeed;
 
@@ -98,10 +100,77 @@ async fn run_poller(
 async fn sync_spaces(state: &AppState, provider: &(dyn Provider + Send + Sync), cache: &Cache) {
     let entries = state.spaces.lock().await.entries().to_vec();
     let mut spaces = Vec::with_capacity(entries.len());
-    for entry in entries {
-        spaces.push(sync_space(&entry, provider, cache, &state.history).await);
+    for entry in &entries {
+        spaces.push(sync_space(entry, provider, cache, &state.history).await);
     }
     state.hub.send_replace(Model { spaces });
+    for entry in &entries {
+        import_pending_history(state, provider, entry).await;
+    }
+}
+
+async fn import_pending_history(
+    state: &AppState,
+    provider: &(dyn Provider + Send + Sync),
+    entry: &SpaceEntry,
+) {
+    loop {
+        let pending = match state.history.pending_issue(&entry.id) {
+            Ok(Some(pending)) => pending,
+            Ok(None) => return,
+            Err(error) => {
+                publish_history_summary(state, &entry.id, failed_history(error.to_string()));
+                return;
+            }
+        };
+        let request = HistoryPageRequest {
+            issue_id: pending.issue_id.clone(),
+            issue_number: pending.issue_number,
+            cursor: pending.cursor.clone(),
+            cutoff: pending.cutoff,
+        };
+        let page = match provider.fetch_history_page(&entry.repo, &request).await {
+            Ok(page) => page,
+            Err(error) => {
+                let summary = state
+                    .history
+                    .mark_failed(&entry.id, error.to_string())
+                    .unwrap_or_else(|store_error| failed_history(store_error.to_string()));
+                publish_history_summary(state, &entry.id, summary);
+                return;
+            }
+        };
+        let summary = match state
+            .history
+            .checkpoint_page(&stellr_history::PageCheckpoint {
+                space_id: entry.id.clone(),
+                issue_id: pending.issue_id,
+                events: page.events,
+                next_cursor: page.next_cursor,
+                complete: page.complete,
+            }) {
+            Ok(summary) => summary,
+            Err(error) => {
+                let summary = state
+                    .history
+                    .mark_failed(&entry.id, error.to_string())
+                    .unwrap_or_else(|store_error| failed_history(store_error.to_string()));
+                publish_history_summary(state, &entry.id, summary);
+                return;
+            }
+        };
+        publish_history_summary(state, &entry.id, summary);
+        tokio::task::yield_now().await;
+    }
+}
+
+fn publish_history_summary(state: &AppState, space_id: &str, summary: HistorySummary) {
+    let mut model = state.hub.borrow().clone();
+    let Some(space) = model.spaces.iter_mut().find(|space| space.id == space_id) else {
+        return;
+    };
+    space.history = summary;
+    state.hub.send_replace(model);
 }
 
 async fn sync_space(
@@ -176,6 +245,7 @@ fn history_after_snapshot(
             space_id: entry.id.clone(),
             provider_repository_id: repository_id.clone(),
             verified_through,
+            timeline_required: true,
             issues: snapshot.history.clone(),
         })
         .unwrap_or_else(|error| failed_history(error.to_string()))

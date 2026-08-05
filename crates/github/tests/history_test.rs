@@ -1,0 +1,134 @@
+use serde_json::{Value, json};
+use stellr_core::{HistoryEventKind, HistoryPageRequest, Provider, ProviderError, RepoRef};
+use stellr_github::sync::GithubProvider;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn repo() -> RepoRef {
+    RepoRef {
+        owner: "o".into(),
+        name: "r".into(),
+    }
+}
+
+fn request(cursor: Option<&str>) -> HistoryPageRequest {
+    HistoryPageRequest {
+        issue_id: "I_78".into(),
+        issue_number: 78,
+        cursor: cursor.map(str::to_owned),
+        cutoff: 1_785_850_000,
+    }
+}
+
+#[tokio::test]
+async fn fetches_one_targeted_lifecycle_page_and_normalizes_tracked_events() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "repository": {
+                    "id": "R_repo",
+                    "issue": {
+                        "id": "I_78",
+                        "timelineItems": {
+                            "pageInfo": { "hasNextPage": true, "endCursor": "CUR2" },
+                            "nodes": [
+                                {
+                                    "__typename": "ReopenedEvent",
+                                    "id": "E_reopen",
+                                    "createdAt": "2026-08-04T13:10:00Z"
+                                },
+                                {
+                                    "__typename": "AssignedEvent",
+                                    "id": "E_ignore",
+                                    "createdAt": "2026-08-04T13:05:00Z"
+                                },
+                                {
+                                    "__typename": "ClosedEvent",
+                                    "id": "E_close",
+                                    "createdAt": "2026-08-04T13:00:00Z"
+                                },
+                                {
+                                    "__typename": "ClosedEvent",
+                                    "id": "E_after_cutoff",
+                                    "createdAt": "2026-08-04T14:00:00Z"
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+
+    let page = provider
+        .fetch_history_page(&repo(), &request(Some("CUR1")))
+        .await
+        .unwrap();
+    let received = server.received_requests().await.unwrap();
+    let body: Value = serde_json::from_slice(&received[0].body).unwrap();
+    let query = body["query"].as_str().unwrap();
+
+    assert!(query.contains("issue(number: $number)"));
+    assert!(query.contains("itemTypes: [CLOSED_EVENT, REOPENED_EVENT]"));
+    assert_eq!(body["variables"]["owner"], "o");
+    assert_eq!(body["variables"]["name"], "r");
+    assert_eq!(body["variables"]["number"], 78);
+    assert_eq!(body["variables"]["cursor"], "CUR1");
+    assert_eq!(page.next_cursor.as_deref(), Some("CUR2"));
+    assert!(!page.complete);
+    assert_eq!(page.events.len(), 2);
+    assert_eq!(page.events[0].provider_event_id, "E_close");
+    assert!(matches!(page.events[0].kind, HistoryEventKind::IssueClosed));
+    assert_eq!(page.events[1].provider_event_id, "E_reopen");
+    assert!(matches!(
+        page.events[1].kind,
+        HistoryEventKind::IssueReopened
+    ));
+}
+
+#[tokio::test]
+async fn malformed_tracked_event_reports_issue_cursor_and_stage() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "repository": {
+                    "id": "R_repo",
+                    "issue": {
+                        "id": "I_78",
+                        "timelineItems": {
+                            "pageInfo": { "hasNextPage": false, "endCursor": null },
+                            "nodes": [{
+                                "__typename": "ClosedEvent",
+                                "id": null,
+                                "createdAt": "2026-08-04T13:00:00Z"
+                            }]
+                        }
+                    }
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+
+    let error = provider
+        .fetch_history_page(&repo(), &request(Some("CUR1")))
+        .await
+        .unwrap_err();
+
+    match error {
+        ProviderError::Parse(message) => {
+            assert!(message.contains("issue #78"));
+            assert!(message.contains("CUR1"));
+            assert!(message.contains("normalizing lifecycle event"));
+        }
+        other => panic!("expected parse error, got {other:?}"),
+    }
+}
