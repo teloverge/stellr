@@ -152,7 +152,7 @@ pub fn scan(body: &str) -> TextRefs {
             None => {}
         }
 
-        if let Some(title) = atx_heading(raw) {
+        if let Some(title) = atx_heading(fence_line) {
             section = match title.to_ascii_lowercase().as_str() {
                 "blocked by" => Some(RelationshipSection::BlockedBy),
                 "blocks" => Some(RelationshipSection::Blocks),
@@ -296,5 +296,13 @@ mod tests {
         let refs = scan("Blocked by #17\n## Blocked by\n- #17\n```\n- #99\n```\n- #19\n");
 
         assert_eq!(refs.blocked_by, vec![17, 19]);
+    }
+
+    #[test]
+    fn scans_dependency_references_beneath_container_prefixed_headings() {
+        let refs = scan("> ## Blocked by\n> - #17\n- ## Blocks\n- - #23\n");
+
+        assert_eq!(refs.blocked_by, vec![17]);
+        assert_eq!(refs.blocks, vec![23]);
     }
 }
