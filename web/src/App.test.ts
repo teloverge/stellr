@@ -142,7 +142,10 @@ async function settle(): Promise<void> {
 }
 
 describe('App issue routing', () => {
-  it('loads complete history once and scrubs renderer visibility without another request', async () => {
+  it('loads history once, scrubs and plays locally without disturbing selection', async () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    window.history.replaceState(null, '', '/#s=first&i=11')
     const fetchRequest = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -175,6 +178,7 @@ describe('App issue routing', () => {
     )
     vi.stubGlobal('fetch', fetchRequest)
     const setModel = vi.spyOn(Renderer.prototype, 'setModel')
+    const replayHistory = vi.spyOn(Renderer.prototype, 'replayHistory')
     const { target, socket } = mountApp()
     socket.emitModel({
       spaces: [
@@ -211,6 +215,17 @@ describe('App issue routing', () => {
       {},
       null,
     )
+
+    target.querySelector<HTMLButtonElement>('[data-control="play"]')!.click()
+    flushSync()
+
+    expect(replayHistory).toHaveBeenCalledWith(
+      [expect.objectContaining({ issue_number: 11, kind: 'issue_created' })],
+      false,
+    )
+    expect(fetchRequest).toHaveBeenCalledTimes(1)
+    expect(window.location.hash).toBe('#s=first&i=11')
+    expect(target.textContent).toContain('Detail for Issue 11')
   })
 
   it('distinguishes runtime loading from an authoritative empty model', () => {

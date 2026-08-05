@@ -76,6 +76,7 @@
   const activeStar = $derived(resolvedRoute.star)
   let historyEvents = $state.raw<HistoryEvent[]>([])
   let historyPlayhead = $state<number | null>(null)
+  let historyFeedback = $state.raw<HistoryEvent[]>([])
   let historySpaceId = $state<string | null>(null)
   let requestedHistoryKey: string | null = null
   const temporalSpace = $derived(
@@ -102,6 +103,7 @@
       historySpaceId = space?.id ?? null
       historyEvents = []
       historyPlayhead = null
+      historyFeedback = []
       requestedHistoryKey = null
     }
     const summary = space?.history
@@ -385,6 +387,7 @@
           selectedIssue={activeStar?.number ?? null}
           select={(issueNumber) => route.go(activeSpace.id, issueNumber)}
           bottomInset={activeSpace.history === undefined ? 16 : 88}
+          replayEvents={historyFeedback}
         />
         {#if activeSpace.history !== undefined}
           <TemporalTimeline
@@ -392,6 +395,7 @@
             events={historyEvents}
             playhead={historyPlayhead}
             change={(playhead) => (historyPlayhead = playhead)}
+            reached={(events) => (historyFeedback = events)}
           />
         {/if}
       {:else}

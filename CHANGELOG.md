@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added fixed-duration full-history playback with proportional clustered event
+  ticks, accessible play/pause and speed controls, slow-frame-safe event
+  feedback, and reduced-motion captions that preserve map position and selection.
 - Added exact milestone assignment, movement, and removal replay with minimal
   GitHub event payloads and temporal milestone hulls that reshape around fixed
   star coordinates without moving the constellation or camera.

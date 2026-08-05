@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import type { TemporalSpace } from './history'
+  import type { HistoryEvent, TemporalSpace } from './history'
   import type { SpaceModel } from './model'
   import { toRendererModel } from './starmap/adapt'
   import { StarMap as Renderer } from './starmap/starmap'
@@ -10,6 +10,7 @@
     currentIssue = null,
     selectedIssue = null,
     bottomInset = 16,
+    replayEvents = [],
     select,
   }: {
     space: SpaceModel | TemporalSpace
@@ -17,6 +18,7 @@
     selectedIssue?: number | null
     select?: (issueNumber: number) => void
     bottomInset?: number
+    replayEvents?: HistoryEvent[]
   } = $props()
   let host: HTMLDivElement
   let renderer = $state.raw<Renderer | undefined>(undefined)
@@ -31,6 +33,13 @@
 
   $effect(() => {
     renderer?.setInsets({ bottom: bottomInset })
+  })
+
+  $effect(() => {
+    if (replayEvents.length === 0) return
+    const reducedMotion =
+      typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+    renderer?.replayHistory(replayEvents, reducedMotion)
   })
 
   $effect(() => {

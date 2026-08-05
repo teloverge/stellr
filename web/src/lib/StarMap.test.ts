@@ -7,6 +7,7 @@ import { flushSync, mount, unmount } from 'svelte'
 import StarMap from './StarMap.svelte'
 import StarMapTestHost from './StarMap.test-host.svelte'
 import type { SpaceModel } from './model'
+import type { HistoryEvent } from './history'
 import { StarMap as Renderer } from './starmap/starmap'
 
 const mounted: object[] = []
@@ -149,6 +150,33 @@ describe('StarMap wrapper', () => {
       {},
       14,
     )
+  })
+
+  it('forwards reached history events with the reduced-motion preference', () => {
+    const replayHistory = vi.spyOn(Renderer.prototype, 'replayHistory')
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const replayEvents: HistoryEvent[] = [
+      {
+        sequence: 1,
+        repository_id: 'R_repo',
+        issue_id: 'I_42',
+        issue_number: 42,
+        provider_event_id: 'E_reopen',
+        occurred_at: 100,
+        kind: 'issue_reopened',
+      },
+    ]
+
+    const component = mount(StarMap, {
+      target,
+      props: { space: space(42), replayEvents },
+    })
+    mounted.push(component)
+    flushSync()
+
+    expect(replayHistory).toHaveBeenCalledWith(replayEvents, true)
   })
 
   it('does not echo a routed selection back through the user-selection callback', () => {

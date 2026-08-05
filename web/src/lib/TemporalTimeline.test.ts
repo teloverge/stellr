@@ -9,6 +9,7 @@ const mounted: object[] = []
 afterEach(async () => {
   for (const component of mounted.splice(0)) await unmount(component)
   document.body.innerHTML = ''
+  vi.restoreAllMocks()
 })
 
 const complete: HistorySummary = {
@@ -32,6 +33,44 @@ const events: HistoryEvent[] = [
     occurred_at: 100,
     kind: 'issue_created',
     milestone: null,
+  },
+  {
+    sequence: 2,
+    repository_id: 'R_repo',
+    issue_id: 'I_2',
+    issue_number: 2,
+    provider_event_id: 'E_close',
+    occurred_at: 150,
+    kind: 'issue_closed',
+  },
+  {
+    sequence: 3,
+    repository_id: 'R_repo',
+    issue_id: 'I_2',
+    issue_number: 2,
+    provider_event_id: 'E_reopen',
+    occurred_at: 150,
+    kind: 'issue_reopened',
+  },
+  {
+    sequence: 4,
+    repository_id: 'R_repo',
+    issue_id: 'I_1',
+    issue_number: 1,
+    provider_event_id: 'E_milestone',
+    occurred_at: 151,
+    kind: 'milestone_changed',
+    from: null,
+    to: { id: null, title: 'M2 <safe>' },
+  },
+  {
+    sequence: 5,
+    repository_id: 'R_repo',
+    issue_id: 'I_2',
+    issue_number: 2,
+    provider_event_id: 'E_last',
+    occurred_at: 200,
+    kind: 'issue_closed',
   },
 ]
 
@@ -67,7 +106,7 @@ describe('TemporalTimeline creation scrubber', () => {
     expect(target.querySelector('input[type="range"]')).toHaveProperty('disabled', true)
   })
 
-  it('defaults to Now and emits local scrub and return-to-now changes', () => {
+  it('defaults to Now and emits local scrub changes', () => {
     const change = vi.fn()
     const target = render({ summary: complete, events, playhead: null, change })
     const slider = target.querySelector<HTMLInputElement>('input[type="range"]')!
@@ -79,9 +118,88 @@ describe('TemporalTimeline creation scrubber', () => {
     slider.dispatchEvent(new Event('input', { bubbles: true }))
     flushSync()
     expect(change).toHaveBeenCalledWith(100)
+  })
 
-    const pastTarget = render({ summary: complete, events, playhead: 100, change })
-    pastTarget.querySelector<HTMLButtonElement>('button')!.click()
+  it('orders date, slider ticks, Play, and speed controls accessibly', () => {
+    const target = render({ summary: complete, events, playhead: null })
+    const controls = [...target.querySelectorAll<HTMLElement>('[data-control]')]
+
+    expect(controls.map((control) => control.dataset.control)).toEqual([
+      'date',
+      'track',
+      'play',
+      'speed',
+    ])
+    expect(target.querySelector('input[type="range"]')?.getAttribute('aria-valuetext')).toBe('Now')
+    expect(target.querySelector('[data-control="play"]')?.textContent).toContain('Play')
+    expect(target.querySelector('[data-control="speed"]')?.textContent).toContain('1×')
+  })
+
+  it('renders proportional ticks, clusters dense activity, and exposes ordered tooltip text', () => {
+    const target = render({ summary: complete, events, playhead: null })
+    const ticks = [...target.querySelectorAll<HTMLButtonElement>('.event-tick')]
+
+    expect(ticks).toHaveLength(3)
+    expect(ticks[0].style.left).toBe('0%')
+    expect(ticks.at(-1)?.style.left).toBe('100%')
+    expect(ticks[1].dataset.eventCount).toBe('3')
+
+    ticks[1].focus()
+    ticks[1].dispatchEvent(new FocusEvent('focus', { bubbles: true }))
+    flushSync()
+    const tooltip = target.querySelector('[role="tooltip"]')
+    expect(tooltip?.textContent).toContain('#2 closed')
+    expect(tooltip?.textContent).toContain('#2 reopened')
+    expect(tooltip?.textContent).toContain('#1 moved to M2 <safe>')
+    expect(tooltip?.querySelector('script')).toBeNull()
+  })
+
+  it('navigates exact event times with ticks and slider keys', () => {
+    const change = vi.fn()
+    const target = render({ summary: complete, events, playhead: 150, change })
+    const slider = target.querySelector<HTMLInputElement>('input[type="range"]')!
+    const ticks = [...target.querySelectorAll<HTMLButtonElement>('.event-tick')]
+
+    ticks[0].click()
+    expect(change).toHaveBeenLastCalledWith(100)
+
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+    expect(change).toHaveBeenLastCalledWith(151)
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+    expect(change).toHaveBeenLastCalledWith(100)
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+    expect(change).toHaveBeenLastCalledWith(100)
+    slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
     expect(change).toHaveBeenLastCalledWith(null)
+  })
+
+  it('plays from the beginning at Now, emits crossed events, pauses, and cycles speed', () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    vi.spyOn(performance, 'now').mockReturnValue(1_000)
+    const change = vi.fn()
+    const reached = vi.fn()
+    const target = render({ summary: complete, events, playhead: null, change, reached })
+    const play = target.querySelector<HTMLButtonElement>('[data-control="play"]')!
+    const speed = target.querySelector<HTMLButtonElement>('[data-control="speed"]')!
+
+    play.click()
+    flushSync()
+    expect(change).toHaveBeenLastCalledWith(100)
+    expect(reached.mock.calls[0][0].map((event: HistoryEvent) => event.provider_event_id)).toEqual([
+      'I_1:issue_created',
+    ])
+    expect(play.textContent).toContain('Pause')
+
+    speed.click()
+    flushSync()
+    expect(speed.textContent).toContain('2×')
+    play.click()
+    flushSync()
+    expect(play.textContent).toContain('Play')
   })
 })

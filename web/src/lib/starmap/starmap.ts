@@ -29,6 +29,7 @@ import {
   type WorkflowVisualState,
 } from './workflow-visual'
 import type { Ticket } from './model'
+import type { HistoryEvent } from '../history'
 
 export type SelectHandler = (num: number | null) => void
 
@@ -551,6 +552,31 @@ export class StarMap {
     const out: Record<number, SessionState> = {}
     for (const n of this.#nodes) if (n.sstate) out[n.num] = n.sstate
     return out
+  }
+
+  // Apply one playback beat without touching layout, camera, or selection.
+  // Captions remain under reduced motion; only the radial pulse stands down.
+  replayHistory(events: HistoryEvent[], reducedMotion: boolean): void {
+    if (events.length === 0) return
+    if (!reducedMotion) {
+      for (const event of events) {
+        const node = this.#byNum.get(event.issue_number)
+        if (node) node.flare = 1
+      }
+    }
+    const summaries = events.map(historyCaption)
+    const caption =
+      summaries.length <= 3
+        ? summaries.join('   ·   ')
+        : `${summaries.length} events   ·   ${summaries.slice(0, 2).join('   ·   ')}`
+    this.#tick(caption.slice(0, 180))
+  }
+
+  pulsing(): number[] {
+    return this.#nodes
+      .filter((node) => node.flare > 0)
+      .map((node) => node.num)
+      .sort((a, b) => a - b)
   }
 
   // Temporal milestone membership, grouped exactly as the hull renderer sees
@@ -1479,6 +1505,15 @@ export class StarMap {
     }
     return { key, fs, items }
   }
+}
+
+function historyCaption(event: HistoryEvent): string {
+  const issue = `#${event.issue_number.toString().padStart(2, '0')}`
+  if (event.kind === 'issue_created') return `${issue} created`
+  if (event.kind === 'issue_closed') return `${issue} closed`
+  if (event.kind === 'issue_reopened') return `${issue} reopened`
+  if (event.to === null) return `${issue} removed from milestone`
+  return `${issue} moved to ${event.to.title}`
 }
 
 function now(): number {
