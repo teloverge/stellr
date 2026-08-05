@@ -1,7 +1,12 @@
+use std::collections::HashMap;
+
+use stellr_core::RawIssue;
+
 #[derive(Debug, Default, PartialEq)]
 pub struct TextRefs {
     pub blocked_by: Vec<u64>,
     pub blocks: Vec<u64>,
+    pub parents: Vec<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -14,6 +19,7 @@ struct Fence {
 enum RelationshipSection {
     BlockedBy,
     Blocks,
+    Parent,
 }
 
 fn atx_heading(line: &str) -> Option<&str> {
@@ -156,6 +162,7 @@ pub fn scan(body: &str) -> TextRefs {
             section = match title.to_ascii_lowercase().as_str() {
                 "blocked by" => Some(RelationshipSection::BlockedBy),
                 "blocks" => Some(RelationshipSection::Blocks),
+                "parent" => Some(RelationshipSection::Parent),
                 _ => None,
             };
             continue;
@@ -171,6 +178,7 @@ pub fn scan(body: &str) -> TextRefs {
             match section {
                 Some(RelationshipSection::BlockedBy) => Some(&mut refs.blocked_by),
                 Some(RelationshipSection::Blocks) => Some(&mut refs.blocks),
+                Some(RelationshipSection::Parent) => Some(&mut refs.parents),
                 None => None,
             }
         };
@@ -184,7 +192,39 @@ pub fn scan(body: &str) -> TextRefs {
     refs.blocked_by.dedup();
     refs.blocks.sort_unstable();
     refs.blocks.dedup();
+    refs.parents.sort_unstable();
+    refs.parents.dedup();
     refs
+}
+
+pub(crate) fn enrich_relationships(issues: &mut [RawIssue]) {
+    let mut inversions = Vec::new();
+
+    for issue in issues.iter_mut() {
+        let refs = scan(&issue.body);
+        issue.blocked_by.extend(refs.blocked_by);
+        issue.blocked_by.sort_unstable();
+        issue.blocked_by.dedup();
+        inversions.extend(refs.blocks.into_iter().map(|target| (issue.number, target)));
+        if issue.parent_issue.is_none() && refs.parents.len() == 1 {
+            issue.parent_issue = Some(refs.parents[0]);
+        }
+    }
+
+    let positions = issues
+        .iter()
+        .enumerate()
+        .map(|(index, issue)| (issue.number, index))
+        .collect::<HashMap<_, _>>();
+    for (blocker, target) in inversions {
+        if let Some(&index) = positions.get(&target) {
+            issues[index].blocked_by.push(blocker);
+        }
+    }
+    for issue in issues {
+        issue.blocked_by.sort_unstable();
+        issue.blocked_by.dedup();
+    }
 }
 
 #[cfg(test)]

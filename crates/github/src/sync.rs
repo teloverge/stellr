@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use octocrab::{FromResponse, Octocrab};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -190,67 +188,50 @@ fn map_octocrab_error(error: octocrab::Error) -> ProviderError {
 }
 
 fn map_issues(nodes: Vec<IssueNode>) -> Vec<RawIssue> {
-    let mut issues = Vec::with_capacity(nodes.len());
-    let mut inversions = Vec::new();
-
-    for node in nodes {
-        let body = node.body.unwrap_or_default();
-        let refs = textref::scan(&body);
-        let mut blocked_by = node
-            .blocked_by
-            .nodes
-            .into_iter()
-            .map(|issue| issue.number)
-            .chain(refs.blocked_by)
-            .collect::<Vec<_>>();
-        blocked_by.sort_unstable();
-        blocked_by.dedup();
-
-        inversions.extend(refs.blocks.into_iter().map(|target| (node.number, target)));
-        issues.push(RawIssue {
-            number: node.number,
-            parent_issue: node.parent.map(|parent| parent.number),
-            title: node.title,
-            body,
-            state: match node.state {
-                GithubIssueState::Open => IssueState::Open,
-                GithubIssueState::Closed if node.state_reason.as_deref() == Some("NOT_PLANNED") => {
-                    IssueState::ClosedNotPlanned
-                }
-                GithubIssueState::Closed => IssueState::Closed,
-            },
-            assignees: node
-                .assignees
+    let mut issues = nodes
+        .into_iter()
+        .map(|node| {
+            let body = node.body.unwrap_or_default();
+            let blocked_by = node
+                .blocked_by
                 .nodes
                 .into_iter()
-                .map(|assignee| assignee.login)
-                .collect(),
-            milestone: node.milestone.map(|milestone| milestone.title),
-            labels: node
-                .labels
-                .nodes
-                .into_iter()
-                .map(|label| label.name)
-                .collect(),
-            blocked_by,
-            url: node.url,
-        });
-    }
+                .map(|issue| issue.number)
+                .collect::<Vec<_>>();
+            RawIssue {
+                number: node.number,
+                parent_issue: node.parent.map(|parent| parent.number),
+                title: node.title,
+                body,
+                state: match node.state {
+                    GithubIssueState::Open => IssueState::Open,
+                    GithubIssueState::Closed
+                        if node.state_reason.as_deref() == Some("NOT_PLANNED") =>
+                    {
+                        IssueState::ClosedNotPlanned
+                    }
+                    GithubIssueState::Closed => IssueState::Closed,
+                },
+                assignees: node
+                    .assignees
+                    .nodes
+                    .into_iter()
+                    .map(|assignee| assignee.login)
+                    .collect(),
+                milestone: node.milestone.map(|milestone| milestone.title),
+                labels: node
+                    .labels
+                    .nodes
+                    .into_iter()
+                    .map(|label| label.name)
+                    .collect(),
+                blocked_by,
+                url: node.url,
+            }
+        })
+        .collect::<Vec<_>>();
 
-    let positions = issues
-        .iter()
-        .enumerate()
-        .map(|(index, issue)| (issue.number, index))
-        .collect::<HashMap<_, _>>();
-    for (blocker, target) in inversions {
-        if let Some(&index) = positions.get(&target) {
-            issues[index].blocked_by.push(blocker);
-        }
-    }
-    for issue in &mut issues {
-        issue.blocked_by.sort_unstable();
-        issue.blocked_by.dedup();
-    }
+    textref::enrich_relationships(&mut issues);
 
     issues
 }
