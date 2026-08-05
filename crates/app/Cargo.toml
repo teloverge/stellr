@@ -1,6 +1,7 @@
 [package]
 name = "stellr-app"
 version = "0.1.0"
+default-run = "stellr-desktop"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -8,6 +9,10 @@ repository.workspace = true
 [[bin]]
 name = "stellr"
 path = "src/main.rs"
+
+[[bin]]
+name = "stellr-desktop"
+path = "src/desktop_main.rs"
 
 [dependencies]
 async-trait.workspace = true

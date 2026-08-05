@@ -6,16 +6,19 @@ param(
   [int]$InitialIssue = 70,
   [string]$InitialIssueTitle = 'M2: Prove and document the complete release boundary',
   [int]$ForwardedIssue = 66,
-  [string]$ForwardedIssueTitle = 'M2: Ship the Polar Observatory shell and native actions'
+  [string]$ForwardedIssueTitle = 'M2: Ship the Polar Observatory shell and native actions',
+  [int]$StartupTimeoutSeconds = 90
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows-startup-diagnostics.ps1')
 if ($env:CI -ne 'true') {
   throw 'This smoke modifies the desktop profile and may run only on a disposable CI account.'
 }
 if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
   throw 'GITHUB_TOKEN is required to prove authenticated application startup.'
 }
+if ($StartupTimeoutSeconds -le 0) { throw 'StartupTimeoutSeconds must be positive.' }
 
 Add-Type -AssemblyName UIAutomationClient
 Add-Type @'
@@ -31,22 +34,24 @@ $executable = (Resolve-Path $ExecutablePath).Path
 $workingDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $routeFile = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'stellr\config\desktop-route.json'
 $primary = $null
+$startupLogRoot = New-StellrStartupLogRoot "stellr-application-startup-$PID"
+$startupSequence = 0
 
 function Start-Stellr([string[]]$Arguments) {
+  $script:startupSequence++
+  $startupLog = New-StellrStartupLog $startupLogRoot "launch-$($script:startupSequence)"
   $start = @{
     FilePath = $executable
     WorkingDirectory = $workingDirectory
-    PassThru = $true
   }
   if ($Arguments.Count -gt 0) { $start.ArgumentList = $Arguments }
-  $process = Start-Process @start
-  for ($attempt = 0; $attempt -lt 60; $attempt++) {
-    Start-Sleep -Milliseconds 500
-    $process.Refresh()
-    if ($process.HasExited) { throw "Stellr exited during startup with code $($process.ExitCode)." }
-    if ($process.MainWindowTitle -eq 'Stellr' -and $process.MainWindowHandle -ne 0) { return $process }
-  }
-  throw 'The real Stellr process did not create its desktop window.'
+  $process = Start-StellrProcessWithDiagnostics $start $startupLog
+  Wait-StellrDesktopWindow `
+    $process `
+    $startupLog `
+    $StartupTimeoutSeconds `
+    'Stellr exited during startup.' `
+    "Stellr did not create its desktop window within $StartupTimeoutSeconds seconds."
 }
 
 function Find-Element([System.Diagnostics.Process]$Process, [string]$Name) {
@@ -96,12 +101,25 @@ try {
   }
 
   $forwardedUrl = "https://github.com/$Repository/issues/$ForwardedIssue"
-  $second = Start-Process -FilePath $executable -WorkingDirectory $workingDirectory -ArgumentList @('open', $forwardedUrl) -PassThru
+  $secondLog = New-StellrStartupLog $startupLogRoot 'second-instance'
+  $secondStart = @{
+    FilePath = $executable
+    WorkingDirectory = $workingDirectory
+    ArgumentList = @('open', $forwardedUrl)
+  }
+  $second = Start-StellrProcessWithDiagnostics $secondStart $secondLog
   if (-not $second.WaitForExit(15000)) {
     Stop-Process -Id $second.Id -Force -ErrorAction SilentlyContinue
-    throw 'The second instance did not forward its route and exit.'
+    $second.WaitForExit()
+    $second.Refresh()
+    throw (Get-StellrStartupFailure $second $secondLog 'The second instance did not forward its route and exit.')
   }
-  if ($second.ExitCode -ne 0) { throw "The second instance exited with code $($second.ExitCode)." }
+  $second.WaitForExit()
+  $second.Refresh()
+  $secondExitCode = Get-StellrProcessExitCode $second
+  if ($secondExitCode -ne 0) {
+    throw (Get-StellrStartupFailure $second $secondLog 'The second instance failed while forwarding its route.')
+  }
   Find-Element $primary $ForwardedIssueTitle | Out-Null
 
   [StellrWindowControl]::ShowWindowAsync($primary.MainWindowHandle, 6) | Out-Null
