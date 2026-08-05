@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Restored dependency and parent relationship lines from cached Markdown issue
+  bodies without making additional GitHub requests.
 - Fixed installed desktop startup so a no-argument launch opens the existing
   empty repository-selection shell instead of treating the installation
   directory as a Git repository.

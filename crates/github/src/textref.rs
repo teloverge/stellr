@@ -23,13 +23,20 @@ enum RelationshipSection {
 }
 
 fn atx_heading(line: &str) -> Option<&str> {
-    let line = line.trim_start();
+    let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+    if indentation > 3 {
+        return None;
+    }
+
+    let line = &line[indentation..];
     let level = line.bytes().take_while(|byte| *byte == b'#').count();
-    if !(1..=6).contains(&level)
-        || !line
-            .as_bytes()
-            .get(level)
-            .is_some_and(u8::is_ascii_whitespace)
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+    if line
+        .as_bytes()
+        .get(level)
+        .is_some_and(|byte| !byte.is_ascii_whitespace())
     {
         return None;
     }
@@ -51,10 +58,25 @@ fn atx_heading(line: &str) -> Option<&str> {
 fn extract_issue_references(line: &str, bucket: &mut Vec<u64>) {
     for (index, character) in line.char_indices() {
         if character == '#' {
-            let digits: String = line[index + 1..]
-                .chars()
-                .take_while(|character| character.is_ascii_digit())
-                .collect();
+            let left_is_boundary = line[..index].chars().next_back().is_none_or(|character| {
+                !character.is_alphanumeric() && !matches!(character, '_' | '-' | '.' | '/' | '\\')
+            });
+            if !left_is_boundary {
+                continue;
+            }
+
+            let suffix = &line[index + 1..];
+            let digit_count = suffix.bytes().take_while(u8::is_ascii_digit).count();
+            if digit_count == 0
+                || suffix[digit_count..]
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_alphanumeric() || character == '_')
+            {
+                continue;
+            }
+
+            let digits = &suffix[..digit_count];
             if let Ok(number) = digits.parse::<u64>() {
                 bucket.push(number);
             }
@@ -203,8 +225,6 @@ pub(crate) fn enrich_relationships(issues: &mut [RawIssue]) {
     for issue in issues.iter_mut() {
         let refs = scan(&issue.body);
         issue.blocked_by.extend(refs.blocked_by);
-        issue.blocked_by.sort_unstable();
-        issue.blocked_by.dedup();
         inversions.extend(refs.blocks.into_iter().map(|target| (issue.number, target)));
         if issue.parent_issue.is_none() && refs.parents.len() == 1 {
             issue.parent_issue = Some(refs.parents[0]);
@@ -318,7 +338,7 @@ mod tests {
 
     #[test]
     fn scans_dependency_references_beneath_markdown_headings() {
-        let refs = scan("## Blocked by\n\n- #17\n- #19\n## Blocks ##\n* #23\n");
+        let refs = scan("   ## Blocked by\n\n- #17\n- #19\n## Blocks ##\n* #23\n");
 
         assert_eq!(refs.blocked_by, vec![17, 19]);
         assert_eq!(refs.blocks, vec![23]);
@@ -332,6 +352,30 @@ mod tests {
     }
 
     #[test]
+    fn four_space_indented_pseudo_heading_does_not_end_relationship_section() {
+        let refs = scan("## Blocked by\n- #17\n    ## Acceptance criteria\n- #99\n");
+
+        assert_eq!(refs.blocked_by, vec![17, 99]);
+    }
+
+    #[test]
+    fn marker_only_atx_heading_ends_relationship_section() {
+        let refs = scan("## Blocked by\n- #17\n##\n- #99\n");
+
+        assert_eq!(refs.blocked_by, vec![17]);
+    }
+
+    #[test]
+    fn relationship_sections_only_accept_standalone_same_repository_references() {
+        let refs = scan(
+            "## Blocked by\n- other/repo#17\n- #18oops\n- (#19), #20.\n## Parent\n- other/repo#21\n- #22oops\n",
+        );
+
+        assert_eq!(refs.blocked_by, vec![19, 20]);
+        assert_eq!(refs.parents, Vec::<u64>::new());
+    }
+
+    #[test]
     fn section_references_still_ignore_fenced_examples_and_deduplicate_inline_refs() {
         let refs = scan("Blocked by #17\n## Blocked by\n- #17\n```\n- #99\n```\n- #19\n");
 
@@ -340,7 +384,7 @@ mod tests {
 
     #[test]
     fn scans_dependency_references_beneath_container_prefixed_headings() {
-        let refs = scan("> ## Blocked by\n> - #17\n- ## Blocks\n- - #23\n");
+        let refs = scan(">    ## Blocked by\n> - #17\n- ## Blocks\n- - #23\n");
 
         assert_eq!(refs.blocked_by, vec![17]);
         assert_eq!(refs.blocks, vec![23]);
