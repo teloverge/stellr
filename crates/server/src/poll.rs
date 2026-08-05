@@ -1,8 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
-use stellr_core::{Model, Provider, SpaceModel, derive};
+use stellr_core::{HistoryImportState, HistorySummary, Model, Provider, SpaceModel, derive};
 use stellr_github::cache::{Cache, Snapshot};
+use stellr_history::RepositorySeed;
 
 use crate::{spaces::SpaceEntry, state::AppState};
 
@@ -98,7 +99,7 @@ async fn sync_spaces(state: &AppState, provider: &(dyn Provider + Send + Sync), 
     let entries = state.spaces.lock().await.entries().to_vec();
     let mut spaces = Vec::with_capacity(entries.len());
     for entry in entries {
-        spaces.push(sync_space(&entry, provider, cache).await);
+        spaces.push(sync_space(&entry, provider, cache, &state.history).await);
     }
     state.hub.send_replace(Model { spaces });
 }
@@ -107,27 +108,84 @@ async fn sync_space(
     entry: &SpaceEntry,
     provider: &(dyn Provider + Send + Sync),
     cache: &Cache,
+    history_store: &stellr_history::HistoryStore,
 ) -> SpaceModel {
-    match provider.fetch(&entry.repo).await {
-        Ok(issues) => {
+    match provider.fetch_snapshot(&entry.repo).await {
+        Ok(snapshot) => {
             let synced_at = Utc::now().timestamp();
             // A successful provider sync is fresh even if its fallback cache cannot be updated.
             let _ = cache.store(
                 &entry.repo,
                 &Snapshot {
-                    issues: issues.clone(),
+                    issues: snapshot.issues.clone(),
                     synced_at,
                 },
             );
-            model(entry, issues, Some(synced_at), false, None)
+            let history = history_after_snapshot(entry, &snapshot, history_store, synced_at);
+            model(
+                entry,
+                snapshot.issues,
+                Some(synced_at),
+                false,
+                None,
+                history,
+            )
         }
         Err(error) => {
             let snapshot = cache.load(&entry.repo);
             let (issues, synced_at) = snapshot
                 .map(|snapshot| (snapshot.issues, Some(snapshot.synced_at)))
                 .unwrap_or_default();
-            model(entry, issues, synced_at, true, Some(error.to_string()))
+            let history = history_store
+                .summary(&entry.id)
+                .unwrap_or_else(|history_error| Some(failed_history(history_error.to_string())))
+                .unwrap_or_default();
+            model(
+                entry,
+                issues,
+                synced_at,
+                true,
+                Some(error.to_string()),
+                history,
+            )
         }
+    }
+}
+
+fn history_after_snapshot(
+    entry: &SpaceEntry,
+    snapshot: &stellr_core::ProviderSnapshot,
+    store: &stellr_history::HistoryStore,
+    verified_through: i64,
+) -> HistorySummary {
+    let Some(repository_id) = snapshot.repository_id.as_ref() else {
+        return store
+            .summary(&entry.id)
+            .unwrap_or_else(|error| Some(failed_history(error.to_string())))
+            .unwrap_or_default();
+    };
+    if snapshot.history.len() != snapshot.issues.len() {
+        return failed_history(format!(
+            "provider returned history metadata for {}/{} issues",
+            snapshot.history.len(),
+            snapshot.issues.len()
+        ));
+    }
+    store
+        .initialize_repository(&RepositorySeed {
+            space_id: entry.id.clone(),
+            provider_repository_id: repository_id.clone(),
+            verified_through,
+            issues: snapshot.history.clone(),
+        })
+        .unwrap_or_else(|error| failed_history(error.to_string()))
+}
+
+fn failed_history(diagnostic: String) -> HistorySummary {
+    HistorySummary {
+        state: HistoryImportState::Failed,
+        diagnostic: Some(diagnostic),
+        ..HistorySummary::default()
     }
 }
 
@@ -137,6 +195,7 @@ fn model(
     synced_at: Option<i64>,
     stale: bool,
     error: Option<String>,
+    history: HistorySummary,
 ) -> SpaceModel {
     SpaceModel {
         id: entry.id.clone(),
@@ -146,5 +205,6 @@ fn model(
         synced_at,
         stale,
         error,
+        history,
     }
 }

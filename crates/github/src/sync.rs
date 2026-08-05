@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use octocrab::{FromResponse, Octocrab};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use stellr_core::{IssueState, Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{
+    IssueState, IssueSyncMetadata, MilestoneRef, Provider, ProviderError, ProviderSnapshot,
+    RawIssue, RepoRef,
+};
 
 use crate::textref;
 
@@ -12,13 +16,17 @@ const DEFAULT_BASE_URI: &str = "https://api.github.com";
 const FETCH_ISSUES_QUERY: &str = r#"
 query FetchIssues($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
+    id
     issues(first: 100, after: $cursor, states: [OPEN, CLOSED]) {
       pageInfo {
         hasNextPage
         endCursor
       }
       nodes {
+        id
         number
+        createdAt
+        updatedAt
         title
         body
         url
@@ -27,7 +35,7 @@ query FetchIssues($owner: String!, $name: String!, $cursor: String) {
         assignees(first: 10) {
           nodes { login }
         }
-        milestone { title }
+        milestone { id title }
         labels(first: 20) {
           nodes { name }
         }
@@ -138,8 +146,19 @@ impl GithubProvider {
 #[async_trait::async_trait]
 impl Provider for GithubProvider {
     async fn fetch(&self, repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+        Ok(self.fetch_all(repo).await?.issues)
+    }
+
+    async fn fetch_snapshot(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        self.fetch_all(repo).await
+    }
+}
+
+impl GithubProvider {
+    async fn fetch_all(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         let mut cursor = None;
         let mut nodes = Vec::new();
+        let mut repository_id: Option<String> = None;
 
         loop {
             let request = GraphqlRequest {
@@ -156,7 +175,7 @@ impl Provider for GithubProvider {
             let response: GraphqlEnvelope = serde_json::from_value(response)
                 .map_err(|error| ProviderError::Parse(error.to_string()))?;
 
-            let connection = response
+            let repository = response
                 .data
                 .ok_or_else(|| ProviderError::Parse("missing data.repository.issues".into()))
                 .and_then(|data| {
@@ -164,8 +183,17 @@ impl Provider for GithubProvider {
                         .map_err(|error| ProviderError::Parse(error.to_string()))
                 })?
                 .repository
-                .map(|repository| repository.issues)
                 .ok_or_else(|| ProviderError::Parse("missing data.repository.issues".into()))?;
+            if repository_id
+                .as_ref()
+                .is_some_and(|known| known != &repository.id)
+            {
+                return Err(ProviderError::Parse(
+                    "repository identity changed during issue pagination".into(),
+                ));
+            }
+            repository_id = Some(repository.id);
+            let connection = repository.issues;
 
             nodes.extend(connection.nodes);
             if !connection.page_info.has_next_page {
@@ -176,9 +204,7 @@ impl Provider for GithubProvider {
             })?);
         }
 
-        let mut issues = map_issues(nodes);
-        issues.sort_by_key(|issue| issue.number);
-        Ok(issues)
+        Ok(map_snapshot(repository_id, nodes))
     }
 }
 
@@ -189,8 +215,9 @@ fn map_octocrab_error(error: octocrab::Error) -> ProviderError {
     }
 }
 
-fn map_issues(nodes: Vec<IssueNode>) -> Vec<RawIssue> {
+fn map_snapshot(repository_id: Option<String>, nodes: Vec<IssueNode>) -> ProviderSnapshot {
     let mut issues = Vec::with_capacity(nodes.len());
+    let mut history = Vec::with_capacity(nodes.len());
     let mut inversions = Vec::new();
 
     for node in nodes {
@@ -207,6 +234,16 @@ fn map_issues(nodes: Vec<IssueNode>) -> Vec<RawIssue> {
         blocked_by.dedup();
 
         inversions.extend(refs.blocks.into_iter().map(|target| (node.number, target)));
+        history.push(IssueSyncMetadata {
+            issue_id: node.id.clone(),
+            number: node.number,
+            created_at: node.created_at.timestamp(),
+            updated_at: node.updated_at.timestamp(),
+            milestone: node.milestone.as_ref().map(|milestone| MilestoneRef {
+                id: milestone.id.clone(),
+                title: milestone.title.clone(),
+            }),
+        });
         issues.push(RawIssue {
             number: node.number,
             parent_issue: node.parent.map(|parent| parent.number),
@@ -251,8 +288,14 @@ fn map_issues(nodes: Vec<IssueNode>) -> Vec<RawIssue> {
         issue.blocked_by.sort_unstable();
         issue.blocked_by.dedup();
     }
+    issues.sort_by_key(|issue| issue.number);
+    history.sort_by_key(|issue| issue.number);
 
-    issues
+    ProviderSnapshot {
+        repository_id,
+        issues,
+        history,
+    }
 }
 
 #[derive(Serialize)]
@@ -280,6 +323,7 @@ struct GraphqlData {
 
 #[derive(Deserialize)]
 struct Repository {
+    id: String,
     issues: IssueConnection,
 }
 
@@ -300,7 +344,10 @@ struct PageInfo {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct IssueNode {
+    id: String,
     number: u64,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
     title: String,
     body: Option<String>,
     url: String,
@@ -330,8 +377,9 @@ struct Assignee {
     login: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Milestone {
+    id: String,
     title: String,
 }
 

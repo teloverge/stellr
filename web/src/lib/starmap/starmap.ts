@@ -53,6 +53,7 @@ interface Node {
   title: string
   type: string
   parentIssue: number | null
+  visible: boolean
   vstate: VisualState
   // The session overlay riding this star, or null when no session speaks for it
   // (ticket 13). Strictly additive: it never touches layout or the base star.
@@ -352,6 +353,7 @@ export class StarMap {
         if (!n) continue
         n.title = t.title
         n.type = t.type
+        n.visible = t.visible !== false
         const vstate = visualState(t)
         const sstate = sessions[t.num] ?? null
         if (vstate !== n.vstate || sstate !== n.sstate) {
@@ -385,6 +387,7 @@ export class StarMap {
         title: t.title,
         type: t.type,
         parentIssue: t.parentIssue,
+        visible: t.visible !== false,
         vstate: visualState(t),
         sstate: sessions[t.num] ?? null,
         x: p.x,
@@ -404,12 +407,17 @@ export class StarMap {
     const byNum = new Map(tickets.map((ticket) => [ticket.num, ticket]))
     const edges = workflowEdges(tickets)
     const reverseEdges = reverseEdgeKeys(edges)
-    this.#edges = edges.map((edge) => ({
+    this.#edges = edges
+      .filter(
+        (edge) =>
+          byNum.get(edge.from)?.visible !== false && byNum.get(edge.to)?.visible !== false,
+      )
+      .map((edge) => ({
       ...edge,
       state: workflowVisualState(edge, byNum),
       satisfied: this.#resolved.has(edge.from),
       reverseExists: reverseEdges.has(edgeKey(edge.from, edge.to)),
-    }))
+      }))
   }
 
   // --- seam: emit selection -------------------------------------------------
@@ -541,7 +549,7 @@ export class StarMap {
   // Current screen position of a star under the live camera.
   screenOf(num: number): { x: number; y: number } | null {
     const n = this.#byNum.get(num)
-    if (!n) return null
+    if (!n || !n.visible) return null
     return { x: n.x * this.#cam.s + this.#cam.x, y: n.y * this.#cam.s + this.#cam.y }
   }
 
@@ -555,6 +563,7 @@ export class StarMap {
   selectAtScreen(sx: number, sy: number): number | null {
     let hit: Node | null = null
     for (const n of this.#nodes) {
+      if (!n.visible) continue
       const px = n._x * this.#cam.s + this.#cam.x
       const py = n._y * this.#cam.s + this.#cam.y
       const r = Math.max(14, this.#radius(n) * this.#cam.s + 10)
@@ -904,6 +913,7 @@ export class StarMap {
       g.restore()
     }
     for (const n of this.#nodes) {
+      if (!n.visible) continue
       g.save()
       if (focused && !this.#focus.emphasized.has(n.num)) g.globalAlpha = CONTEXT_ALPHA
       this.#drawStar(g, n, this.#clock)
@@ -1296,6 +1306,7 @@ export class StarMap {
     // text over the faint outer falloff reads fine.
     const vis: { n: Node; sx: number; sy: number; rad: number }[] = []
     for (const n of this.#nodes) {
+      if (!n.visible) continue
       const sx = n.x * s + this.#cam.x
       const sy = n.y * s + this.#cam.y
       if (sx < -CULL_MARGIN || sx > this.#w + CULL_MARGIN) continue

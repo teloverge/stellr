@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import type { TemporalSpace } from './history'
   import type { SpaceModel } from './model'
   import { toRendererModel } from './starmap/adapt'
   import { StarMap as Renderer } from './starmap/starmap'
@@ -8,12 +9,14 @@
     space,
     currentIssue = null,
     selectedIssue = null,
+    bottomInset = 16,
     select,
   }: {
-    space: SpaceModel
+    space: SpaceModel | TemporalSpace
     currentIssue?: number | null
     selectedIssue?: number | null
     select?: (issueNumber: number) => void
+    bottomInset?: number
   } = $props()
   let host: HTMLDivElement
   let renderer = $state.raw<Renderer | undefined>(undefined)
@@ -24,6 +27,10 @@
   $effect(() => {
     const model = toRendererModel(space)
     renderer?.setModel(model, {}, currentIssue)
+  })
+
+  $effect(() => {
+    renderer?.setInsets({ bottom: bottomInset })
   })
 
   $effect(() => {

@@ -5,6 +5,7 @@ use std::sync::{
 
 use stellr_core::{Model, Provider, ProviderError, RawIssue, RepoRef};
 use stellr_github::cache::Cache;
+use stellr_history::HistoryStore;
 use stellr_server::{
     poll::{PollingControl, spawn_controlled_poller},
     spaces::{SpaceEntry, SpaceStore},
@@ -50,6 +51,7 @@ async fn focus_transitions_reschedule_one_poller_and_manual_refresh_stays_immedi
         token: None,
         spaces: tokio::sync::Mutex::new(spaces),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history: HistoryStore::open_in_memory().unwrap(),
     });
     let calls = Arc::new(AtomicUsize::new(0));
     let control = PollingControl::focus_aware(

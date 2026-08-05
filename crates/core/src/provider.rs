@@ -1,4 +1,4 @@
-use crate::RawIssue;
+use crate::{HistoryPage, HistoryPageRequest, IssueSyncMetadata, RawIssue};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoRef {
@@ -15,6 +15,31 @@ impl RepoRef {
 #[async_trait::async_trait]
 pub trait Provider {
     async fn fetch(&self, repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError>;
+
+    async fn fetch_snapshot(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        Ok(ProviderSnapshot {
+            repository_id: None,
+            issues: self.fetch(repo).await?,
+            history: Vec::new(),
+        })
+    }
+
+    async fn fetch_history_page(
+        &self,
+        _repo: &RepoRef,
+        _request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        Err(ProviderError::Unsupported(
+            "provider does not supply temporal history".into(),
+        ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderSnapshot {
+    pub repository_id: Option<String>,
+    pub issues: Vec<RawIssue>,
+    pub history: Vec<IssueSyncMetadata>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -27,4 +52,6 @@ pub enum ProviderError {
     Http(String),
     #[error("response parsing failed: {0}")]
     Parse(String),
+    #[error("unsupported provider operation: {0}")]
+    Unsupported(String),
 }

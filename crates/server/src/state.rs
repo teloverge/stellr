@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use stellr_core::Model;
+use stellr_history::HistoryStore;
 use tokio::sync::{Mutex, Notify, watch};
 
 use crate::spaces::SpaceStore;
@@ -11,4 +12,5 @@ pub struct AppState {
     pub token: Option<String>,
     pub spaces: Mutex<SpaceStore>,
     pub refresh: Arc<Notify>,
+    pub history: HistoryStore,
 }

@@ -18,6 +18,8 @@ export interface Ticket {
   parentIssue: number | null
   frontier: boolean
   readyForAgent?: boolean
+  visible?: boolean
+  focusStatus?: TicketStatus
 }
 
 export interface Map {

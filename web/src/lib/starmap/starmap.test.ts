@@ -402,6 +402,35 @@ describe('the session overlay on the seam', () => {
   })
 })
 
+describe('temporal visibility on the renderer seam', () => {
+  it('hides future stars without moving the constellation or camera', () => {
+    const { sm } = mounted()
+    const current = fixture().map((ticket) => ({
+      ...ticket,
+      visible: true,
+      focusStatus: ticket.status,
+    }))
+    sm.setModel(current, {}, 1)
+    const positions = sm.positions()
+    const camera = sm.camera()
+
+    sm.setModel(
+      current.map((ticket) => ({
+        ...ticket,
+        status: 'open',
+        visible: ticket.num !== 2,
+      })),
+      {},
+      1,
+    )
+
+    expect(sm.positions()).toEqual(positions)
+    expect(sm.camera()).toEqual(camera)
+    expect(sm.screenOf(1)).not.toBeNull()
+    expect(sm.screenOf(2)).toBeNull()
+  })
+})
+
 // One frame against a recording stub context. The canvas *feel* can only be
 // judged by eye (starmap-design.md, Open risk), but the draw path for every
 // session state should at least run, and the one thing the overlay writes as

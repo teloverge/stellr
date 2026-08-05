@@ -5,9 +5,12 @@
   import Sidebar from './lib/Sidebar.svelte'
   import StatePanel from './lib/StatePanel.svelte'
   import StarMap from './lib/StarMap.svelte'
+  import TemporalTimeline from './lib/TemporalTimeline.svelte'
   import { addSpace, removeSpace } from './lib/api'
   import { Control, pageIssue, takePageToken } from './lib/control.svelte'
   import type { Model } from './lib/model'
+  import { fetchHistory } from './lib/history-api'
+  import { projectTemporalSpace, type HistoryEvent } from './lib/history'
   import { Route } from './lib/route.svelte'
   import { ThemeController } from './lib/theme.svelte'
   import { decideDock, type Dock } from './lib/starmap/dock'
@@ -71,6 +74,15 @@
   )
   const activeSpace = $derived(resolvedRoute.space)
   const activeStar = $derived(resolvedRoute.star)
+  let historyEvents = $state.raw<HistoryEvent[]>([])
+  let historyPlayhead = $state<number | null>(null)
+  let historySpaceId = $state<string | null>(null)
+  let requestedHistoryKey: string | null = null
+  const temporalSpace = $derived(
+    activeSpace === null
+      ? null
+      : projectTemporalSpace(activeSpace, historyEvents, historyPlayhead),
+  )
   let workspace: HTMLElement
   let dock = $state<Dock>('right')
   let pendingRemovals = $state.raw<Record<string, RemovalIntent>>({})
@@ -83,6 +95,29 @@
     control.model === null ||
       (nativeRoutePersistence && control.revision === 1 && spaces.length === 0 && route.space !== null),
   )
+
+  $effect(() => {
+    const space = activeSpace
+    if (historySpaceId !== space?.id) {
+      historySpaceId = space?.id ?? null
+      historyEvents = []
+      historyPlayhead = null
+      requestedHistoryKey = null
+    }
+    const summary = space?.history
+    if (space === null || summary?.state !== 'complete') return
+    const key = `${space.id}:${summary.revision}`
+    if (requestedHistoryKey === key) return
+    requestedHistoryKey = key
+    void fetchHistory(space.id)
+      .then((response) => {
+        if (historySpaceId !== space.id) return
+        historyEvents = response.events
+      })
+      .catch(() => {
+        if (requestedHistoryKey === key) requestedHistoryKey = null
+      })
+  })
 
   async function pollNativeRoute(): Promise<void> {
     if (nativeRouteBusy) return
@@ -343,13 +378,22 @@
           title="Opening observatory"
           description="Loading cached spaces and the latest GitHub issue state."
         />
-      {:else if activeSpace}
+      {:else if activeSpace && temporalSpace}
         <StarMap
-          space={activeSpace}
+          space={temporalSpace}
           {currentIssue}
           selectedIssue={activeStar?.number ?? null}
           select={(issueNumber) => route.go(activeSpace.id, issueNumber)}
+          bottomInset={activeSpace.history === undefined ? 16 : 88}
         />
+        {#if activeSpace.history !== undefined}
+          <TemporalTimeline
+            summary={activeSpace.history}
+            events={historyEvents}
+            playhead={historyPlayhead}
+            change={(playhead) => (historyPlayhead = playhead)}
+          />
+        {/if}
       {:else}
         <StatePanel
           kind="empty"
@@ -450,6 +494,7 @@
   }
 
   .map-region {
+    position: relative;
     grid-area: map;
   }
 

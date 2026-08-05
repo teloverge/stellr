@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a durable local SQLite issue-creation ledger, authenticated history
+  deltas, and a bottom timeline that scrubs historical issue visibility without
+  moving the constellation or querying GitHub during scrubbing.
 - Fixed installed desktop startup so a no-argument launch opens the existing
   empty repository-selection shell instead of treating the installation
   directory as a Git repository.

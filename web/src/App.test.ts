@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 import App from './App.svelte'
-import type { Model, SpaceModel, Star } from './lib/model'
+import type { HistorySummary, Model, SpaceModel, Star } from './lib/model'
 import { StarMap as Renderer } from './lib/starmap/starmap'
 
 class FakeWebSocket {
@@ -110,6 +110,17 @@ const lifecycleModel: Model = {
   spaces: [space('first', 11), space('middle', 22), space('last', 33)],
 }
 
+const completeHistory: HistorySummary = {
+  state: 'complete',
+  completed_issues: 2,
+  total_issues: 2,
+  earliest_event_at: 100,
+  verified_through: 200,
+  revision: 2,
+  diagnostic: null,
+  resume_at: null,
+}
+
 function mountApp(): { target: HTMLElement; socket: FakeWebSocket; component: object } {
   const target = document.createElement('div')
   document.body.appendChild(target)
@@ -131,6 +142,77 @@ async function settle(): Promise<void> {
 }
 
 describe('App issue routing', () => {
+  it('loads complete history once and scrubs renderer visibility without another request', async () => {
+    const fetchRequest = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          summary: completeHistory,
+          events: [
+            {
+              sequence: 1,
+              repository_id: 'R_first',
+              issue_id: 'I_11',
+              issue_number: 11,
+              provider_event_id: 'I_11:issue_created',
+              occurred_at: 100,
+              kind: 'issue_created',
+              milestone: null,
+            },
+            {
+              sequence: 2,
+              repository_id: 'R_first',
+              issue_id: 'I_12',
+              issue_number: 12,
+              provider_event_id: 'I_12:issue_created',
+              occurred_at: 200,
+              kind: 'issue_created',
+              milestone: null,
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchRequest)
+    const setModel = vi.spyOn(Renderer.prototype, 'setModel')
+    const { target, socket } = mountApp()
+    socket.emitModel({
+      spaces: [
+        {
+          ...space('first', 11),
+          stars: [issue(11), issue(12)],
+          history: completeHistory,
+        },
+      ],
+    })
+    await settle()
+    await settle()
+
+    expect(fetchRequest).toHaveBeenCalledTimes(1)
+    expect(fetchRequest).toHaveBeenCalledWith(
+      '/api/spaces/first/history',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+    const slider = target.querySelector<HTMLInputElement>('input[type="range"]')!
+    expect(slider).not.toBeNull()
+
+    slider.value = '100'
+    slider.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+    slider.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+
+    expect(fetchRequest).toHaveBeenCalledTimes(1)
+    expect(setModel).toHaveBeenLastCalledWith(
+      [
+        expect.objectContaining({ num: 11, status: 'open', visible: true }),
+        expect.objectContaining({ num: 12, status: 'open', visible: false }),
+      ],
+      {},
+      null,
+    )
+  })
+
   it('distinguishes runtime loading from an authoritative empty model', () => {
     const { target, socket } = mountApp()
 
