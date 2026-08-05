@@ -98,5 +98,6 @@ pub struct HistoryPageRequest {
 pub struct HistoryPage {
     pub events: Vec<HistoryEvent>,
     pub next_cursor: Option<String>,
+    pub resume_cursor: Option<String>,
     pub complete: bool,
 }

@@ -95,6 +95,17 @@ describe('TemporalTimeline creation scrubber', () => {
     expect(target.textContent).toContain('Building history · 3/10 issues')
   })
 
+  it('keeps verified local history usable while a delta catch-up is building', () => {
+    const target = render({
+      summary: { ...complete, state: 'building', completed_issues: 1, total_issues: 2 },
+      events,
+      playhead: 125,
+    })
+
+    expect(target.querySelector('input[type="range"]')).toHaveProperty('disabled', false)
+    expect(target.textContent).toContain('Building history · 1/2 issues')
+  })
+
   it('reports an empty complete ledger without enabling a slider', () => {
     const target = render({
       summary: { ...complete, earliest_event_at: null, revision: 0 },
@@ -201,5 +212,20 @@ describe('TemporalTimeline creation scrubber', () => {
     play.click()
     flushSync()
     expect(play.textContent).toContain('Play')
+  })
+
+  it('offers new activity without moving a historical playhead', () => {
+    const returnToNow = vi.fn()
+    const target = render({
+      summary: { ...complete, revision: 6 },
+      events,
+      playhead: 125,
+      newActivity: true,
+      returnToNow,
+    })
+
+    expect(target.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe('125')
+    target.querySelector<HTMLButtonElement>('.new-activity')!.click()
+    expect(returnToNow).toHaveBeenCalledOnce()
   })
 })

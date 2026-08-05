@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -14,7 +14,7 @@ use stellr_core::{
     RepoRef, SpaceModel,
 };
 use stellr_github::cache::{Cache, Snapshot};
-use stellr_history::{HistoryStore, RepositorySeed};
+use stellr_history::{HistoryStore, PageCheckpoint, RepositorySeed};
 use stellr_server::{
     poll::spawn_poller,
     spaces::{SpaceEntry, SpaceStore},
@@ -155,6 +155,96 @@ impl Provider for StubProvider {
     }
 }
 
+struct DeltaSnapshotProvider {
+    snapshots: AtomicUsize,
+    history_requests: Mutex<Vec<HistoryPageRequest>>,
+}
+
+impl DeltaSnapshotProvider {
+    fn new() -> Self {
+        Self {
+            snapshots: AtomicUsize::new(0),
+            history_requests: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for DeltaSnapshotProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+        unreachable!("the poller should consume the richer provider snapshot")
+    }
+
+    async fn fetch_snapshot(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        let snapshot = self.snapshots.fetch_add(1, Ordering::SeqCst);
+        let updated_at = if snapshot >= 3 { 500 } else { 400 };
+        Ok(ProviderSnapshot {
+            repository_id: Some("R_repo".into()),
+            issues: vec![RawIssue {
+                number: 83,
+                parent_issue: None,
+                title: "Delta history".into(),
+                body: String::new(),
+                state: IssueState::Open,
+                assignees: vec![],
+                milestone: None,
+                labels: vec![],
+                blocked_by: vec![],
+                url: "https://github.com/o/r/issues/83".into(),
+            }],
+            history: vec![IssueSyncMetadata {
+                issue_id: "I_83".into(),
+                number: 83,
+                created_at: 100,
+                updated_at,
+                milestone: None,
+            }],
+        })
+    }
+
+    async fn fetch_history_page(
+        &self,
+        _repo: &RepoRef,
+        request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        self.history_requests.lock().unwrap().push(request.clone());
+        let events = if request.cursor.as_deref() == Some("CUR_END") {
+            vec![
+                HistoryEvent {
+                    sequence: 0,
+                    repository_id: "R_repo".into(),
+                    issue_id: "I_83".into(),
+                    issue_number: 83,
+                    provider_event_id: "E_close".into(),
+                    occurred_at: request.cutoff,
+                    kind: HistoryEventKind::IssueClosed,
+                },
+                HistoryEvent {
+                    sequence: 0,
+                    repository_id: "R_repo".into(),
+                    issue_id: "I_83".into(),
+                    issue_number: 83,
+                    provider_event_id: "E_reopen".into(),
+                    occurred_at: request.cutoff,
+                    kind: HistoryEventKind::IssueReopened,
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(HistoryPage {
+            events,
+            next_cursor: None,
+            resume_cursor: Some(if request.cursor.is_some() {
+                "CUR_NEW".into()
+            } else {
+                "CUR_END".into()
+            }),
+            complete: true,
+        })
+    }
+}
+
 #[tokio::test]
 async fn history_endpoint_is_authenticated_scoped_and_sequence_incremental() {
     let state = state(Some("session-token"));
@@ -244,6 +334,96 @@ async fn history_endpoint_is_authenticated_scoped_and_sequence_incremental() {
     assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn history_endpoint_serves_new_deltas_while_catch_up_verification_is_building() {
+    let state = state(None);
+    state
+        .spaces
+        .lock()
+        .await
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let metadata = |updated_at| IssueSyncMetadata {
+        issue_id: "I_1".into(),
+        number: 1,
+        created_at: 100,
+        updated_at,
+        milestone: None,
+    };
+    let seed = |verified_through, updated_at| RepositorySeed {
+        space_id: "o-r".into(),
+        provider_repository_id: "R_repo".into(),
+        verified_through,
+        timeline_required: true,
+        issues: vec![metadata(updated_at)],
+    };
+    state
+        .history
+        .initialize_repository(&seed(500, 400))
+        .unwrap();
+    state
+        .history
+        .checkpoint_page(&PageCheckpoint {
+            space_id: "o-r".into(),
+            issue_id: "I_1".into(),
+            events: vec![],
+            next_cursor: None,
+            resume_cursor: Some("CUR_END".into()),
+            complete: true,
+        })
+        .unwrap();
+    state
+        .history
+        .initialize_repository(&seed(500, 400))
+        .unwrap();
+    let first_sequence = state.history.summary("o-r").unwrap().unwrap().revision;
+
+    state
+        .history
+        .initialize_repository(&seed(700, 500))
+        .unwrap();
+    state
+        .history
+        .checkpoint_page(&PageCheckpoint {
+            space_id: "o-r".into(),
+            issue_id: "I_1".into(),
+            events: vec![HistoryEvent {
+                sequence: 0,
+                repository_id: "R_repo".into(),
+                issue_id: "I_1".into(),
+                issue_number: 1,
+                provider_event_id: "E_close".into(),
+                occurred_at: 600,
+                kind: HistoryEventKind::IssueClosed,
+            }],
+            next_cursor: None,
+            resume_cursor: Some("CUR_NEW".into()),
+            complete: true,
+        })
+        .unwrap();
+
+    let base = serve(state).await;
+    let delta: serde_json::Value = reqwest::get(format!(
+        "{base}/api/spaces/o-r/history?after={first_sequence}"
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+
+    assert_eq!(delta["summary"]["state"], "building");
+    assert_eq!(delta["summary"]["verified_through"], 500);
+    assert_eq!(delta["events"].as_array().unwrap().len(), 1);
+    assert_eq!(delta["events"][0]["provider_event_id"], "E_close");
+}
+
 struct HistorySnapshotProvider;
 
 #[async_trait::async_trait]
@@ -280,17 +460,62 @@ impl Provider for HistorySnapshotProvider {
     async fn fetch_history_page(
         &self,
         _repo: &RepoRef,
-        _request: &HistoryPageRequest,
+        request: &HistoryPageRequest,
     ) -> Result<HistoryPage, ProviderError> {
         Ok(HistoryPage {
             events: vec![],
             next_cursor: None,
+            resume_cursor: request.cursor.clone(),
             complete: true,
         })
     }
 }
 
 struct LifecycleSnapshotProvider(AtomicUsize);
+
+struct RateLimitedSnapshotProvider;
+
+#[async_trait::async_trait]
+impl Provider for RateLimitedSnapshotProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+        unreachable!("the poller should consume the richer provider snapshot")
+    }
+
+    async fn fetch_snapshot(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        Ok(ProviderSnapshot {
+            repository_id: Some("R_repo".into()),
+            issues: vec![RawIssue {
+                number: 83,
+                parent_issue: None,
+                title: "Rate limited history".into(),
+                body: String::new(),
+                state: IssueState::Open,
+                assignees: vec![],
+                milestone: None,
+                labels: vec![],
+                blocked_by: vec![],
+                url: "https://github.com/o/r/issues/83".into(),
+            }],
+            history: vec![IssueSyncMetadata {
+                issue_id: "I_83".into(),
+                number: 83,
+                created_at: 100,
+                updated_at: 400,
+                milestone: None,
+            }],
+        })
+    }
+
+    async fn fetch_history_page(
+        &self,
+        _repo: &RepoRef,
+        _request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        Err(ProviderError::RateLimited {
+            reset_epoch: Some(2_000_000_000),
+        })
+    }
+}
 
 #[async_trait::async_trait]
 impl Provider for LifecycleSnapshotProvider {
@@ -354,6 +579,7 @@ impl Provider for LifecycleSnapshotProvider {
                 },
             ],
             next_cursor: None,
+            resume_cursor: Some("CUR_END".into()),
             complete: true,
         })
     }
@@ -388,12 +614,20 @@ async fn successful_current_sync_seeds_creation_history_and_publishes_its_summar
         Cache::new(directory.path().join("cache")),
         Duration::from_secs(60),
     );
-    tokio::time::timeout(Duration::from_secs(2), receiver.changed())
-        .await
-        .expect("the startup poll should publish")
-        .expect("the model hub should stay open");
-
-    let model = receiver.borrow().clone();
+    let model = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            receiver
+                .changed()
+                .await
+                .expect("the model hub should stay open");
+            let model = receiver.borrow().clone();
+            if model.spaces[0].history.state == HistoryImportState::Complete {
+                break model;
+            }
+        }
+    })
+    .await
+    .expect("the startup import and catch-up verification should publish");
     assert_eq!(model.spaces[0].stars[0].number, 78);
     assert_eq!(model.spaces[0].history.state, HistoryImportState::Complete);
     assert_eq!(model.spaces[0].history.completed_issues, 1);
@@ -432,7 +666,7 @@ async fn lifecycle_import_publishes_building_then_complete_without_blocking_curr
         Cache::new(directory.path().join("cache")),
         Duration::from_secs(60),
     );
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             receiver.changed().await.unwrap();
             let model = receiver.borrow().clone();
@@ -447,6 +681,152 @@ async fn lifecycle_import_publishes_building_then_complete_without_blocking_curr
     .expect("the lifecycle import should complete");
 
     assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        history
+            .events_after("o-r", 0)
+            .unwrap()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            HistoryEventKind::IssueCreated { milestone: None },
+            HistoryEventKind::IssueClosed,
+            HistoryEventKind::IssueReopened,
+        ]
+    );
+
+    poller.abort();
+}
+
+#[tokio::test]
+async fn history_rate_limit_publishes_reset_evidence_without_discarding_pending_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open(directory.path().join("history.sqlite3")).unwrap();
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+        history: history.clone(),
+    });
+    let poller = spawn_poller(
+        state,
+        Arc::new(RateLimitedSnapshotProvider),
+        Cache::new(directory.path().join("cache")),
+        Duration::from_secs(60),
+    );
+
+    let summary = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            receiver.changed().await.unwrap();
+            let summary = receiver.borrow().spaces[0].history.clone();
+            if summary.state == HistoryImportState::RateLimited {
+                break summary;
+            }
+        }
+    })
+    .await
+    .expect("rate limit evidence should be published");
+
+    assert_eq!(summary.resume_at, Some(2_000_000_000));
+    assert_eq!(
+        summary.diagnostic.as_deref(),
+        Some("GitHub rate limit exceeded")
+    );
+    assert!(history.pending_issue("o-r").unwrap().is_some());
+    poller.abort();
+}
+
+#[tokio::test]
+async fn unchanged_polls_make_zero_history_requests_and_changed_issues_resume_from_cursor() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open(directory.path().join("history.sqlite3")).unwrap();
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+        history: history.clone(),
+    });
+    let provider = Arc::new(DeltaSnapshotProvider::new());
+    let poller = spawn_poller(
+        state.clone(),
+        provider.clone(),
+        Cache::new(directory.path().join("cache")),
+        Duration::from_secs(60),
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if provider.snapshots.load(Ordering::SeqCst) >= 2
+                && history
+                    .summary("o-r")
+                    .unwrap()
+                    .is_some_and(|summary| summary.state == HistoryImportState::Complete)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("initial import should receive catch-up verification");
+    assert_eq!(provider.history_requests.lock().unwrap().len(), 1);
+
+    state.refresh.notify_one();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while provider.snapshots.load(Ordering::SeqCst) < 3 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("unchanged current snapshot should complete");
+    assert_eq!(provider.history_requests.lock().unwrap().len(), 1);
+
+    state.refresh.notify_one();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if provider.snapshots.load(Ordering::SeqCst) >= 5
+                && provider.history_requests.lock().unwrap().len() == 2
+                && history
+                    .summary("o-r")
+                    .unwrap()
+                    .is_some_and(|summary| summary.state == HistoryImportState::Complete)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("changed issue should import once and receive catch-up verification");
+
+    let requests = provider.history_requests.lock().unwrap();
+    assert_eq!(requests[0].cursor, None);
+    assert_eq!(requests[1].cursor.as_deref(), Some("CUR_END"));
+    drop(requests);
     assert_eq!(
         history
             .events_after("o-r", 0)

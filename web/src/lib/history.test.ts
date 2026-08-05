@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { projectTemporalSpace, type HistoryEvent } from './history'
+import {
+  latestHistorySequence,
+  mergeHistoryEvents,
+  projectTemporalSpace,
+  type HistoryEvent,
+} from './history'
 import type { SpaceModel } from './model'
 
 const space: SpaceModel = {
@@ -232,5 +237,41 @@ describe('temporal milestone projection', () => {
     ]
 
     expect(projectTemporalSpace(space, tied, 125).stars[0].milestone).toBe('Beta')
+  })
+})
+
+describe('history delta merge', () => {
+  it('deduplicates by ledger sequence or provider identity without losing stable order', () => {
+    const delta: HistoryEvent[] = [
+      {
+        sequence: 3,
+        repository_id: 'R_repo',
+        issue_id: 'I_1',
+        issue_number: 1,
+        provider_event_id: 'E_close',
+        occurred_at: 150,
+        kind: 'issue_closed',
+      },
+      { ...events[1], sequence: 99 },
+      {
+        sequence: 2,
+        repository_id: 'R_repo',
+        issue_id: 'I_duplicate_sequence',
+        issue_number: 99,
+        provider_event_id: 'E_duplicate_sequence',
+        occurred_at: 125,
+        kind: 'issue_closed',
+      },
+    ]
+
+    const merged = mergeHistoryEvents(events, delta)
+
+    expect(merged.map((event) => event.provider_event_id)).toEqual([
+      'I_1:issue_created',
+      'E_close',
+      'I_2:issue_created',
+    ])
+    expect(latestHistorySequence(merged)).toBe(3)
+    expect(mergeHistoryEvents(merged, delta)).toEqual(merged)
   })
 })

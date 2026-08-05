@@ -36,6 +36,31 @@ export interface TemporalSpace extends Omit<SpaceModel, 'stars'> {
   stars: TemporalStar[]
 }
 
+export function mergeHistoryEvents(
+  current: HistoryEvent[],
+  incoming: HistoryEvent[],
+): HistoryEvent[] {
+  const sequences = new Set<number>()
+  const providerEvents = new Set<string>()
+  const merged: HistoryEvent[] = []
+  for (const event of [...current, ...incoming]) {
+    const providerKey = `${event.repository_id}\u0000${event.provider_event_id}`
+    if (sequences.has(event.sequence) || providerEvents.has(providerKey)) continue
+    sequences.add(event.sequence)
+    providerEvents.add(providerKey)
+    merged.push(event)
+  }
+  return merged.toSorted(
+    (left, right) =>
+      left.occurred_at - right.occurred_at ||
+      left.provider_event_id.localeCompare(right.provider_event_id),
+  )
+}
+
+export function latestHistorySequence(events: HistoryEvent[]): number {
+  return events.reduce((latest, event) => Math.max(latest, event.sequence), 0)
+}
+
 export function projectTemporalSpace(
   space: SpaceModel,
   events: HistoryEvent[],

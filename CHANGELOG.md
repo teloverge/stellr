@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added delta-only background history synchronization using ordinary snapshot
+  metadata, resumable per-issue cursors, catch-up verification, rate-limit reset
+  evidence, idempotent client merging, and a pinned-past New activity action.
 - Added fixed-duration full-history playback with proportional clustered event
   ticks, accessible play/pause and speed controls, slow-frame-safe event
   feedback, and reduced-motion captions that preserve map position and selection.

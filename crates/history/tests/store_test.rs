@@ -143,6 +143,7 @@ fn checkpoints_lifecycle_pages_atomically_and_resumes_without_duplicates() {
             ),
         ],
         next_cursor: Some("CUR2".into()),
+        resume_cursor: Some("CUR2".into()),
         complete: false,
     };
 
@@ -162,17 +163,20 @@ fn checkpoints_lifecycle_pages_atomically_and_resumes_without_duplicates() {
         Some("CUR2")
     );
 
-    let complete = store
+    let imported = store
         .checkpoint_page(&PageCheckpoint {
             space_id: "octocat-hello".into(),
             issue_id: "I_1".into(),
             events: vec![],
             next_cursor: None,
+            resume_cursor: Some("CUR_END".into()),
             complete: true,
         })
         .unwrap();
+    let complete = store.initialize_repository(&seed).unwrap();
     let events = store.events_after("octocat-hello", 0).unwrap();
 
+    assert_eq!(imported.state, HistoryImportState::Building);
     assert_eq!(complete.state, HistoryImportState::Complete);
     assert_eq!(complete.completed_issues, 1);
     assert_eq!(complete.verified_through, Some(500));
@@ -193,6 +197,110 @@ fn checkpoints_lifecycle_pages_atomically_and_resumes_without_duplicates() {
                 title: "Alpha".into(),
             }),
         }
+    );
+}
+
+#[test]
+fn completed_ledgers_verify_once_then_request_only_new_or_changed_issues() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = HistoryStore::open(temp.path().join("history.sqlite3")).unwrap();
+    let seed = |verified_through, issues| RepositorySeed {
+        space_id: "octocat-hello".into(),
+        provider_repository_id: "R_repo".into(),
+        verified_through,
+        timeline_required: true,
+        issues,
+    };
+
+    store
+        .initialize_repository(&seed(500, vec![issue("I_1", 1, 100, 400, None)]))
+        .unwrap();
+    let imported = store
+        .checkpoint_page(&PageCheckpoint {
+            space_id: "octocat-hello".into(),
+            issue_id: "I_1".into(),
+            events: vec![],
+            next_cursor: None,
+            resume_cursor: Some("CUR_END".into()),
+            complete: true,
+        })
+        .unwrap();
+    assert_eq!(imported.state, HistoryImportState::Building);
+    assert!(store.pending_issue("octocat-hello").unwrap().is_none());
+
+    let verified = store
+        .initialize_repository(&seed(600, vec![issue("I_1", 1, 100, 400, None)]))
+        .unwrap();
+    assert_eq!(verified.state, HistoryImportState::Complete);
+    assert_eq!(verified.verified_through, Some(600));
+    assert!(store.pending_issue("octocat-hello").unwrap().is_none());
+
+    let unchanged = store
+        .initialize_repository(&seed(700, vec![issue("I_1", 1, 100, 400, None)]))
+        .unwrap();
+    assert_eq!(unchanged.state, HistoryImportState::Complete);
+    assert_eq!(unchanged.verified_through, Some(700));
+    assert!(store.pending_issue("octocat-hello").unwrap().is_none());
+
+    let changed = store
+        .initialize_repository(&seed(
+            800,
+            vec![
+                issue("I_1", 1, 100, 450, None),
+                issue("I_2", 2, 750, 750, None),
+            ],
+        ))
+        .unwrap();
+    assert_eq!(changed.state, HistoryImportState::Building);
+    let first = store.pending_issue("octocat-hello").unwrap().unwrap();
+    assert_eq!(first.issue_id, "I_1");
+    assert_eq!(first.cursor.as_deref(), Some("CUR_END"));
+    assert_eq!(first.cutoff, 800);
+
+    store
+        .checkpoint_page(&PageCheckpoint {
+            space_id: "octocat-hello".into(),
+            issue_id: "I_1".into(),
+            events: vec![],
+            next_cursor: None,
+            resume_cursor: Some("CUR_NEW".into()),
+            complete: true,
+        })
+        .unwrap();
+    let second = store.pending_issue("octocat-hello").unwrap().unwrap();
+    assert_eq!(second.issue_id, "I_2");
+    assert_eq!(second.cursor, None);
+}
+
+#[test]
+fn rate_limit_evidence_preserves_pending_work_and_resume_time() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = HistoryStore::open(temp.path().join("history.sqlite3")).unwrap();
+    store
+        .initialize_repository(&RepositorySeed {
+            space_id: "octocat-hello".into(),
+            provider_repository_id: "R_repo".into(),
+            verified_through: 500,
+            timeline_required: true,
+            issues: vec![issue("I_1", 1, 100, 400, None)],
+        })
+        .unwrap();
+
+    let limited = store.mark_rate_limited("octocat-hello", Some(900)).unwrap();
+
+    assert_eq!(limited.state, HistoryImportState::RateLimited);
+    assert_eq!(limited.resume_at, Some(900));
+    assert_eq!(
+        limited.diagnostic.as_deref(),
+        Some("GitHub rate limit exceeded")
+    );
+    assert_eq!(
+        store
+            .pending_issue("octocat-hello")
+            .unwrap()
+            .unwrap()
+            .issue_id,
+        "I_1"
     );
 }
 

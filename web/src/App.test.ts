@@ -228,6 +228,102 @@ describe('App issue routing', () => {
     expect(target.textContent).toContain('Detail for Issue 11')
   })
 
+  it('requests only later ledger sequences and keeps a past playhead pinned', async () => {
+    const initialEvents = [
+      {
+        sequence: 1,
+        repository_id: 'R_first',
+        issue_id: 'I_11',
+        issue_number: 11,
+        provider_event_id: 'I_11:issue_created',
+        occurred_at: 100,
+        kind: 'issue_created',
+        milestone: null,
+      },
+      {
+        sequence: 2,
+        repository_id: 'R_first',
+        issue_id: 'I_12',
+        issue_number: 12,
+        provider_event_id: 'I_12:issue_created',
+        occurred_at: 200,
+        kind: 'issue_created',
+        milestone: null,
+      },
+    ]
+    const fetchRequest = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ summary: completeHistory, events: initialEvents }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            summary: { ...completeHistory, revision: 3, verified_through: 300 },
+            events: [
+              {
+                sequence: 3,
+                repository_id: 'R_first',
+                issue_id: 'I_11',
+                issue_number: 11,
+                provider_event_id: 'E_close',
+                occurred_at: 250,
+                kind: 'issue_closed',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchRequest)
+    const { target, socket } = mountApp()
+    socket.emitModel({
+      spaces: [
+        {
+          ...space('first', 11),
+          stars: [issue(11), issue(12)],
+          history: completeHistory,
+        },
+      ],
+    })
+    await settle()
+    await settle()
+
+    const slider = target.querySelector<HTMLInputElement>('input[type="range"]')!
+    slider.value = '100'
+    slider.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+
+    socket.emitModel({
+      spaces: [
+        {
+          ...space('first', 11),
+          stars: [issue(11), issue(12)],
+          history: { ...completeHistory, revision: 3, verified_through: 300 },
+        },
+      ],
+    })
+    await settle()
+    await settle()
+
+    expect(fetchRequest).toHaveBeenNthCalledWith(
+      2,
+      '/api/spaces/first/history?after=2',
+      expect.objectContaining({ credentials: 'same-origin' }),
+    )
+    expect(slider.value).toBe('100')
+    const newActivity = target.querySelector<HTMLButtonElement>('.new-activity')!
+    expect(newActivity).not.toBeNull()
+    newActivity.click()
+    flushSync()
+    expect(target.querySelector('output')?.textContent).toBe('Now')
+    expect(target.querySelector('.new-activity')).toBeNull()
+    expect(fetchRequest).toHaveBeenCalledTimes(2)
+  })
+
   it('distinguishes runtime loading from an authoritative empty model', () => {
     const { target, socket } = mountApp()
 

@@ -8,7 +8,7 @@ use stellr_core::{
     HistoryEvent, HistoryEventKind, HistoryImportState, HistorySummary, IssueSyncMetadata,
 };
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySeed {
@@ -33,6 +33,7 @@ pub struct PageCheckpoint {
     pub issue_id: String,
     pub events: Vec<HistoryEvent>,
     pub next_cursor: Option<String>,
+    pub resume_cursor: Option<String>,
     pub complete: bool,
 }
 
@@ -73,32 +74,28 @@ impl HistoryStore {
             (left.created_at, HistoryEvent::creation_id(&left.issue_id))
                 .cmp(&(right.created_at, HistoryEvent::creation_id(&right.issue_id)))
         });
-        let total_issues = i64::try_from(issues.len())?;
-        let timeline_required = seed.timeline_required && total_issues > 0;
-        let import_state = if timeline_required {
-            "building"
-        } else {
-            "complete"
-        };
-        let completed_issues = if timeline_required { 0 } else { total_issues };
-        let verified_through = (!timeline_required).then_some(seed.verified_through);
+        let timeline_required = seed.timeline_required && !issues.is_empty();
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
 
         transaction.execute(
             "INSERT INTO repositories (
                  space_id, provider_repository_id, import_state, total_issues,
-                 completed_issues, verified_through, diagnostic, resume_at, cutoff
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7)
+                 completed_issues, verified_through, diagnostic, resume_at, cutoff,
+                 catch_up_required
+             ) VALUES (?1, ?2, ?3, 0, 0, ?4, NULL, NULL, ?5, ?6)
              ON CONFLICT(space_id) DO NOTHING",
             params![
                 seed.space_id,
                 seed.provider_repository_id,
-                import_state,
-                total_issues,
-                completed_issues,
-                verified_through,
-                seed.verified_through
+                if timeline_required {
+                    "building"
+                } else {
+                    "complete"
+                },
+                (!timeline_required).then_some(seed.verified_through),
+                seed.verified_through,
+                timeline_required,
             ],
         )?;
         let stored_repository_id: String = transaction.query_row(
@@ -112,6 +109,31 @@ impl HistoryStore {
             ));
         }
 
+        let (catch_up_required, pending_count): (bool, i64) = transaction.query_row(
+            "SELECT r.catch_up_required,
+                    SUM(CASE WHEN i.complete = 0 THEN 1 ELSE 0 END)
+             FROM repositories r
+             LEFT JOIN issues i ON i.space_id = r.space_id
+             WHERE r.space_id = ?1
+             GROUP BY r.space_id",
+            params![seed.space_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if catch_up_required && pending_count == 0 {
+            transaction.execute(
+                "UPDATE repositories SET catch_up_required = 0 WHERE space_id = ?1",
+                params![seed.space_id],
+            )?;
+        }
+
+        transaction.execute(
+            "UPDATE repositories
+             SET cutoff = ?2, diagnostic = NULL, resume_at = NULL
+             WHERE space_id = ?1",
+            params![seed.space_id, seed.verified_through],
+        )?;
+
+        let mut changed = false;
         for issue in issues {
             let issue_number = i64::try_from(issue.number)?;
             let (milestone_id, milestone_title) = issue
@@ -119,28 +141,59 @@ impl HistoryStore {
                 .as_ref()
                 .map(|milestone| (milestone.id.as_deref(), Some(milestone.title.as_str())))
                 .unwrap_or((None, None));
-            transaction.execute(
-                "INSERT INTO issues (
-                     space_id, provider_issue_id, issue_number, created_at, updated_at,
-                     milestone_id, milestone_title, cursor, complete
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8)
-                 ON CONFLICT(space_id, provider_issue_id) DO UPDATE SET
-                     issue_number = excluded.issue_number,
-                     created_at = excluded.created_at,
-                     updated_at = excluded.updated_at,
-                     milestone_id = excluded.milestone_id,
-                     milestone_title = excluded.milestone_title",
-                params![
-                    seed.space_id,
-                    issue.issue_id,
-                    issue_number,
-                    issue.created_at,
-                    issue.updated_at,
-                    milestone_id,
-                    milestone_title,
-                    !timeline_required
-                ],
-            )?;
+            let stored_updated_at = transaction
+                .query_row(
+                    "SELECT updated_at FROM issues
+                     WHERE space_id = ?1 AND provider_issue_id = ?2",
+                    params![seed.space_id, issue.issue_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            match stored_updated_at {
+                None => {
+                    changed |= timeline_required;
+                    transaction.execute(
+                        "INSERT INTO issues (
+                             space_id, provider_issue_id, issue_number, created_at, updated_at,
+                             milestone_id, milestone_title, cursor, complete
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8)",
+                        params![
+                            seed.space_id,
+                            issue.issue_id,
+                            issue_number,
+                            issue.created_at,
+                            issue.updated_at,
+                            milestone_id,
+                            milestone_title,
+                            !timeline_required
+                        ],
+                    )?;
+                }
+                Some(stored_updated_at) => {
+                    let issue_changed = timeline_required && issue.updated_at > stored_updated_at;
+                    changed |= issue_changed;
+                    transaction.execute(
+                        "UPDATE issues
+                         SET issue_number = ?3,
+                             created_at = ?4,
+                             updated_at = MAX(updated_at, ?5),
+                             milestone_id = ?6,
+                             milestone_title = ?7,
+                             complete = CASE WHEN ?8 THEN 0 ELSE complete END
+                         WHERE space_id = ?1 AND provider_issue_id = ?2",
+                        params![
+                            seed.space_id,
+                            issue.issue_id,
+                            issue_number,
+                            issue.created_at,
+                            issue.updated_at,
+                            milestone_id,
+                            milestone_title,
+                            issue_changed
+                        ],
+                    )?;
+                }
+            }
 
             let kind = HistoryEventKind::IssueCreated {
                 milestone: issue.milestone,
@@ -160,6 +213,39 @@ impl HistoryStore {
                 ],
             )?;
         }
+
+        if changed {
+            transaction.execute(
+                "UPDATE repositories SET catch_up_required = 1 WHERE space_id = ?1",
+                params![seed.space_id],
+            )?;
+        }
+        let (completed, total, catch_up_required): (i64, i64, bool) = transaction.query_row(
+            "SELECT SUM(CASE WHEN i.complete = 1 THEN 1 ELSE 0 END),
+                        COUNT(i.provider_issue_id), r.catch_up_required
+                 FROM repositories r
+                 LEFT JOIN issues i ON i.space_id = r.space_id
+                 WHERE r.space_id = ?1
+                 GROUP BY r.space_id",
+            params![seed.space_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let complete = completed == total && !catch_up_required;
+        transaction.execute(
+            "UPDATE repositories
+             SET import_state = ?2,
+                 total_issues = ?3,
+                 completed_issues = ?4,
+                 verified_through = CASE WHEN ?5 THEN cutoff ELSE verified_through END
+             WHERE space_id = ?1",
+            params![
+                seed.space_id,
+                if complete { "complete" } else { "building" },
+                total,
+                completed,
+                complete
+            ],
+        )?;
 
         transaction.commit()?;
         drop(connection);
@@ -326,6 +412,11 @@ impl HistoryStore {
             )?;
         }
 
+        let stored_cursor = if checkpoint.complete {
+            checkpoint.resume_cursor.as_ref()
+        } else {
+            checkpoint.next_cursor.as_ref()
+        };
         transaction.execute(
             "UPDATE issues
              SET cursor = ?3, complete = ?4
@@ -333,22 +424,25 @@ impl HistoryStore {
             params![
                 checkpoint.space_id,
                 checkpoint.issue_id,
-                checkpoint.next_cursor,
+                stored_cursor,
                 checkpoint.complete
             ],
         )?;
-        let (completed, total): (i64, i64) = transaction.query_row(
-            "SELECT SUM(CASE WHEN complete = 1 THEN 1 ELSE 0 END), COUNT(*)
-             FROM issues WHERE space_id = ?1",
+        let (completed, total, catch_up_required): (i64, i64, bool) = transaction.query_row(
+            "SELECT SUM(CASE WHEN i.complete = 1 THEN 1 ELSE 0 END), COUNT(*),
+                    r.catch_up_required
+             FROM repositories r
+             JOIN issues i ON i.space_id = r.space_id
+             WHERE r.space_id = ?1",
             params![checkpoint.space_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        let repository_complete = completed == total;
+        let repository_complete = completed == total && !catch_up_required;
         transaction.execute(
             "UPDATE repositories
              SET import_state = ?2,
                  completed_issues = ?3,
-                 verified_through = ?4,
+                 verified_through = CASE WHEN ?4 IS NOT NULL THEN ?4 ELSE verified_through END,
                  diagnostic = NULL,
                  resume_at = NULL
              WHERE space_id = ?1",
@@ -390,6 +484,31 @@ impl HistoryStore {
         drop(connection);
         self.summary(space_id)?.ok_or_else(|| {
             StoreError::Invalid("failed repository disappeared from the ledger".into())
+        })
+    }
+
+    pub fn mark_rate_limited(
+        &self,
+        space_id: &str,
+        resume_at: Option<i64>,
+    ) -> Result<HistorySummary, StoreError> {
+        let connection = self.connection()?;
+        let changed = connection.execute(
+            "UPDATE repositories
+             SET import_state = 'rate_limited',
+                 diagnostic = 'GitHub rate limit exceeded',
+                 resume_at = ?2
+             WHERE space_id = ?1",
+            params![space_id, resume_at],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::Invalid(
+                "cannot rate-limit unknown history repository".into(),
+            ));
+        }
+        drop(connection);
+        self.summary(space_id)?.ok_or_else(|| {
+            StoreError::Invalid("rate-limited repository disappeared from the ledger".into())
         })
     }
 
@@ -485,6 +604,19 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
                  verified_through = CASE WHEN total_issues = 0 THEN cutoff ELSE NULL END,
                  diagnostic = NULL,
                  resume_at = NULL;",
+        )?;
+        transaction.pragma_update(None, "user_version", 2)?;
+        transaction.commit()?;
+        version = 2;
+    }
+    if version == 2 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "ALTER TABLE repositories
+                 ADD COLUMN catch_up_required INTEGER NOT NULL DEFAULT 0;
+             UPDATE repositories
+             SET catch_up_required = CASE WHEN total_issues > 0 THEN 1 ELSE 0 END,
+                 import_state = CASE WHEN total_issues > 0 THEN 'building' ELSE import_state END;",
         )?;
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;

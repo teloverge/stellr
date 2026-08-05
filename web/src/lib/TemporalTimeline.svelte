@@ -18,12 +18,16 @@
     playhead = null,
     change = () => {},
     reached = () => {},
+    newActivity = false,
+    returnToNow = () => {},
   }: {
     summary: HistorySummary
     events: HistoryEvent[]
     playhead?: number | null
     change?: (playhead: number | null) => void
     reached?: (events: HistoryEvent[]) => void
+    newActivity?: boolean
+    returnToNow?: () => void
   } = $props()
 
   let speed = $state<PlaybackSpeed>(1)
@@ -35,8 +39,7 @@
   let frameHandle = 0
 
   const hasHistory = $derived(
-    summary.state === 'complete' &&
-      summary.earliest_event_at !== null &&
+    summary.earliest_event_at !== null &&
       summary.verified_through !== null &&
       events.length > 0,
   )
@@ -164,6 +167,10 @@
     <span class="timeline-state" role="status">{summary.diagnostic ?? 'History unavailable'}</span>
   {/if}
 
+  {#if newActivity && playhead !== null}
+    <button class="new-activity" type="button" onclick={returnToNow}>New activity</button>
+  {/if}
+
   <output data-control="date" for="issue-history-playhead">{label}</output>
   <div class="timeline-track" data-control="track" bind:this={track}>
     <input
@@ -252,6 +259,18 @@
     grid-column: 1 / -1;
     font-size: 0.8rem;
     color: var(--muted-foreground);
+  }
+
+  .new-activity {
+    grid-column: 1 / -1;
+    justify-self: center;
+    min-height: 2.25rem;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--ring);
+    border-radius: 999px;
+    color: inherit;
+    background: var(--surface-raised);
+    cursor: pointer;
   }
 
   output {

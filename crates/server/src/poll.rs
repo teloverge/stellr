@@ -2,7 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
 use stellr_core::{
-    HistoryImportState, HistoryPageRequest, HistorySummary, Model, Provider, SpaceModel, derive,
+    HistoryImportState, HistoryPageRequest, HistorySummary, Model, Provider, ProviderError,
+    SpaceModel, derive,
 };
 use stellr_github::cache::{Cache, Snapshot};
 use stellr_history::RepositorySeed;
@@ -106,7 +107,25 @@ async fn sync_spaces(state: &AppState, provider: &(dyn Provider + Send + Sync), 
     state.hub.send_replace(Model { spaces });
     for entry in &entries {
         import_pending_history(state, provider, entry).await;
+        if needs_catch_up(&state.history, &entry.id) {
+            let space = sync_space(entry, provider, cache, &state.history).await;
+            publish_space(state, space);
+            import_pending_history(state, provider, entry).await;
+        }
     }
+}
+
+fn needs_catch_up(history: &stellr_history::HistoryStore, space_id: &str) -> bool {
+    history
+        .summary(space_id)
+        .ok()
+        .flatten()
+        .is_some_and(|summary| {
+            summary.state == HistoryImportState::Building
+                && summary.total_issues > 0
+                && summary.completed_issues == summary.total_issues
+        })
+        && history.pending_issue(space_id).ok().flatten().is_none()
 }
 
 async fn import_pending_history(
@@ -114,6 +133,20 @@ async fn import_pending_history(
     provider: &(dyn Provider + Send + Sync),
     entry: &SpaceEntry,
 ) {
+    if state
+        .history
+        .summary(&entry.id)
+        .ok()
+        .flatten()
+        .is_some_and(|summary| {
+            summary.state == HistoryImportState::RateLimited
+                && summary
+                    .resume_at
+                    .is_none_or(|resume_at| resume_at > Utc::now().timestamp())
+        })
+    {
+        return;
+    }
     loop {
         let pending = match state.history.pending_issue(&entry.id) {
             Ok(Some(pending)) => pending,
@@ -132,10 +165,16 @@ async fn import_pending_history(
         let page = match provider.fetch_history_page(&entry.repo, &request).await {
             Ok(page) => page,
             Err(error) => {
-                let summary = state
-                    .history
-                    .mark_failed(&entry.id, error.to_string())
-                    .unwrap_or_else(|store_error| failed_history(store_error.to_string()));
+                let summary = match error {
+                    ProviderError::RateLimited { reset_epoch } => state
+                        .history
+                        .mark_rate_limited(&entry.id, reset_epoch)
+                        .unwrap_or_else(|store_error| failed_history(store_error.to_string())),
+                    other => state
+                        .history
+                        .mark_failed(&entry.id, other.to_string())
+                        .unwrap_or_else(|store_error| failed_history(store_error.to_string())),
+                };
                 publish_history_summary(state, &entry.id, summary);
                 return;
             }
@@ -147,6 +186,7 @@ async fn import_pending_history(
                 issue_id: pending.issue_id,
                 events: page.events,
                 next_cursor: page.next_cursor,
+                resume_cursor: page.resume_cursor,
                 complete: page.complete,
             }) {
             Ok(summary) => summary,
@@ -162,6 +202,20 @@ async fn import_pending_history(
         publish_history_summary(state, &entry.id, summary);
         tokio::task::yield_now().await;
     }
+}
+
+fn publish_space(state: &AppState, space: SpaceModel) {
+    let mut model = state.hub.borrow().clone();
+    if let Some(existing) = model
+        .spaces
+        .iter_mut()
+        .find(|existing| existing.id == space.id)
+    {
+        *existing = space;
+    } else {
+        model.spaces.push(space);
+    }
+    state.hub.send_replace(model);
 }
 
 fn publish_history_summary(state: &AppState, space_id: &str, summary: HistorySummary) {
@@ -205,10 +259,20 @@ async fn sync_space(
             let (issues, synced_at) = snapshot
                 .map(|snapshot| (snapshot.issues, Some(snapshot.synced_at)))
                 .unwrap_or_default();
-            let history = history_store
+            let stored_history = history_store
                 .summary(&entry.id)
                 .unwrap_or_else(|history_error| Some(failed_history(history_error.to_string())))
                 .unwrap_or_default();
+            let history = match &error {
+                ProviderError::RateLimited { reset_epoch }
+                    if stored_history.state != HistoryImportState::Unavailable =>
+                {
+                    history_store
+                        .mark_rate_limited(&entry.id, *reset_epoch)
+                        .unwrap_or(stored_history)
+                }
+                _ => stored_history,
+            };
             model(
                 entry,
                 issues,

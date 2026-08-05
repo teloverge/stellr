@@ -128,8 +128,12 @@ pub(crate) async fn fetch_history_page(
     events.sort();
 
     let page_info = issue.timeline_items.page_info;
+    let resume_cursor = page_info
+        .end_cursor
+        .clone()
+        .or_else(|| request.cursor.clone());
     let next_cursor = if page_info.has_next_page {
-        Some(page_info.end_cursor.ok_or_else(|| {
+        Some(page_info.end_cursor.clone().ok_or_else(|| {
             contextual_message(
                 request,
                 "advancing history page",
@@ -142,6 +146,7 @@ pub(crate) async fn fetch_history_page(
     Ok(HistoryPage {
         events,
         next_cursor,
+        resume_cursor,
         complete: !page_info.has_next_page,
     })
 }

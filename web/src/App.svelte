@@ -10,7 +10,12 @@
   import { Control, pageIssue, takePageToken } from './lib/control.svelte'
   import type { Model } from './lib/model'
   import { fetchHistory } from './lib/history-api'
-  import { projectTemporalSpace, type HistoryEvent } from './lib/history'
+  import {
+    latestHistorySequence,
+    mergeHistoryEvents,
+    projectTemporalSpace,
+    type HistoryEvent,
+  } from './lib/history'
   import { Route } from './lib/route.svelte'
   import { ThemeController } from './lib/theme.svelte'
   import { decideDock, type Dock } from './lib/starmap/dock'
@@ -77,6 +82,7 @@
   let historyEvents = $state.raw<HistoryEvent[]>([])
   let historyPlayhead = $state<number | null>(null)
   let historyFeedback = $state.raw<HistoryEvent[]>([])
+  let historyHasNewActivity = $state(false)
   let historySpaceId = $state<string | null>(null)
   let requestedHistoryKey: string | null = null
   const temporalSpace = $derived(
@@ -104,22 +110,33 @@
       historyEvents = []
       historyPlayhead = null
       historyFeedback = []
+      historyHasNewActivity = false
       requestedHistoryKey = null
     }
     const summary = space?.history
-    if (space === null || summary?.state !== 'complete') return
+    if (space === null || summary?.verified_through === null || summary?.verified_through === undefined) return
     const key = `${space.id}:${summary.revision}`
     if (requestedHistoryKey === key) return
     requestedHistoryKey = key
-    void fetchHistory(space.id)
+    const after = latestHistorySequence(historyEvents)
+    void fetchHistory(space.id, after)
       .then((response) => {
         if (historySpaceId !== space.id) return
-        historyEvents = response.events
+        const merged = mergeHistoryEvents(historyEvents, response.events)
+        if (historyPlayhead !== null && merged.length > historyEvents.length) {
+          historyHasNewActivity = true
+        }
+        historyEvents = merged
       })
       .catch(() => {
         if (requestedHistoryKey === key) requestedHistoryKey = null
       })
   })
+
+  function setHistoryPlayhead(playhead: number | null): void {
+    historyPlayhead = playhead
+    if (playhead === null) historyHasNewActivity = false
+  }
 
   async function pollNativeRoute(): Promise<void> {
     if (nativeRouteBusy) return
@@ -394,8 +411,10 @@
             summary={activeSpace.history}
             events={historyEvents}
             playhead={historyPlayhead}
-            change={(playhead) => (historyPlayhead = playhead)}
+            change={setHistoryPlayhead}
             reached={(events) => (historyFeedback = events)}
+            newActivity={historyHasNewActivity}
+            returnToNow={() => setHistoryPlayhead(null)}
           />
         {/if}
       {:else}

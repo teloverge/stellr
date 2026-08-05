@@ -75,20 +75,21 @@ async fn history(
                 .into_response();
         }
     };
-    let events = if summary.state == HistoryImportState::Complete {
-        match state.history.events_after(&id, query.after.unwrap_or(0)) {
-            Ok(events) => events,
-            Err(error) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("could not read history events: {error}"),
-                )
-                    .into_response();
+    let events =
+        if summary.state == HistoryImportState::Complete || summary.verified_through.is_some() {
+            match state.history.events_after(&id, query.after.unwrap_or(0)) {
+                Ok(events) => events,
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("could not read history events: {error}"),
+                    )
+                        .into_response();
+                }
             }
-        }
-    } else {
-        Vec::new()
-    };
+        } else {
+            Vec::new()
+        };
     Json(HistoryResponse { summary, events }).into_response()
 }
 

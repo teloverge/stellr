@@ -96,6 +96,7 @@ async fn fetches_one_targeted_history_page_and_normalizes_tracked_events() {
     assert_eq!(body["variables"]["number"], 78);
     assert_eq!(body["variables"]["cursor"], "CUR1");
     assert_eq!(page.next_cursor.as_deref(), Some("CUR2"));
+    assert_eq!(page.resume_cursor.as_deref(), Some("CUR2"));
     assert!(!page.complete);
     assert_eq!(page.events.len(), 4);
     assert_eq!(page.events[0].provider_event_id, "E_close");
@@ -127,6 +128,39 @@ async fn fetches_one_targeted_history_page_and_normalizes_tracked_events() {
             }),
         }
     );
+}
+
+#[tokio::test]
+async fn preserves_the_terminal_cursor_for_delta_only_resume() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "repository": {
+                    "id": "R_repo",
+                    "issue": {
+                        "id": "I_78",
+                        "timelineItems": {
+                            "pageInfo": { "hasNextPage": false, "endCursor": "CUR_END" },
+                            "nodes": []
+                        }
+                    }
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+
+    let page = provider
+        .fetch_history_page(&repo(), &request(Some("CUR1")))
+        .await
+        .unwrap();
+
+    assert!(page.complete);
+    assert_eq!(page.next_cursor, None);
+    assert_eq!(page.resume_cursor.as_deref(), Some("CUR_END"));
 }
 
 #[tokio::test]
