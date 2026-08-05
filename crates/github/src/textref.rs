@@ -10,6 +10,52 @@ struct Fence {
     length: usize,
 }
 
+#[derive(Clone, Copy)]
+enum RelationshipSection {
+    BlockedBy,
+    Blocks,
+}
+
+fn atx_heading(line: &str) -> Option<&str> {
+    let line = line.trim_start();
+    let level = line.bytes().take_while(|byte| *byte == b'#').count();
+    if !(1..=6).contains(&level)
+        || !line
+            .as_bytes()
+            .get(level)
+            .is_some_and(u8::is_ascii_whitespace)
+    {
+        return None;
+    }
+
+    let title = line[level..].trim();
+    let without_markers = title.trim_end_matches('#');
+    if without_markers.len() != title.len()
+        && without_markers
+            .chars()
+            .last()
+            .is_some_and(char::is_whitespace)
+    {
+        Some(without_markers.trim_end())
+    } else {
+        Some(title)
+    }
+}
+
+fn extract_issue_references(line: &str, bucket: &mut Vec<u64>) {
+    for (index, character) in line.char_indices() {
+        if character == '#' {
+            let digits: String = line[index + 1..]
+                .chars()
+                .take_while(|character| character.is_ascii_digit())
+                .collect();
+            if let Ok(number) = digits.parse::<u64>() {
+                bucket.push(number);
+            }
+        }
+    }
+}
+
 fn fence_at_start(line: &str, closing: bool) -> Option<Fence> {
     let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
     if indentation > 3 {
@@ -85,6 +131,7 @@ fn strip_leading_markers(mut line: &str) -> &str {
 pub fn scan(body: &str) -> TextRefs {
     let mut refs = TextRefs::default();
     let mut open_fence: Option<Fence> = None;
+    let mut section: Option<RelationshipSection> = None;
 
     for raw in body.lines() {
         let fence_line = strip_container_prefixes(raw);
@@ -105,26 +152,31 @@ pub fn scan(body: &str) -> TextRefs {
             None => {}
         }
 
+        if let Some(title) = atx_heading(raw) {
+            section = match title.to_ascii_lowercase().as_str() {
+                "blocked by" => Some(RelationshipSection::BlockedBy),
+                "blocks" => Some(RelationshipSection::Blocks),
+                _ => None,
+            };
+            continue;
+        }
+
         let stripped = strip_leading_markers(trimmed);
         let lower = stripped.to_ascii_lowercase();
         let bucket = if lower.starts_with("blocked by") {
-            &mut refs.blocked_by
+            Some(&mut refs.blocked_by)
         } else if lower.starts_with("blocks") {
-            &mut refs.blocks
+            Some(&mut refs.blocks)
         } else {
-            continue;
+            match section {
+                Some(RelationshipSection::BlockedBy) => Some(&mut refs.blocked_by),
+                Some(RelationshipSection::Blocks) => Some(&mut refs.blocks),
+                None => None,
+            }
         };
 
-        for (index, character) in stripped.char_indices() {
-            if character == '#' {
-                let digits: String = stripped[index + 1..]
-                    .chars()
-                    .take_while(|character| character.is_ascii_digit())
-                    .collect();
-                if let Ok(number) = digits.parse::<u64>() {
-                    bucket.push(number);
-                }
-            }
+        if let Some(bucket) = bucket {
+            extract_issue_references(stripped, bucket);
         }
     }
 
@@ -222,5 +274,27 @@ mod tests {
     fn mid_sentence_mentions_do_not_count() {
         let refs = scan("This is blocked by #5 in spirit.\n");
         assert_eq!(refs.blocked_by, Vec::<u64>::new());
+    }
+
+    #[test]
+    fn scans_dependency_references_beneath_markdown_headings() {
+        let refs = scan("## Blocked by\n\n- #17\n- #19\n## Blocks ##\n* #23\n");
+
+        assert_eq!(refs.blocked_by, vec![17, 19]);
+        assert_eq!(refs.blocks, vec![23]);
+    }
+
+    #[test]
+    fn relationship_section_ends_at_the_next_heading() {
+        let refs = scan("## Blocked by\n- #17\n## Acceptance criteria\n- #99\n");
+
+        assert_eq!(refs.blocked_by, vec![17]);
+    }
+
+    #[test]
+    fn section_references_still_ignore_fenced_examples_and_deduplicate_inline_refs() {
+        let refs = scan("Blocked by #17\n## Blocked by\n- #17\n```\n- #99\n```\n- #19\n");
+
+        assert_eq!(refs.blocked_by, vec![17, 19]);
     }
 }
