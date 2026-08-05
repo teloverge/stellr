@@ -5,8 +5,7 @@ use octocrab::{FromResponse, Octocrab};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stellr_core::{
-    IssueState, IssueSyncMetadata, MilestoneRef, Provider, ProviderError, ProviderSnapshot,
-    RawIssue, RepoRef,
+    IssueState, IssueSyncMetadata, Provider, ProviderError, ProviderSnapshot, RawIssue, RepoRef,
 };
 
 use crate::textref;
@@ -35,7 +34,7 @@ query FetchIssues($owner: String!, $name: String!, $cursor: String) {
         assignees(first: 10) {
           nodes { login }
         }
-        milestone { id title }
+        milestone { title }
         labels(first: 20) {
           nodes { name }
         }
@@ -78,6 +77,13 @@ impl GithubGraphqlClient {
         &self,
         request: &T,
     ) -> Result<Value, ProviderError> {
+        Ok(self.post_value_with_timestamp(request).await?.value)
+    }
+
+    async fn post_value_with_timestamp<T: Serialize + ?Sized>(
+        &self,
+        request: &T,
+    ) -> Result<GraphqlResponse, ProviderError> {
         let response = self
             .client
             ._post("/graphql", Some(request))
@@ -87,17 +93,28 @@ impl GithubGraphqlClient {
             return Err(ProviderError::Auth("token rejected".into()));
         }
         let status = response.status().as_u16();
+        let server_timestamp = response
+            .headers()
+            .get("date")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| DateTime::parse_from_rfc2822(value).ok())
+            .map(|value| value.timestamp());
         let rate_limit_exhausted = response
             .headers()
             .get("x-ratelimit-remaining")
             .and_then(|value| value.to_str().ok())
             == Some("0");
-        if matches!(status, 403 | 429) && rate_limit_exhausted {
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok());
+        if status == 429 || (status == 403 && (rate_limit_exhausted || retry_after.is_some())) {
             let reset_epoch = response
                 .headers()
                 .get("x-ratelimit-reset")
                 .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse().ok());
+                .and_then(|value| value.parse().ok())
+                .or_else(|| retry_after.and_then(|value| retry_epoch(value, server_timestamp)));
             return Err(ProviderError::RateLimited { reset_epoch });
         }
         let response = octocrab::map_github_error(response)
@@ -121,8 +138,32 @@ impl GithubGraphqlClient {
                 return Err(ProviderError::Parse(messages[0].to_owned()));
             }
         }
-        Ok(value)
+        Ok(GraphqlResponse {
+            value,
+            server_timestamp,
+        })
     }
+}
+
+struct GraphqlResponse {
+    value: Value,
+    server_timestamp: Option<i64>,
+}
+
+fn retry_epoch(value: &str, server_timestamp: Option<i64>) -> Option<i64> {
+    value
+        .parse::<i64>()
+        .ok()
+        .map(|seconds| {
+            server_timestamp
+                .unwrap_or_else(|| Utc::now().timestamp())
+                .saturating_add(seconds.max(0))
+        })
+        .or_else(|| {
+            DateTime::parse_from_rfc2822(value)
+                .ok()
+                .map(|value| value.timestamp())
+        })
 }
 
 pub struct GithubProvider {
@@ -167,6 +208,7 @@ impl GithubProvider {
         let mut cursor = None;
         let mut nodes = Vec::new();
         let mut repository_id: Option<String> = None;
+        let mut history_cutoff = None;
 
         loop {
             let request = GraphqlRequest {
@@ -178,9 +220,12 @@ impl GithubProvider {
                 },
             };
 
-            let response = self.client.post_value(&request).await?;
+            let response = self.client.post_value_with_timestamp(&request).await?;
+            if history_cutoff.is_none() {
+                history_cutoff = response.server_timestamp;
+            }
 
-            let response: GraphqlEnvelope = serde_json::from_value(response)
+            let response: GraphqlEnvelope = serde_json::from_value(response.value)
                 .map_err(|error| ProviderError::Parse(error.to_string()))?;
 
             let repository = response
@@ -212,7 +257,7 @@ impl GithubProvider {
             })?);
         }
 
-        Ok(map_snapshot(repository_id, nodes))
+        Ok(map_snapshot(repository_id, history_cutoff, nodes))
     }
 }
 
@@ -223,7 +268,11 @@ fn map_octocrab_error(error: octocrab::Error) -> ProviderError {
     }
 }
 
-fn map_snapshot(repository_id: Option<String>, nodes: Vec<IssueNode>) -> ProviderSnapshot {
+fn map_snapshot(
+    repository_id: Option<String>,
+    history_cutoff: Option<i64>,
+    nodes: Vec<IssueNode>,
+) -> ProviderSnapshot {
     let mut issues = Vec::with_capacity(nodes.len());
     let mut history = Vec::with_capacity(nodes.len());
     let mut inversions = Vec::new();
@@ -247,10 +296,8 @@ fn map_snapshot(repository_id: Option<String>, nodes: Vec<IssueNode>) -> Provide
             number: node.number,
             created_at: node.created_at.timestamp(),
             updated_at: node.updated_at.timestamp(),
-            milestone: node.milestone.as_ref().map(|milestone| MilestoneRef {
-                id: Some(milestone.id.clone()),
-                title: milestone.title.clone(),
-            }),
+            // Present-day milestone membership cannot establish membership at creation.
+            milestone: None,
         });
         issues.push(RawIssue {
             number: node.number,
@@ -301,6 +348,7 @@ fn map_snapshot(repository_id: Option<String>, nodes: Vec<IssueNode>) -> Provide
 
     ProviderSnapshot {
         repository_id,
+        history_cutoff,
         issues,
         history,
     }
@@ -387,7 +435,6 @@ struct Assignee {
 
 #[derive(Clone, Deserialize)]
 struct Milestone {
-    id: String,
     title: String,
 }
 

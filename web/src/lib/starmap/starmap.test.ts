@@ -404,6 +404,34 @@ describe('the session overlay on the seam', () => {
 })
 
 describe('temporal visibility on the renderer seam', () => {
+  it('enters and leaves neutral historical focus without refitting the camera', () => {
+    const { sm } = mounted()
+    const live = fixture().map((ticket) => ({
+      ...ticket,
+      readyForAgent: ticket.num === 2,
+      focusStatus: ticket.num === 2 ? ('frontier' as const) : ticket.status,
+      historical: false,
+    }))
+    sm.setModel(live, {}, 1)
+    const camera = sm.camera()
+
+    sm.setModel(
+      live.map((ticket) => ({
+        ...ticket,
+        status: 'open',
+        readyForAgent: false,
+        focusStatus: 'open',
+        historical: true,
+      })),
+      {},
+      1,
+    )
+    expect(sm.camera()).toEqual(camera)
+
+    sm.setModel(live, {}, 1)
+    expect(sm.camera()).toEqual(camera)
+  })
+
   it('hides future stars without moving the constellation or camera', () => {
     const { sm } = mounted()
     const current = fixture().map((ticket) => ({

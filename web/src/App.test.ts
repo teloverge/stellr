@@ -277,8 +277,9 @@ describe('App issue routing', () => {
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         ),
-      )
+    )
     vi.stubGlobal('fetch', fetchRequest)
+    const setModel = vi.spyOn(Renderer.prototype, 'setModel')
     const { target, socket } = mountApp()
     socket.emitModel({
       spaces: [
@@ -321,6 +322,14 @@ describe('App issue routing', () => {
     flushSync()
     expect(target.querySelector('output')?.textContent).toBe('Now')
     expect(target.querySelector('.new-activity')).toBeNull()
+    expect(setModel).toHaveBeenLastCalledWith(
+      [
+        expect.objectContaining({ num: 11, visible: true }),
+        expect.objectContaining({ num: 12, visible: true }),
+      ],
+      {},
+      null,
+    )
     expect(fetchRequest).toHaveBeenCalledTimes(2)
   })
 

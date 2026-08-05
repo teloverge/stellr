@@ -10,6 +10,8 @@ use stellr_history::RepositorySeed;
 
 use crate::{spaces::SpaceEntry, state::AppState};
 
+const CONSERVATIVE_RATE_LIMIT_BACKOFF: i64 = 60;
+
 #[derive(Clone)]
 pub struct PollingControl {
     intervals: tokio::sync::watch::Sender<Duration>,
@@ -142,7 +144,7 @@ async fn import_pending_history(
             summary.state == HistoryImportState::RateLimited
                 && summary
                     .resume_at
-                    .is_none_or(|resume_at| resume_at > Utc::now().timestamp())
+                    .is_some_and(|resume_at| resume_at > Utc::now().timestamp())
         })
     {
         return;
@@ -168,7 +170,7 @@ async fn import_pending_history(
                 let summary = match error {
                     ProviderError::RateLimited { reset_epoch } => state
                         .history
-                        .mark_rate_limited(&entry.id, reset_epoch)
+                        .mark_rate_limited(&entry.id, Some(rate_limit_resume(reset_epoch)))
                         .unwrap_or_else(|store_error| failed_history(store_error.to_string())),
                     other => state
                         .history
@@ -244,7 +246,7 @@ async fn sync_space(
                     synced_at,
                 },
             );
-            let history = history_after_snapshot(entry, &snapshot, history_store, synced_at);
+            let history = history_after_snapshot(entry, &snapshot, history_store);
             model(
                 entry,
                 snapshot.issues,
@@ -268,7 +270,7 @@ async fn sync_space(
                     if stored_history.state != HistoryImportState::Unavailable =>
                 {
                     history_store
-                        .mark_rate_limited(&entry.id, *reset_epoch)
+                        .mark_rate_limited(&entry.id, Some(rate_limit_resume(*reset_epoch)))
                         .unwrap_or(stored_history)
                 }
                 _ => stored_history,
@@ -285,17 +287,30 @@ async fn sync_space(
     }
 }
 
+fn rate_limit_resume(provider_reset: Option<i64>) -> i64 {
+    provider_reset.unwrap_or_else(|| {
+        Utc::now()
+            .timestamp()
+            .saturating_add(CONSERVATIVE_RATE_LIMIT_BACKOFF)
+    })
+}
+
 fn history_after_snapshot(
     entry: &SpaceEntry,
     snapshot: &stellr_core::ProviderSnapshot,
     store: &stellr_history::HistoryStore,
-    verified_through: i64,
 ) -> HistorySummary {
     let Some(repository_id) = snapshot.repository_id.as_ref() else {
         return store
             .summary(&entry.id)
             .unwrap_or_else(|error| Some(failed_history(error.to_string())))
             .unwrap_or_default();
+    };
+    let Some(verified_through) = snapshot.history_cutoff else {
+        let diagnostic = "provider snapshot omitted a history verification boundary".to_owned();
+        return store
+            .mark_failed(&entry.id, diagnostic.clone())
+            .unwrap_or_else(|_| failed_history(diagnostic));
     };
     if snapshot.history.len() != snapshot.issues.len() {
         return failed_history(format!(
@@ -340,5 +355,21 @@ fn model(
         stale,
         error,
         history,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::{CONSERVATIVE_RATE_LIMIT_BACKOFF, rate_limit_resume};
+
+    #[test]
+    fn missing_provider_reset_uses_a_bounded_conservative_backoff() {
+        let before = Utc::now().timestamp() + CONSERVATIVE_RATE_LIMIT_BACKOFF;
+        let resume = rate_limit_resume(None);
+        let after = Utc::now().timestamp() + CONSERVATIVE_RATE_LIMIT_BACKOFF;
+
+        assert!((before..=after).contains(&resume));
     }
 }

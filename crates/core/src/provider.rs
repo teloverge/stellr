@@ -19,6 +19,7 @@ pub trait Provider {
     async fn fetch_snapshot(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         Ok(ProviderSnapshot {
             repository_id: None,
+            history_cutoff: None,
             issues: self.fetch(repo).await?,
             history: Vec::new(),
         })
@@ -38,6 +39,8 @@ pub trait Provider {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderSnapshot {
     pub repository_id: Option<String>,
+    /// Provider-backed boundary through which history can be claimed complete.
+    pub history_cutoff: Option<i64>,
     pub issues: Vec<RawIssue>,
     pub history: Vec<IssueSyncMetadata>,
 }

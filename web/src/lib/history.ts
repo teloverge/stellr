@@ -33,7 +33,17 @@ export interface TemporalStar extends Omit<Star, 'status'> {
 }
 
 export interface TemporalSpace extends Omit<SpaceModel, 'stars'> {
+  temporal_active: boolean
   stars: TemporalStar[]
+}
+
+export function historyEventSummary(event: HistoryEvent, issueWidth = 0): string {
+  const issue = `#${event.issue_number.toString().padStart(issueWidth, '0')}`
+  if (event.kind === 'issue_created') return `${issue} created`
+  if (event.kind === 'issue_closed') return `${issue} closed`
+  if (event.kind === 'issue_reopened') return `${issue} reopened`
+  if (event.to === null) return `${issue} removed from milestone`
+  return `${issue} moved to ${event.to.title}`
 }
 
 export function mergeHistoryEvents(
@@ -41,16 +51,17 @@ export function mergeHistoryEvents(
   incoming: HistoryEvent[],
 ): HistoryEvent[] {
   const sequences = new Set<number>()
-  const providerEvents = new Set<string>()
-  const merged: HistoryEvent[] = []
+  const providerEvents = new Map<string, HistoryEvent>()
   for (const event of [...current, ...incoming]) {
     const providerKey = `${event.repository_id}\u0000${event.provider_event_id}`
-    if (sequences.has(event.sequence) || providerEvents.has(providerKey)) continue
+    if (sequences.has(event.sequence)) continue
     sequences.add(event.sequence)
-    providerEvents.add(providerKey)
-    merged.push(event)
+    const previous = providerEvents.get(providerKey)
+    if (previous === undefined || event.sequence > previous.sequence) {
+      providerEvents.set(providerKey, event)
+    }
   }
-  return merged.toSorted(
+  return [...providerEvents.values()].toSorted(
     (left, right) =>
       left.occurred_at - right.occurred_at ||
       left.provider_event_id.localeCompare(right.provider_event_id),
@@ -69,6 +80,7 @@ export function projectTemporalSpace(
   if (playhead === null) {
     return {
       ...space,
+      temporal_active: false,
       stars: space.stars.map((star) => ({
         ...star,
         live_status: star.status,
@@ -103,6 +115,7 @@ export function projectTemporalSpace(
 
   return {
     ...space,
+    temporal_active: true,
     stars: space.stars.map((star) => {
       const creation = creationByIssue.get(star.number)
       return {

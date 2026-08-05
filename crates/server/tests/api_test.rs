@@ -180,6 +180,7 @@ impl Provider for DeltaSnapshotProvider {
         let updated_at = if snapshot >= 3 { 500 } else { 400 };
         Ok(ProviderSnapshot {
             repository_id: Some("R_repo".into()),
+            history_cutoff: Some(500),
             issues: vec![RawIssue {
                 number: 83,
                 parent_issue: None,
@@ -435,6 +436,7 @@ impl Provider for HistorySnapshotProvider {
     async fn fetch_snapshot(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         Ok(ProviderSnapshot {
             repository_id: Some("R_repo".into()),
+            history_cutoff: Some(500),
             issues: vec![RawIssue {
                 number: 78,
                 parent_issue: None,
@@ -484,6 +486,7 @@ impl Provider for RateLimitedSnapshotProvider {
     async fn fetch_snapshot(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         Ok(ProviderSnapshot {
             repository_id: Some("R_repo".into()),
+            history_cutoff: Some(500),
             issues: vec![RawIssue {
                 number: 83,
                 parent_issue: None,
@@ -526,6 +529,7 @@ impl Provider for LifecycleSnapshotProvider {
     async fn fetch_snapshot(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         Ok(ProviderSnapshot {
             repository_id: Some("R_repo".into()),
+            history_cutoff: Some(500),
             issues: vec![RawIssue {
                 number: 79,
                 parent_issue: None,
@@ -990,12 +994,28 @@ async fn failed_sync_publishes_the_cached_model_as_stale_with_the_error() {
     spaces.add(SpaceEntry::new(repo, None)).unwrap();
     spaces.save().unwrap();
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open_in_memory().unwrap();
+    history
+        .initialize_repository(&RepositorySeed {
+            space_id: "o-r".into(),
+            provider_repository_id: "R_repo".into(),
+            verified_through: 1_753_000_000,
+            timeline_required: false,
+            issues: vec![IssueSyncMetadata {
+                issue_id: "I_7".into(),
+                number: 7,
+                created_at: 1_752_000_000,
+                updated_at: 1_752_000_000,
+                milestone: None,
+            }],
+        })
+        .unwrap();
     let state = Arc::new(AppState {
         hub,
         token: None,
         spaces: tokio::sync::Mutex::new(spaces),
         refresh: Arc::new(tokio::sync::Notify::new()),
-        history: HistoryStore::open_in_memory().unwrap(),
+        history: history.clone(),
     });
     let poller = spawn_poller(
         state.clone(),
@@ -1032,6 +1052,15 @@ async fn failed_sync_publishes_the_cached_model_as_stale_with_the_error() {
         model.spaces[0].error.as_deref(),
         Some("HTTP request failed: offline")
     );
+    assert_eq!(model.spaces[0].history.state, HistoryImportState::Complete);
+    assert_eq!(history.events_after("o-r", 0).unwrap().len(), 1);
+    let replay = reqwest::get(format!("{base}/api/spaces/o-r/history"))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), reqwest::StatusCode::OK);
+    let replay: serde_json::Value = replay.json().await.unwrap();
+    assert_eq!(replay["summary"]["state"], "complete");
+    assert_eq!(replay["events"].as_array().unwrap().len(), 1);
     poller.abort();
 }
 
@@ -1081,12 +1110,13 @@ async fn delete_space_removes_the_persisted_entry() {
     let directory = tempfile::tempdir().unwrap();
     let file = directory.path().join("spaces.toml");
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open_in_memory().unwrap();
     let state = Arc::new(AppState {
         hub,
         token: None,
         spaces: tokio::sync::Mutex::new(SpaceStore::load(file.clone())),
         refresh: Arc::new(tokio::sync::Notify::new()),
-        history: HistoryStore::open_in_memory().unwrap(),
+        history: history.clone(),
     });
     let base = serve(state).await;
     let client = reqwest::Client::new();
@@ -1100,6 +1130,21 @@ async fn delete_space_removes_the_persisted_entry() {
             .status(),
         reqwest::StatusCode::OK
     );
+    history
+        .initialize_repository(&RepositorySeed {
+            space_id: "o-r".into(),
+            provider_repository_id: "R_repo".into(),
+            verified_through: 500,
+            timeline_required: false,
+            issues: vec![IssueSyncMetadata {
+                issue_id: "I_1".into(),
+                number: 1,
+                created_at: 100,
+                updated_at: 200,
+                milestone: None,
+            }],
+        })
+        .unwrap();
 
     let deleted = client
         .delete(format!("{base}/api/spaces/o-r"))
@@ -1109,6 +1154,7 @@ async fn delete_space_removes_the_persisted_entry() {
 
     assert_eq!(deleted.status(), reqwest::StatusCode::NO_CONTENT);
     assert!(SpaceStore::load(file).entries().is_empty());
+    assert!(history.summary("o-r").unwrap().is_none());
 }
 
 #[tokio::test]

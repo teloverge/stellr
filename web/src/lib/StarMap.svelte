@@ -74,6 +74,9 @@
 </script>
 
 <div class="star-map" bind:this={host}></div>
+{#if 'temporal_active' in space && space.temporal_active}
+  <div class="dependency-legend">Current dependencies</div>
+{/if}
 
 <style>
   .star-map {
@@ -82,5 +85,18 @@
     height: 100%;
     min-height: 0;
     background: var(--map-background);
+  }
+
+  .dependency-legend {
+    position: absolute;
+    top: 0.75rem;
+    left: 0.75rem;
+    padding: 0.3rem 0.5rem;
+    border: 1px dashed var(--border);
+    border-radius: 0.45rem;
+    color: var(--muted-foreground);
+    background: color-mix(in oklch, var(--surface-raised) 84%, transparent);
+    font-size: 0.75rem;
+    pointer-events: none;
   }
 </style>

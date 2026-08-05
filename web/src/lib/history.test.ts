@@ -69,6 +69,7 @@ describe('temporal creation projection', () => {
   it('keeps the complete current snapshot at Now', () => {
     const projected = projectTemporalSpace(space, events, null)
 
+    expect(projected.temporal_active).toBe(false)
     expect(projected.stars.map((star) => [star.number, star.status, star.temporal_visible])).toEqual([
       [1, 'resolved', true],
       [2, 'frontier', true],
@@ -76,6 +77,7 @@ describe('temporal creation projection', () => {
   })
 
   it('uses exact creation boundaries and neutral historical-open status', () => {
+    expect(projectTemporalSpace(space, events, 100).temporal_active).toBe(true)
     expect(
       projectTemporalSpace(space, events, 99).stars.map((star) => star.temporal_visible),
     ).toEqual([false, false])
@@ -253,15 +255,6 @@ describe('history delta merge', () => {
         kind: 'issue_closed',
       },
       { ...events[1], sequence: 99 },
-      {
-        sequence: 2,
-        repository_id: 'R_repo',
-        issue_id: 'I_duplicate_sequence',
-        issue_number: 99,
-        provider_event_id: 'E_duplicate_sequence',
-        occurred_at: 125,
-        kind: 'issue_closed',
-      },
     ]
 
     const merged = mergeHistoryEvents(events, delta)
@@ -271,7 +264,36 @@ describe('history delta merge', () => {
       'E_close',
       'I_2:issue_created',
     ])
-    expect(latestHistorySequence(merged)).toBe(3)
+    expect(latestHistorySequence(merged)).toBe(99)
     expect(mergeHistoryEvents(merged, delta)).toEqual(merged)
+  })
+
+  it('rejects a different provider event that reuses a ledger sequence', () => {
+    const collision: HistoryEvent = {
+      sequence: 2,
+      repository_id: 'R_repo',
+      issue_id: 'I_duplicate_sequence',
+      issue_number: 99,
+      provider_event_id: 'E_duplicate_sequence',
+      occurred_at: 125,
+      kind: 'issue_closed',
+    }
+
+    expect(mergeHistoryEvents(events, [collision])).toEqual(events)
+  })
+
+  it('replaces a corrected provider event with its later ledger revision', () => {
+    const creation = events[0] as Extract<HistoryEvent, { kind: 'issue_created' }>
+    const corrected: HistoryEvent = {
+      ...creation,
+      sequence: 3,
+      milestone: { id: null, title: 'Alpha' },
+    }
+
+    const merged = mergeHistoryEvents(events, [corrected])
+
+    expect(merged).toHaveLength(2)
+    expect(merged[0]).toEqual(corrected)
+    expect(latestHistorySequence(merged)).toBe(3)
   })
 })

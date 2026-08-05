@@ -10,6 +10,56 @@ use stellr_core::{
 
 const SCHEMA_VERSION: i64 = 3;
 
+#[derive(Clone, Copy)]
+enum StoredImportState {
+    Unavailable,
+    Building,
+    Complete,
+    Delayed,
+    RateLimited,
+    Failed,
+}
+
+impl StoredImportState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Building => "building",
+            Self::Complete => "complete",
+            Self::Delayed => "delayed",
+            Self::RateLimited => "rate_limited",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, StoreError> {
+        match value {
+            "unavailable" => Ok(Self::Unavailable),
+            "building" => Ok(Self::Building),
+            "complete" => Ok(Self::Complete),
+            "delayed" => Ok(Self::Delayed),
+            "rate_limited" => Ok(Self::RateLimited),
+            "failed" => Ok(Self::Failed),
+            _ => Err(StoreError::Invalid(format!(
+                "unknown history import state: {value}"
+            ))),
+        }
+    }
+}
+
+impl From<StoredImportState> for HistoryImportState {
+    fn from(value: StoredImportState) -> Self {
+        match value {
+            StoredImportState::Unavailable => Self::Unavailable,
+            StoredImportState::Building => Self::Building,
+            StoredImportState::Complete => Self::Complete,
+            StoredImportState::Delayed => Self::Delayed,
+            StoredImportState::RateLimited => Self::RateLimited,
+            StoredImportState::Failed => Self::Failed,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositorySeed {
     pub space_id: String,
@@ -89,9 +139,9 @@ impl HistoryStore {
                 seed.space_id,
                 seed.provider_repository_id,
                 if timeline_required {
-                    "building"
+                    StoredImportState::Building.as_str()
                 } else {
-                    "complete"
+                    StoredImportState::Complete.as_str()
                 },
                 (!timeline_required).then_some(seed.verified_through),
                 seed.verified_through,
@@ -136,6 +186,10 @@ impl HistoryStore {
         let mut changed = false;
         for issue in issues {
             let issue_number = i64::try_from(issue.number)?;
+            // Later pages can be observed after the response-backed cutoff. Keeping
+            // their baseline at the cutoff guarantees the confirming snapshot will
+            // queue any activity that happened while pagination was in flight.
+            let observed_updated_at = issue.updated_at.min(seed.verified_through);
             let (milestone_id, milestone_title) = issue
                 .milestone
                 .as_ref()
@@ -162,7 +216,7 @@ impl HistoryStore {
                             issue.issue_id,
                             issue_number,
                             issue.created_at,
-                            issue.updated_at,
+                            observed_updated_at,
                             milestone_id,
                             milestone_title,
                             !timeline_required
@@ -170,7 +224,8 @@ impl HistoryStore {
                     )?;
                 }
                 Some(stored_updated_at) => {
-                    let issue_changed = timeline_required && issue.updated_at > stored_updated_at;
+                    let issue_changed =
+                        timeline_required && observed_updated_at > stored_updated_at;
                     changed |= issue_changed;
                     transaction.execute(
                         "UPDATE issues
@@ -186,7 +241,7 @@ impl HistoryStore {
                             issue.issue_id,
                             issue_number,
                             issue.created_at,
-                            issue.updated_at,
+                            observed_updated_at,
                             milestone_id,
                             milestone_title,
                             issue_changed
@@ -195,23 +250,25 @@ impl HistoryStore {
                 }
             }
 
-            let kind = HistoryEventKind::IssueCreated {
-                milestone: issue.milestone,
-            };
-            transaction.execute(
-                "INSERT OR IGNORE INTO events (
-                     space_id, provider_event_id, provider_issue_id, issue_number,
-                     occurred_at, payload
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    seed.space_id,
-                    HistoryEvent::creation_id(&issue.issue_id),
-                    issue.issue_id,
-                    issue_number,
-                    issue.created_at,
-                    serde_json::to_string(&kind)?
-                ],
-            )?;
+            if issue.created_at <= seed.verified_through {
+                let kind = HistoryEventKind::IssueCreated {
+                    milestone: issue.milestone,
+                };
+                transaction.execute(
+                    "INSERT OR IGNORE INTO events (
+                         space_id, provider_event_id, provider_issue_id, issue_number,
+                         occurred_at, payload
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        seed.space_id,
+                        HistoryEvent::creation_id(&issue.issue_id),
+                        issue.issue_id,
+                        issue_number,
+                        issue.created_at,
+                        serde_json::to_string(&kind)?
+                    ],
+                )?;
+            }
         }
 
         if changed {
@@ -240,7 +297,11 @@ impl HistoryStore {
              WHERE space_id = ?1",
             params![
                 seed.space_id,
-                if complete { "complete" } else { "building" },
+                if complete {
+                    StoredImportState::Complete.as_str()
+                } else {
+                    StoredImportState::Building.as_str()
+                },
                 total,
                 completed,
                 complete
@@ -374,11 +435,11 @@ impl HistoryStore {
             params![checkpoint.space_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        let issue_number: i64 = transaction.query_row(
-            "SELECT issue_number FROM issues
+        let (issue_number, issue_created_at): (i64, i64) = transaction.query_row(
+            "SELECT issue_number, created_at FROM issues
              WHERE space_id = ?1 AND provider_issue_id = ?2",
             params![checkpoint.space_id, checkpoint.issue_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         let issue_number = u64::try_from(issue_number)?;
 
@@ -411,6 +472,12 @@ impl HistoryStore {
                 ],
             )?;
         }
+        reconcile_creation_milestone(
+            &transaction,
+            &checkpoint.space_id,
+            &checkpoint.issue_id,
+            issue_created_at,
+        )?;
 
         let stored_cursor = if checkpoint.complete {
             checkpoint.resume_cursor.as_ref()
@@ -449,9 +516,9 @@ impl HistoryStore {
             params![
                 checkpoint.space_id,
                 if repository_complete {
-                    "complete"
+                    StoredImportState::Complete.as_str()
                 } else {
-                    "building"
+                    StoredImportState::Building.as_str()
                 },
                 completed,
                 repository_complete.then_some(cutoff)
@@ -472,9 +539,13 @@ impl HistoryStore {
         let connection = self.connection()?;
         let changed = connection.execute(
             "UPDATE repositories
-             SET import_state = 'failed', diagnostic = ?2, resume_at = NULL
+             SET import_state = ?2, diagnostic = ?3, resume_at = NULL
              WHERE space_id = ?1",
-            params![space_id, diagnostic.into()],
+            params![
+                space_id,
+                StoredImportState::Failed.as_str(),
+                diagnostic.into()
+            ],
         )?;
         if changed == 0 {
             return Err(StoreError::Invalid(
@@ -495,11 +566,11 @@ impl HistoryStore {
         let connection = self.connection()?;
         let changed = connection.execute(
             "UPDATE repositories
-             SET import_state = 'rate_limited',
+             SET import_state = ?2,
                  diagnostic = 'GitHub rate limit exceeded',
-                 resume_at = ?2
+                 resume_at = ?3
              WHERE space_id = ?1",
-            params![space_id, resume_at],
+            params![space_id, StoredImportState::RateLimited.as_str(), resume_at],
         )?;
         if changed == 0 {
             return Err(StoreError::Invalid(
@@ -510,6 +581,23 @@ impl HistoryStore {
         self.summary(space_id)?.ok_or_else(|| {
             StoreError::Invalid("rate-limited repository disappeared from the ledger".into())
         })
+    }
+
+    pub fn retry_repository(&self, space_id: &str) -> Result<bool, StoreError> {
+        let connection = self.connection()?;
+        Ok(connection.execute(
+            "UPDATE repositories
+             SET import_state = ?2, diagnostic = NULL, resume_at = NULL
+             WHERE space_id = ?1
+               AND import_state IN (?3, ?4, ?5)",
+            params![
+                space_id,
+                StoredImportState::Building.as_str(),
+                StoredImportState::RateLimited.as_str(),
+                StoredImportState::Delayed.as_str(),
+                StoredImportState::Failed.as_str()
+            ],
+        )? > 0)
     }
 
     pub fn remove_repository(&self, space_id: &str) -> Result<bool, StoreError> {
@@ -525,6 +613,55 @@ impl HistoryStore {
             .lock()
             .map_err(|_| StoreError::Invalid("history connection lock is poisoned".into()))
     }
+}
+
+fn reconcile_creation_milestone(
+    transaction: &rusqlite::Transaction<'_>,
+    space_id: &str,
+    issue_id: &str,
+    issue_created_at: i64,
+) -> Result<(), StoreError> {
+    let mut statement = transaction.prepare(
+        "SELECT occurred_at, payload
+         FROM events
+         WHERE space_id = ?1 AND provider_issue_id = ?2
+         ORDER BY occurred_at, provider_event_id",
+    )?;
+    let rows = statement.query_map(params![space_id, issue_id], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut initial_milestone = None;
+    let mut saw_milestone_transition = false;
+    for row in rows {
+        let (occurred_at, payload) = row?;
+        let kind: HistoryEventKind = serde_json::from_str(&payload)?;
+        let HistoryEventKind::MilestoneChanged { from, to } = kind else {
+            continue;
+        };
+        initial_milestone = if from.is_some() {
+            from
+        } else if occurred_at == issue_created_at {
+            to
+        } else {
+            None
+        };
+        saw_milestone_transition = true;
+        break;
+    }
+    drop(statement);
+    if saw_milestone_transition {
+        let payload = serde_json::to_string(&HistoryEventKind::IssueCreated {
+            milestone: initial_milestone,
+        })?;
+        transaction.execute(
+            "UPDATE events
+             SET sequence = (SELECT COALESCE(MAX(sequence), 0) + 1 FROM events),
+                 payload = ?3
+             WHERE space_id = ?1 AND provider_event_id = ?2 AND payload <> ?3",
+            params![space_id, HistoryEvent::creation_id(issue_id), payload],
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_seed(seed: &RepositorySeed) -> Result<(), StoreError> {
@@ -675,17 +812,7 @@ fn summary(connection: &Connection, space_id: &str) -> Result<Option<HistorySumm
 }
 
 fn parse_state(state: &str) -> Result<HistoryImportState, StoreError> {
-    match state {
-        "unavailable" => Ok(HistoryImportState::Unavailable),
-        "building" => Ok(HistoryImportState::Building),
-        "complete" => Ok(HistoryImportState::Complete),
-        "delayed" => Ok(HistoryImportState::Delayed),
-        "rate_limited" => Ok(HistoryImportState::RateLimited),
-        "failed" => Ok(HistoryImportState::Failed),
-        _ => Err(StoreError::Invalid(format!(
-            "unknown history import state: {state}"
-        ))),
-    }
+    StoredImportState::parse(state).map(Into::into)
 }
 
 #[derive(Debug, thiserror::Error)]

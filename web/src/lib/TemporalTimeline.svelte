@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import type { HistoryEvent } from './history'
+  import { historyEventSummary, type HistoryEvent } from './history'
   import type { HistorySummary } from './model'
   import {
     PLAYBACK_SPEEDS,
@@ -60,12 +60,29 @@
     }).format(new Date(epoch * 1_000))
   }
 
-  function eventSummary(event: HistoryEvent): string {
-    if (event.kind === 'issue_created') return `#${event.issue_number} created`
-    if (event.kind === 'issue_closed') return `#${event.issue_number} closed`
-    if (event.kind === 'issue_reopened') return `#${event.issue_number} reopened`
-    if (event.to === null) return `#${event.issue_number} removed from milestone`
-    return `#${event.issue_number} moved to ${event.to.title}`
+  function verificationEvidence(): string {
+    return summary.verified_through === null
+      ? ''
+      : ` · History through ${formatDate(summary.verified_through)}`
+  }
+
+  function importStatus(): string {
+    if (summary.state === 'building') {
+      const activity = summary.verified_through === null ? 'Building history' : 'Updating history'
+      return `${activity} · ${summary.completed_issues}/${summary.total_issues} issues${verificationEvidence()}`
+    }
+    const state =
+      summary.state === 'rate_limited'
+        ? 'Rate limited'
+        : summary.state === 'delayed'
+          ? 'History delayed'
+          : summary.state === 'failed'
+            ? 'History import failed'
+            : 'History unavailable'
+    const diagnostic = summary.diagnostic === null ? '' : ` · ${summary.diagnostic}`
+    const retry =
+      summary.resume_at === null ? '' : ` · Retry after ${formatDate(summary.resume_at)}`
+    return `${state}${diagnostic}${retry}${verificationEvidence()}`
   }
 
   function stop(): void {
@@ -141,7 +158,7 @@
 
   function clusterLabel(cluster: EventTickCluster): string {
     const dates = cluster.times.map(formatDate).join(' to ')
-    return `${dates}: ${cluster.events.map(eventSummary).join('; ')}`
+    return `${dates}: ${cluster.events.map((event) => historyEventSummary(event)).join('; ')}`
   }
 
   onMount(() => {
@@ -158,13 +175,11 @@
 
 <section class="temporal-timeline" aria-label="Issue history timeline">
   {#if summary.state === 'building'}
-    <span class="timeline-state" role="status">
-      Building history · {summary.completed_issues}/{summary.total_issues} issues
-    </span>
+    <span class="timeline-state" role="status" aria-live="polite">{importStatus()}</span>
   {:else if summary.state === 'complete' && !hasHistory}
-    <span class="timeline-state" role="status">No issue history</span>
+    <span class="timeline-state" role="status" aria-live="polite">No issue history</span>
   {:else if summary.state !== 'complete'}
-    <span class="timeline-state" role="status">{summary.diagnostic ?? 'History unavailable'}</span>
+    <span class="timeline-state" role="status" aria-live="polite">{importStatus()}</span>
   {/if}
 
   {#if newActivity && playhead !== null}
@@ -212,7 +227,7 @@
         <strong>{tooltip.times.map(formatDate).join(' · ')}</strong>
         <ul>
           {#each tooltip.events as event}
-            <li>{eventSummary(event)}</li>
+            <li>{historyEventSummary(event)}</li>
           {/each}
         </ul>
       </div>
@@ -393,6 +408,16 @@
     output {
       grid-column: 1 / -1;
       min-width: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .temporal-timeline,
+    .event-tick,
+    button,
+    input {
+      scroll-behavior: auto;
+      transition: none;
     }
   }
 </style>

@@ -27,12 +27,15 @@ query FetchIssueHistory(
           hasNextPage
           endCursor
         }
-        nodes {
-          __typename
-          ... on ClosedEvent { id createdAt }
-          ... on ReopenedEvent { id createdAt }
-          ... on DemilestonedEvent { id createdAt milestoneTitle }
-          ... on MilestonedEvent { id createdAt milestoneTitle }
+        edges {
+          cursor
+          node {
+            __typename
+            ... on ClosedEvent { id createdAt }
+            ... on ReopenedEvent { id createdAt }
+            ... on DemilestonedEvent { id createdAt milestoneTitle }
+            ... on MilestonedEvent { id createdAt milestoneTitle }
+          }
         }
       }
     }
@@ -75,7 +78,10 @@ pub(crate) async fn fetch_history_page(
     }
 
     let mut events = Vec::new();
-    for node in issue.timeline_items.nodes {
+    let mut accepted_cursor = request.cursor.clone();
+    let mut reached_cutoff = false;
+    for edge in issue.timeline_items.edges {
+        let node = edge.node;
         let kind = match node.typename.as_str() {
             "ClosedEvent" => HistoryEventKind::IssueClosed,
             "ReopenedEvent" => HistoryEventKind::IssueReopened,
@@ -87,7 +93,10 @@ pub(crate) async fn fetch_history_page(
                 from: None,
                 to: Some(historical_milestone(request, &node)?),
             },
-            _ => continue,
+            _ => {
+                accepted_cursor = Some(edge.cursor);
+                continue;
+            }
         };
         let provider_event_id = node.id.ok_or_else(|| {
             contextual_message(
@@ -113,26 +122,33 @@ pub(crate) async fn fetch_history_page(
                         contextual_parse(request, "normalizing lifecycle event", error)
                     })
             })?;
-        if occurred_at <= request.cutoff {
-            events.push(HistoryEvent {
-                sequence: 0,
-                repository_id: repository.id.clone(),
-                issue_id: issue.id.clone(),
-                issue_number: request.issue_number,
-                provider_event_id,
-                occurred_at,
-                kind,
-            });
+        if occurred_at > request.cutoff {
+            reached_cutoff = true;
+            break;
         }
+        events.push(HistoryEvent {
+            sequence: 0,
+            repository_id: repository.id.clone(),
+            issue_id: issue.id.clone(),
+            issue_number: request.issue_number,
+            provider_event_id,
+            occurred_at,
+            kind,
+        });
+        accepted_cursor = Some(edge.cursor);
     }
     events.sort();
 
     let page_info = issue.timeline_items.page_info;
-    let resume_cursor = page_info
-        .end_cursor
-        .clone()
-        .or_else(|| request.cursor.clone());
-    let next_cursor = if page_info.has_next_page {
+    let resume_cursor = if reached_cutoff {
+        accepted_cursor
+    } else {
+        page_info
+            .end_cursor
+            .clone()
+            .or_else(|| request.cursor.clone())
+    };
+    let next_cursor = if page_info.has_next_page && !reached_cutoff {
         Some(page_info.end_cursor.clone().ok_or_else(|| {
             contextual_message(
                 request,
@@ -147,7 +163,7 @@ pub(crate) async fn fetch_history_page(
         events,
         next_cursor,
         resume_cursor,
-        complete: !page_info.has_next_page,
+        complete: reached_cutoff || !page_info.has_next_page,
     })
 }
 
@@ -222,7 +238,13 @@ struct Issue {
 #[serde(rename_all = "camelCase")]
 struct TimelineConnection {
     page_info: PageInfo,
-    nodes: Vec<TimelineNode>,
+    edges: Vec<TimelineEdge>,
+}
+
+#[derive(Deserialize)]
+struct TimelineEdge {
+    cursor: String,
+    node: TimelineNode,
 }
 
 #[derive(Deserialize)]

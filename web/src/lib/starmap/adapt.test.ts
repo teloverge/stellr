@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SpaceModel, Status } from '../model'
+import { projectTemporalSpace, type HistoryEvent } from '../history'
 import { edgesOf } from './layout'
 import { toRendererModel } from './adapt'
 
@@ -75,5 +76,31 @@ describe('toRendererModel', () => {
     const model = toRendererModel(input)
 
     expect(model[0].milestone).toBe('Launch <script>alert(1)</script>')
+  })
+
+  it('removes live workflow emphasis while preserving current dependency context', () => {
+    const input = space()
+    input.stars[0].labels = ['ready-for-agent']
+    const events: HistoryEvent[] = input.stars.map((star, index) => ({
+      sequence: index + 1,
+      repository_id: 'R_repo',
+      issue_id: `I_${star.number}`,
+      issue_number: star.number,
+      provider_event_id: `I_${star.number}:issue_created`,
+      occurred_at: 100,
+      kind: 'issue_created',
+      milestone: null,
+    }))
+
+    const model = toRendererModel(projectTemporalSpace(input, events, 100))
+
+    expect(model[0]).toMatchObject({
+      status: 'open',
+      frontier: false,
+      readyForAgent: false,
+      focusStatus: 'open',
+      historical: true,
+    })
+    expect(edgesOf(model)).toContainEqual({ from: 1, to: 5 })
   })
 })

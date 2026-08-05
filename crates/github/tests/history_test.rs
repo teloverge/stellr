@@ -35,39 +35,39 @@ async fn fetches_one_targeted_history_page_and_normalizes_tracked_events() {
                         "id": "I_78",
                         "timelineItems": {
                             "pageInfo": { "hasNextPage": true, "endCursor": "CUR2" },
-                            "nodes": [
-                                {
+                            "edges": [
+                                { "cursor": "EDGE1", "node": {
                                     "__typename": "ReopenedEvent",
                                     "id": "E_reopen",
                                     "createdAt": "2026-08-04T13:10:00Z"
-                                },
-                                {
+                                }},
+                                { "cursor": "EDGE2", "node": {
                                     "__typename": "AssignedEvent",
                                     "id": "E_ignore",
                                     "createdAt": "2026-08-04T13:05:00Z"
-                                },
-                                {
+                                }},
+                                { "cursor": "EDGE3", "node": {
                                     "__typename": "ClosedEvent",
                                     "id": "E_close",
                                     "createdAt": "2026-08-04T13:00:00Z"
-                                },
-                                {
+                                }},
+                                { "cursor": "EDGE4", "node": {
                                     "__typename": "DemilestonedEvent",
                                     "id": "E_demilestone",
                                     "createdAt": "2026-08-04T13:15:00Z",
                                     "milestoneTitle": "Alpha"
-                                },
-                                {
+                                }},
+                                { "cursor": "EDGE5", "node": {
                                     "__typename": "MilestonedEvent",
                                     "id": "E_milestone",
                                     "createdAt": "2026-08-04T13:15:00Z",
                                     "milestoneTitle": "Beta"
-                                },
-                                {
+                                }},
+                                { "cursor": "EDGE6", "node": {
                                     "__typename": "ClosedEvent",
                                     "id": "E_after_cutoff",
                                     "createdAt": "2026-08-04T14:00:00Z"
-                                }
+                                }}
                             ]
                         }
                     }
@@ -95,9 +95,9 @@ async fn fetches_one_targeted_history_page_and_normalizes_tracked_events() {
     assert_eq!(body["variables"]["name"], "r");
     assert_eq!(body["variables"]["number"], 78);
     assert_eq!(body["variables"]["cursor"], "CUR1");
-    assert_eq!(page.next_cursor.as_deref(), Some("CUR2"));
-    assert_eq!(page.resume_cursor.as_deref(), Some("CUR2"));
-    assert!(!page.complete);
+    assert_eq!(page.next_cursor, None);
+    assert_eq!(page.resume_cursor.as_deref(), Some("EDGE5"));
+    assert!(page.complete);
     assert_eq!(page.events.len(), 4);
     assert_eq!(page.events[0].provider_event_id, "E_close");
     assert!(matches!(page.events[0].kind, HistoryEventKind::IssueClosed));
@@ -143,7 +143,7 @@ async fn preserves_the_terminal_cursor_for_delta_only_resume() {
                         "id": "I_78",
                         "timelineItems": {
                             "pageInfo": { "hasNextPage": false, "endCursor": "CUR_END" },
-                            "nodes": []
+                            "edges": []
                         }
                     }
                 }
@@ -176,10 +176,13 @@ async fn malformed_tracked_event_reports_issue_cursor_and_stage() {
                         "id": "I_78",
                         "timelineItems": {
                             "pageInfo": { "hasNextPage": false, "endCursor": null },
-                            "nodes": [{
-                                "__typename": "ClosedEvent",
-                                "id": null,
-                                "createdAt": "2026-08-04T13:00:00Z"
+                            "edges": [{
+                                "cursor": "EDGE1",
+                                "node": {
+                                    "__typename": "ClosedEvent",
+                                    "id": null,
+                                    "createdAt": "2026-08-04T13:00:00Z"
+                                }
                             }]
                         }
                     }
@@ -218,11 +221,14 @@ async fn malformed_milestone_event_reports_issue_cursor_and_stage() {
                         "id": "I_78",
                         "timelineItems": {
                             "pageInfo": { "hasNextPage": false, "endCursor": null },
-                            "nodes": [{
-                                "__typename": "MilestonedEvent",
-                                "id": "E_milestone",
-                                "createdAt": "2026-08-04T13:00:00Z",
-                                "milestoneTitle": null
+                            "edges": [{
+                                "cursor": "EDGE1",
+                                "node": {
+                                    "__typename": "MilestonedEvent",
+                                    "id": "E_milestone",
+                                    "createdAt": "2026-08-04T13:00:00Z",
+                                    "milestoneTitle": null
+                                }
                             }]
                         }
                     }

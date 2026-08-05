@@ -86,7 +86,13 @@ function render(props: ComponentProps<typeof TemporalTimeline>) {
 describe('TemporalTimeline creation scrubber', () => {
   it('stays visible but disabled with determinate import progress', () => {
     const target = render({
-      summary: { ...complete, state: 'building', completed_issues: 3, total_issues: 10 },
+      summary: {
+        ...complete,
+        state: 'building',
+        completed_issues: 3,
+        total_issues: 10,
+        verified_through: null,
+      },
       events: [],
       playhead: null,
     })
@@ -103,7 +109,58 @@ describe('TemporalTimeline creation scrubber', () => {
     })
 
     expect(target.querySelector('input[type="range"]')).toHaveProperty('disabled', false)
-    expect(target.textContent).toContain('Building history · 1/2 issues')
+    expect(target.textContent).toContain('Updating history · 1/2 issues')
+    expect(target.textContent).toContain('History through')
+  })
+
+  it('reports rate-limit reset evidence without disabling verified playback', () => {
+    const target = render({
+      summary: {
+        ...complete,
+        state: 'rate_limited',
+        diagnostic: 'GitHub rate limit exceeded',
+        resume_at: 300,
+      },
+      events,
+      playhead: null,
+    })
+
+    const status = target.querySelector('[role="status"]')
+    expect(status?.textContent).toContain('GitHub rate limit exceeded')
+    expect(status?.textContent).toContain('Retry after')
+    expect(status?.textContent).toContain('History through')
+    expect(target.querySelector('input[type="range"]')).toHaveProperty('disabled', false)
+  })
+
+  it('keeps persistent accessible names across enabled and unavailable states', () => {
+    const enabled = render({ summary: complete, events, playhead: null })
+    expect(enabled.querySelector('input[type="range"]')?.getAttribute('aria-label')).toBe(
+      'Issue history date',
+    )
+    expect(enabled.querySelector('[data-control="play"]')?.getAttribute('aria-label')).toBe(
+      'Play issue history',
+    )
+    expect(enabled.querySelector('[data-control="speed"]')?.getAttribute('aria-label')).toContain(
+      'Playback speed',
+    )
+
+    const unavailable = render({
+      summary: {
+        ...complete,
+        state: 'failed',
+        earliest_event_at: null,
+        verified_through: null,
+        diagnostic: 'History unavailable offline',
+      },
+      events: [],
+      playhead: null,
+    })
+    expect(unavailable.querySelector('input[type="range"]')?.getAttribute('aria-label')).toBe(
+      'Issue history date',
+    )
+    expect(unavailable.querySelector('[data-control="play"]')?.getAttribute('aria-label')).toBe(
+      'Play issue history',
+    )
   })
 
   it('reports an empty complete ledger without enabling a slider', () => {

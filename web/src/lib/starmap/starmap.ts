@@ -29,7 +29,7 @@ import {
   type WorkflowVisualState,
 } from './workflow-visual'
 import type { Ticket } from './model'
-import type { HistoryEvent } from '../history'
+import { historyEventSummary, type HistoryEvent } from '../history'
 
 export type SelectHandler = (num: number | null) => void
 
@@ -47,6 +47,7 @@ interface RenderEdge extends WorkflowEdge {
   state: WorkflowVisualState
   satisfied: boolean
   reverseExists: boolean
+  historical: boolean
 }
 
 interface Node {
@@ -292,6 +293,7 @@ export class StarMap {
   #tickerAt = -1e9
 
   #focus: Focus = analyzeFocus([], null)
+  #historical = false
   // The solved label layout, held between frames. Rebuilt only when its inputs
   // change (see #drawLabels); `#labelEpoch` is what a model push bumps to say the
   // text or the colours moved under it.
@@ -351,6 +353,9 @@ export class StarMap {
     // Titles and statuses can both move under a push, and both feed the label
     // solve — retire the cached one either way.
     this.#labelEpoch++
+    const historical = tickets.some((ticket) => ticket.historical === true)
+    const historicalTransition = historical !== this.#historical
+    this.#historical = historical
     const priorFocus = focusSignature(this.#focus)
     this.#focus = analyzeFocus(tickets, currentIssue)
     const focusChanged = priorFocus !== focusSignature(this.#focus)
@@ -377,7 +382,7 @@ export class StarMap {
       }
       if (changed.length) this.#tick(changed.join('   ·   '))
       this.#refreshEdges(tickets)
-      if (focusChanged) {
+      if (focusChanged && !historicalTransition) {
         this.#refit(false)
         this.#settleIfHeadless()
       }
@@ -417,6 +422,7 @@ export class StarMap {
   }
 
   #refreshEdges(tickets: Ticket[]): void {
+    const historical = tickets.some((ticket) => ticket.historical === true)
     const byNum = new Map(tickets.map((ticket) => [ticket.num, ticket]))
     const edges = workflowEdges(tickets)
     const reverseEdges = reverseEdgeKeys(edges)
@@ -430,6 +436,7 @@ export class StarMap {
       state: workflowVisualState(edge, byNum),
       satisfied: this.#resolved.has(edge.from),
       reverseExists: reverseEdges.has(edgeKey(edge.from, edge.to)),
+      historical,
       }))
   }
 
@@ -564,7 +571,7 @@ export class StarMap {
         if (node) node.flare = 1
       }
     }
-    const summaries = events.map(historyCaption)
+    const summaries = events.map((event) => historyEventSummary(event, 2))
     const caption =
       summaries.length <= 3
         ? summaries.join('   ·   ')
@@ -1065,7 +1072,11 @@ export class StarMap {
     g.quadraticCurveTo(cx, cy, bx, by)
     g.lineCap = 'round'
     const usesResolvedStyle = mini ? e.state !== 'incomplete' : e.satisfied
-    if (usesResolvedStyle) {
+    if (e.historical) {
+      g.strokeStyle = 'rgba(174,192,218,0.32)'
+      g.lineWidth = 1.5
+      g.setLineDash([4, 8])
+    } else if (usesResolvedStyle) {
       g.strokeStyle = 'rgba(190,225,200,0.82)'
       g.lineWidth = 3
       g.setLineDash([])
@@ -1082,7 +1093,7 @@ export class StarMap {
     g.setLineDash([])
     // A satisfied edge (blocker resolved) flows particles blocker→dependent, so
     // the frontier visibly ignites as paths clear (starmap-design.md dec. 5).
-    if (mini ? e.state === 'traversed' : e.satisfied) {
+    if (!e.historical && (mini ? e.state === 'traversed' : e.satisfied)) {
       for (let k = 0; k < 3; k++) {
         const u = mod(this.#clock * 0.1 + k / 3 + (e.from * 0.13 + e.to * 0.07), 1),
           m = 1 - u
@@ -1117,7 +1128,13 @@ export class StarMap {
     g.lineTo(tipx - ux * ah + px * aw, tipy - uy * ah + py * aw)
     g.lineTo(tipx - ux * ah - px * aw, tipy - uy * ah - py * aw)
     g.closePath()
-    g.fillStyle = usesResolvedStyle ? '#d9f3df' : mini ? '#c7b8ff' : '#c8d5e8'
+    g.fillStyle = e.historical
+      ? 'rgba(174,192,218,0.5)'
+      : usesResolvedStyle
+        ? '#d9f3df'
+        : mini
+          ? '#c7b8ff'
+          : '#c8d5e8'
     g.fill()
   }
 
@@ -1505,15 +1522,6 @@ export class StarMap {
     }
     return { key, fs, items }
   }
-}
-
-function historyCaption(event: HistoryEvent): string {
-  const issue = `#${event.issue_number.toString().padStart(2, '0')}`
-  if (event.kind === 'issue_created') return `${issue} created`
-  if (event.kind === 'issue_closed') return `${issue} closed`
-  if (event.kind === 'issue_reopened') return `${issue} reopened`
-  if (event.to === null) return `${issue} removed from milestone`
-  return `${issue} moved to ${event.to.title}`
 }
 
 function now(): number {

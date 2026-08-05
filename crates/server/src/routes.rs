@@ -113,6 +113,13 @@ async fn remove_space(State(state): State<Arc<AppState>>, Path(id): Path<String>
             .into_response();
     }
     drop(spaces);
+    if let Err(error) = state.history.remove_repository(&id) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("space was removed, but its history could not be deleted: {error}"),
+        )
+            .into_response();
+    }
     state.refresh.notify_one();
     StatusCode::NO_CONTENT.into_response()
 }
@@ -180,6 +187,9 @@ async fn refresh_space(State(state): State<Arc<AppState>>, Path(id): Path<String
         .any(|entry| entry.id == id)
     {
         return StatusCode::NOT_FOUND;
+    }
+    if state.history.retry_repository(&id).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
     state.refresh.notify_one();
     StatusCode::OK

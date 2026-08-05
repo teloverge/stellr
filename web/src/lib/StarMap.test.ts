@@ -7,7 +7,7 @@ import { flushSync, mount, unmount } from 'svelte'
 import StarMap from './StarMap.svelte'
 import StarMapTestHost from './StarMap.test-host.svelte'
 import type { SpaceModel } from './model'
-import type { HistoryEvent } from './history'
+import { projectTemporalSpace, type HistoryEvent } from './history'
 import { StarMap as Renderer } from './starmap/starmap'
 
 const mounted: object[] = []
@@ -147,6 +147,43 @@ describe('StarMap wrapper', () => {
 
     expect(setModel).toHaveBeenLastCalledWith(
       [expect.objectContaining({ num: 42 })],
+      {},
+      14,
+    )
+  })
+
+  it('labels current dependencies and suppresses live focus in historical mode', () => {
+    const setModel = vi.spyOn(Renderer.prototype, 'setModel')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const input = space(42)
+    const historical = projectTemporalSpace(
+      input,
+      [
+        {
+          sequence: 1,
+          repository_id: 'R_repo',
+          issue_id: 'I_42',
+          issue_number: 42,
+          provider_event_id: 'I_42:issue_created',
+          occurred_at: 100,
+          kind: 'issue_created',
+          milestone: null,
+        },
+      ],
+      100,
+    )
+
+    const component = mount(StarMap, {
+      target,
+      props: { space: historical, currentIssue: 14 },
+    })
+    mounted.push(component)
+    flushSync()
+
+    expect(target.textContent).toContain('Current dependencies')
+    expect(setModel).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ num: 42, historical: true, frontier: false })],
       {},
       14,
     )

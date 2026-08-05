@@ -201,6 +201,40 @@ fn checkpoints_lifecycle_pages_atomically_and_resumes_without_duplicates() {
 }
 
 #[test]
+fn interrupted_import_resumes_from_the_last_checkpoint_after_reopening() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("history.sqlite3");
+    let store = HistoryStore::open(&path).unwrap();
+    store
+        .initialize_repository(&RepositorySeed {
+            space_id: "octocat-hello".into(),
+            provider_repository_id: "R_repo".into(),
+            verified_through: 500,
+            timeline_required: true,
+            issues: vec![issue("I_1", 1, 100, 400, None)],
+        })
+        .unwrap();
+    store
+        .checkpoint_page(&PageCheckpoint {
+            space_id: "octocat-hello".into(),
+            issue_id: "I_1".into(),
+            events: vec![],
+            next_cursor: Some("CUR_PAGE_2".into()),
+            resume_cursor: Some("CUR_PAGE_2".into()),
+            complete: false,
+        })
+        .unwrap();
+    drop(store);
+
+    let reopened = HistoryStore::open(&path).unwrap();
+    let pending = reopened.pending_issue("octocat-hello").unwrap().unwrap();
+
+    assert_eq!(pending.issue_id, "I_1");
+    assert_eq!(pending.cursor.as_deref(), Some("CUR_PAGE_2"));
+    assert_eq!(pending.cutoff, 500);
+}
+
+#[test]
 fn completed_ledgers_verify_once_then_request_only_new_or_changed_issues() {
     let temp = tempfile::tempdir().unwrap();
     let store = HistoryStore::open(temp.path().join("history.sqlite3")).unwrap();
@@ -273,6 +307,84 @@ fn completed_ledgers_verify_once_then_request_only_new_or_changed_issues() {
 }
 
 #[test]
+fn first_milestone_transition_corrects_present_day_creation_membership() {
+    let store = HistoryStore::open_in_memory().unwrap();
+    let initial = store
+        .initialize_repository(&RepositorySeed {
+            space_id: "octocat-hello".into(),
+            provider_repository_id: "R_repo".into(),
+            verified_through: 500,
+            timeline_required: true,
+            issues: vec![issue("I_1", 1, 100, 400, Some(("M_now", "Now")))],
+        })
+        .unwrap();
+    let corrected = store
+        .checkpoint_page(&PageCheckpoint {
+            space_id: "octocat-hello".into(),
+            issue_id: "I_1".into(),
+            events: vec![HistoryEvent {
+                sequence: 0,
+                repository_id: "R_repo".into(),
+                issue_id: "I_1".into(),
+                issue_number: 1,
+                provider_event_id: "E_milestone".into(),
+                occurred_at: 200,
+                kind: HistoryEventKind::MilestoneChanged {
+                    from: None,
+                    to: Some(MilestoneRef {
+                        id: None,
+                        title: "Now".into(),
+                    }),
+                },
+            }],
+            next_cursor: None,
+            resume_cursor: Some("CUR_END".into()),
+            complete: true,
+        })
+        .unwrap();
+
+    let creation = store.events_after("octocat-hello", 0).unwrap().remove(0);
+    assert_eq!(
+        creation.kind,
+        HistoryEventKind::IssueCreated { milestone: None }
+    );
+    assert!(creation.sequence > initial.revision);
+    assert_eq!(corrected.revision, creation.sequence);
+}
+
+#[test]
+fn later_snapshot_pages_cannot_hide_activity_after_the_frozen_cutoff() {
+    let store = HistoryStore::open_in_memory().unwrap();
+    let seed = |verified_through| RepositorySeed {
+        space_id: "octocat-hello".into(),
+        provider_repository_id: "R_repo".into(),
+        verified_through,
+        timeline_required: true,
+        issues: vec![issue("I_1", 1, 600, 600, None)],
+    };
+    store.initialize_repository(&seed(500)).unwrap();
+    assert!(store.events_after("octocat-hello", 0).unwrap().is_empty());
+    store
+        .checkpoint_page(&PageCheckpoint {
+            space_id: "octocat-hello".into(),
+            issue_id: "I_1".into(),
+            events: vec![],
+            next_cursor: None,
+            resume_cursor: Some("CUR_BEFORE_FUTURE".into()),
+            complete: true,
+        })
+        .unwrap();
+
+    let catch_up = store.initialize_repository(&seed(700)).unwrap();
+    let pending = store.pending_issue("octocat-hello").unwrap().unwrap();
+
+    assert_eq!(catch_up.state, HistoryImportState::Building);
+    assert_eq!(pending.cursor.as_deref(), Some("CUR_BEFORE_FUTURE"));
+    assert_eq!(pending.cutoff, 700);
+    assert_eq!(store.events_after("octocat-hello", 0).unwrap().len(), 1);
+}
+
+#[test]
 fn rate_limit_evidence_preserves_pending_work_and_resume_time() {
     let temp = tempfile::tempdir().unwrap();
     let store = HistoryStore::open(temp.path().join("history.sqlite3")).unwrap();
@@ -302,6 +414,13 @@ fn rate_limit_evidence_preserves_pending_work_and_resume_time() {
             .issue_id,
         "I_1"
     );
+
+    assert!(store.retry_repository("octocat-hello").unwrap());
+    let retried = store.summary("octocat-hello").unwrap().unwrap();
+    assert_eq!(retried.state, HistoryImportState::Building);
+    assert_eq!(retried.resume_at, None);
+    assert_eq!(retried.diagnostic, None);
+    assert!(store.pending_issue("octocat-hello").unwrap().is_some());
 }
 
 #[test]
@@ -372,4 +491,59 @@ fn schema_one_creation_ledgers_reopen_for_lifecycle_backfill() {
     assert_eq!(pending.issue_id, "I_1");
     assert_eq!(pending.cutoff, 500);
     assert_eq!(store.events_after("octocat-hello", 0).unwrap().len(), 1);
+}
+
+#[test]
+fn failed_migration_rolls_back_without_mutating_the_existing_ledger() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("history.sqlite3");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA user_version = 2;
+             CREATE TABLE repositories (
+                 space_id TEXT PRIMARY KEY,
+                 provider_repository_id TEXT NOT NULL,
+                 import_state TEXT NOT NULL,
+                 total_issues INTEGER NOT NULL,
+                 completed_issues INTEGER NOT NULL,
+                 verified_through INTEGER,
+                 diagnostic TEXT,
+                 resume_at INTEGER,
+                 cutoff INTEGER,
+                 catch_up_required INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE events (
+                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                 space_id TEXT NOT NULL,
+                 provider_event_id TEXT NOT NULL,
+                 provider_issue_id TEXT NOT NULL,
+                 issue_number INTEGER NOT NULL,
+                 occurred_at INTEGER NOT NULL,
+                 payload TEXT NOT NULL
+             );
+             INSERT INTO repositories VALUES
+                 ('octocat-hello', 'R_repo', 'complete', 1, 1, 500, NULL, NULL, 500, 0);
+             INSERT INTO events (
+                 space_id, provider_event_id, provider_issue_id, issue_number,
+                 occurred_at, payload
+             ) VALUES (
+                 'octocat-hello', 'I_1:issue_created', 'I_1', 1, 100,
+                 '{\"kind\":\"issue_created\",\"milestone\":null}'
+             );",
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(HistoryStore::open(&path).is_err());
+
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    let events: i64 = connection
+        .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    assert_eq!(events, 1);
 }

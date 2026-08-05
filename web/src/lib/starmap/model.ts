@@ -21,6 +21,7 @@ export interface Ticket {
   visible?: boolean
   focusStatus?: TicketStatus
   milestone?: string | null
+  historical?: boolean
 }
 
 export interface Map {

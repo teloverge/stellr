@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Hardened temporal playback with provider-backed verification cutoffs,
+  cutoff-safe cursors, native offline restarts, durable import resume, migration
+  rollback, space-scoped deletion, bounded rate-limit retry, neutral historical
+  workflow styling, accessible status text, focus, and narrow layouts.
 - Added delta-only background history synchronization using ordinary snapshot
   metadata, resumable per-issue cursors, catch-up verification, rate-limit reset
   evidence, idempotent client merging, and a pinned-past New activity action.

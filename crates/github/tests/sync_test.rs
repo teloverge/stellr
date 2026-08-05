@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use stellr_core::{IssueState, MilestoneRef, Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{IssueState, Provider, ProviderError, RawIssue, RepoRef};
 use stellr_github::sync::GithubProvider;
 use wiremock::matchers::{body_partial_json, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -97,32 +97,36 @@ async fn snapshot_piggybacks_stable_history_metadata_on_the_issue_query() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/graphql"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": {
-                "repository": {
-                    "id": "R_repo",
-                    "issues": {
-                        "pageInfo": { "hasNextPage": false, "endCursor": null },
-                        "nodes": [{
-                            "id": "I_78",
-                            "number": 78,
-                            "createdAt": "2026-08-04T12:00:00Z",
-                            "updatedAt": "2026-08-04T13:00:00Z",
-                            "title": "History",
-                            "body": "",
-                            "url": "https://example.test/o/r/issues/78",
-                            "state": "OPEN",
-                            "stateReason": null,
-                            "assignees": { "nodes": [] },
-                            "milestone": { "id": "M_1", "title": "M1" },
-                            "labels": { "nodes": [] },
-                            "blockedBy": { "nodes": [] },
-                            "parent": null
-                        }]
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("date", "Tue, 04 Aug 2026 13:30:00 GMT")
+                .set_body_json(json!({
+                    "data": {
+                        "repository": {
+                            "id": "R_repo",
+                            "issues": {
+                                "pageInfo": { "hasNextPage": false, "endCursor": null },
+                                "nodes": [{
+                                    "id": "I_78",
+                                    "number": 78,
+                                    "createdAt": "2026-08-04T12:00:00Z",
+                                    "updatedAt": "2026-08-04T13:00:00Z",
+                                    "title": "History",
+                                    "body": "",
+                                    "url": "https://example.test/o/r/issues/78",
+                                    "state": "OPEN",
+                                    "stateReason": null,
+                                    "assignees": { "nodes": [] },
+                                    "milestone": { "id": "M_1", "title": "M1" },
+                                    "labels": { "nodes": [] },
+                                    "blockedBy": { "nodes": [] },
+                                    "parent": null
+                                }]
+                            }
+                        }
                     }
-                }
-            }
-        })))
+                })),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -140,19 +144,14 @@ async fn snapshot_piggybacks_stable_history_metadata_on_the_issue_query() {
     assert!(query.contains("updatedAt"));
     let snapshot = result.unwrap();
     assert_eq!(snapshot.repository_id.as_deref(), Some("R_repo"));
+    assert_eq!(snapshot.history_cutoff, Some(1_785_850_200));
     assert_eq!(snapshot.issues.len(), 1);
     assert_eq!(snapshot.history.len(), 1);
     assert_eq!(snapshot.history[0].issue_id, "I_78");
     assert_eq!(snapshot.history[0].number, 78);
     assert_eq!(snapshot.history[0].created_at, 1_785_844_800);
     assert_eq!(snapshot.history[0].updated_at, 1_785_848_400);
-    assert_eq!(
-        snapshot.history[0].milestone,
-        Some(MilestoneRef {
-            id: Some("M_1".into()),
-            title: "M1".into(),
-        })
-    );
+    assert_eq!(snapshot.history[0].milestone, None);
 }
 
 #[tokio::test]
@@ -196,6 +195,31 @@ async fn fetch_maps_rate_limit_exhaustion_with_its_reset_time() {
         error,
         ProviderError::RateLimited {
             reset_epoch: Some(1_753_000_000)
+        }
+    ));
+}
+
+#[tokio::test]
+async fn fetch_maps_secondary_rate_limit_retry_after_without_budget_headers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("date", "Tue, 04 Aug 2026 13:30:00 GMT")
+                .insert_header("retry-after", "120")
+                .set_body_json(json!({ "message": "slow down" })),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    assert!(matches!(
+        error,
+        ProviderError::RateLimited {
+            reset_epoch: Some(1_785_850_320)
         }
     ));
 }

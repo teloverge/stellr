@@ -26,6 +26,7 @@ async fn current_only_providers_get_a_backward_compatible_snapshot() {
         snapshot,
         ProviderSnapshot {
             repository_id: None,
+            history_cutoff: None,
             issues: Vec::new(),
             history: Vec::new(),
         }
