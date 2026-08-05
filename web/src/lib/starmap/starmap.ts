@@ -54,6 +54,7 @@ interface Node {
   type: string
   parentIssue: number | null
   visible: boolean
+  milestone: string | null
   vstate: VisualState
   // The session overlay riding this star, or null when no session speaks for it
   // (ticket 13). Strictly additive: it never touches layout or the base star.
@@ -231,6 +232,15 @@ function clamp(v: number, a: number, b: number): number {
   return v < a ? a : v > b ? b : v
 }
 
+function milestoneHue(title: string): number {
+  let hash = 2166136261
+  for (const codePoint of title) {
+    hash ^= codePoint.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 16777619)
+  }
+  return Math.abs(hash) % 360
+}
+
 function focusSignature(focus: Focus): string {
   return [
     focus.current ?? '',
@@ -354,6 +364,7 @@ export class StarMap {
         n.title = t.title
         n.type = t.type
         n.visible = t.visible !== false
+        n.milestone = t.milestone ?? null
         const vstate = visualState(t)
         const sstate = sessions[t.num] ?? null
         if (vstate !== n.vstate || sstate !== n.sstate) {
@@ -388,6 +399,7 @@ export class StarMap {
         type: t.type,
         parentIssue: t.parentIssue,
         visible: t.visible !== false,
+        milestone: t.milestone ?? null,
         vstate: visualState(t),
         sstate: sessions[t.num] ?? null,
         x: p.x,
@@ -539,6 +551,18 @@ export class StarMap {
     const out: Record<number, SessionState> = {}
     for (const n of this.#nodes) if (n.sstate) out[n.num] = n.sstate
     return out
+  }
+
+  // Temporal milestone membership, grouped exactly as the hull renderer sees
+  // it. Membership is visual state only: it never participates in layout.
+  milestoneMemberships(): Record<string, number[]> {
+    const out: Record<string, number[]> = {}
+    for (const n of this.#nodes) {
+      if (!n.visible || n.milestone === null) continue
+      ;(out[n.milestone] ??= []).push(n.num)
+    }
+    for (const members of Object.values(out)) members.sort((a, b) => a - b)
+    return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)))
   }
 
   // The live ticker line, or null once it has faded — one line per pushed change.
@@ -904,6 +928,7 @@ export class StarMap {
     g.translate(this.#cam.x, this.#cam.y)
     g.scale(this.#cam.s, this.#cam.s)
     const focused = this.#focus.emphasized.size > 0
+    this.#drawMilestoneHulls(g)
     for (const e of this.#edges) {
       g.save()
       if (focused && !this.#focus.pathEdges.has(edgeKey(e.from, e.to))) {
@@ -922,6 +947,48 @@ export class StarMap {
     g.restore()
     this.#drawLabels(g)
     this.#drawTicker(g)
+  }
+
+  #drawMilestoneHulls(g: CanvasRenderingContext2D): void {
+    const groups = new Map<string, Node[]>()
+    for (const n of this.#nodes) {
+      if (!n.visible || n.milestone === null) continue
+      const members = groups.get(n.milestone) ?? []
+      members.push(n)
+      groups.set(n.milestone, members)
+    }
+
+    for (const [title, members] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+      const minX = Math.min(...members.map((member) => member.x)) - 34
+      const maxX = Math.max(...members.map((member) => member.x)) + 34
+      const minY = Math.min(...members.map((member) => member.y)) - 30
+      const maxY = Math.max(...members.map((member) => member.y)) + 34
+      const radius = Math.min(18, (maxX - minX) / 2, (maxY - minY) / 2)
+      const hue = milestoneHue(title)
+
+      g.beginPath()
+      g.moveTo(minX + radius, minY)
+      g.lineTo(maxX - radius, minY)
+      g.quadraticCurveTo(maxX, minY, maxX, minY + radius)
+      g.lineTo(maxX, maxY - radius)
+      g.quadraticCurveTo(maxX, maxY, maxX - radius, maxY)
+      g.lineTo(minX + radius, maxY)
+      g.quadraticCurveTo(minX, maxY, minX, maxY - radius)
+      g.lineTo(minX, minY + radius)
+      g.quadraticCurveTo(minX, minY, minX + radius, minY)
+      g.closePath()
+      g.fillStyle = `hsla(${hue}, 70%, 62%, 0.08)`
+      g.fill()
+      g.strokeStyle = `hsla(${hue}, 72%, 72%, 0.42)`
+      g.lineWidth = 1.5
+      g.setLineDash([5, 5])
+      g.stroke()
+      g.setLineDash([])
+      g.font = '10px ui-sans-serif,system-ui,sans-serif'
+      g.textAlign = 'left'
+      g.fillStyle = `hsla(${hue}, 78%, 82%, 0.9)`
+      g.fillText(title, minX + 10, minY + 15)
+    }
   }
 
   #drawEdge(g: CanvasRenderingContext2D, e: RenderEdge): void {

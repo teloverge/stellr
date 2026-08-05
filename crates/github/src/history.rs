@@ -1,7 +1,8 @@
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use stellr_core::{
-    HistoryEvent, HistoryEventKind, HistoryPage, HistoryPageRequest, ProviderError, RepoRef,
+    HistoryEvent, HistoryEventKind, HistoryPage, HistoryPageRequest, MilestoneRef, ProviderError,
+    RepoRef,
 };
 
 use crate::sync::GithubGraphqlClient;
@@ -20,7 +21,7 @@ query FetchIssueHistory(
       timelineItems(
         first: 100
         after: $cursor
-        itemTypes: [CLOSED_EVENT, REOPENED_EVENT]
+        itemTypes: [CLOSED_EVENT, REOPENED_EVENT, DEMILESTONED_EVENT, MILESTONED_EVENT]
       ) {
         pageInfo {
           hasNextPage
@@ -30,6 +31,8 @@ query FetchIssueHistory(
           __typename
           ... on ClosedEvent { id createdAt }
           ... on ReopenedEvent { id createdAt }
+          ... on DemilestonedEvent { id createdAt milestoneTitle }
+          ... on MilestonedEvent { id createdAt milestoneTitle }
         }
       }
     }
@@ -76,6 +79,14 @@ pub(crate) async fn fetch_history_page(
         let kind = match node.typename.as_str() {
             "ClosedEvent" => HistoryEventKind::IssueClosed,
             "ReopenedEvent" => HistoryEventKind::IssueReopened,
+            "DemilestonedEvent" => HistoryEventKind::MilestoneChanged {
+                from: Some(historical_milestone(request, &node)?),
+                to: None,
+            },
+            "MilestonedEvent" => HistoryEventKind::MilestoneChanged {
+                from: None,
+                to: Some(historical_milestone(request, &node)?),
+            },
             _ => continue,
         };
         let provider_event_id = node.id.ok_or_else(|| {
@@ -133,6 +144,20 @@ pub(crate) async fn fetch_history_page(
         next_cursor,
         complete: !page_info.has_next_page,
     })
+}
+
+fn historical_milestone(
+    request: &HistoryPageRequest,
+    node: &TimelineNode,
+) -> Result<MilestoneRef, ProviderError> {
+    let title = node.milestone_title.clone().ok_or_else(|| {
+        contextual_message(
+            request,
+            "normalizing milestone event",
+            "tracked event is missing its milestone title",
+        )
+    })?;
+    Ok(MilestoneRef { id: None, title })
 }
 
 fn contextual_parse(
@@ -209,4 +234,5 @@ struct TimelineNode {
     typename: String,
     id: Option<String>,
     created_at: Option<String>,
+    milestone_title: Option<String>,
 }

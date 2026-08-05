@@ -117,7 +117,7 @@ impl HistoryStore {
             let (milestone_id, milestone_title) = issue
                 .milestone
                 .as_ref()
-                .map(|milestone| (Some(milestone.id.as_str()), Some(milestone.title.as_str())))
+                .map(|milestone| (milestone.id.as_deref(), Some(milestone.title.as_str())))
                 .unwrap_or((None, None));
             transaction.execute(
                 "INSERT INTO issues (

@@ -20,6 +20,7 @@ export interface Ticket {
   readyForAgent?: boolean
   visible?: boolean
   focusStatus?: TicketStatus
+  milestone?: string | null
 }
 
 export interface Map {

@@ -67,4 +67,13 @@ describe('toRendererModel', () => {
       false,
     ])
   })
+
+  it('passes temporal milestone membership to the renderer', () => {
+    const input = space()
+    input.stars[0].milestone = 'Launch <script>alert(1)</script>'
+
+    const model = toRendererModel(input)
+
+    expect(model[0].milestone).toBe('Launch <script>alert(1)</script>')
+  })
 })

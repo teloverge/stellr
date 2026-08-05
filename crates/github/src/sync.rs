@@ -248,7 +248,7 @@ fn map_snapshot(repository_id: Option<String>, nodes: Vec<IssueNode>) -> Provide
             created_at: node.created_at.timestamp(),
             updated_at: node.updated_at.timestamp(),
             milestone: node.milestone.as_ref().map(|milestone| MilestoneRef {
-                id: milestone.id.clone(),
+                id: Some(milestone.id.clone()),
                 title: milestone.title.clone(),
             }),
         });

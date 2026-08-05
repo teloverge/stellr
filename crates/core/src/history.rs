@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MilestoneRef {
-    pub id: String,
+    pub id: Option<String>,
     pub title: String,
 }
 

@@ -43,7 +43,7 @@ fn creation_events_serialize_with_minimal_provider_evidence() {
         occurred_at: 1_754_300_000,
         kind: HistoryEventKind::IssueCreated {
             milestone: Some(MilestoneRef {
-                id: "M_v1".into(),
+                id: Some("M_v1".into()),
                 title: "v1".into(),
             }),
         },

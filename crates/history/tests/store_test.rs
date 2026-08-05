@@ -16,7 +16,7 @@ fn issue(
         created_at,
         updated_at,
         milestone: milestone.map(|(id, title)| MilestoneRef {
-            id: id.into(),
+            id: Some(id.into()),
             title: title.into(),
         }),
     }
@@ -51,7 +51,7 @@ fn initializes_creation_history_idempotently_and_reads_ordered_deltas() {
         &first_events[0].kind,
         HistoryEventKind::IssueCreated {
             milestone: Some(milestone)
-        } if milestone.id == "M_v1" && milestone.title == "v1"
+        } if milestone.id.as_deref() == Some("M_v1") && milestone.title == "v1"
     ));
     assert_eq!(first_summary.state, HistoryImportState::Complete);
     assert_eq!(first_summary.completed_issues, 2);
@@ -130,6 +130,17 @@ fn checkpoints_lifecycle_pages_atomically_and_resumes_without_duplicates() {
         events: vec![
             event("E_reopen", 300, HistoryEventKind::IssueReopened),
             event("E_close", 200, HistoryEventKind::IssueClosed),
+            event(
+                "E_milestone",
+                250,
+                HistoryEventKind::MilestoneChanged {
+                    from: None,
+                    to: Some(MilestoneRef {
+                        id: None,
+                        title: "Alpha".into(),
+                    }),
+                },
+            ),
         ],
         next_cursor: Some("CUR2".into()),
         complete: false,
@@ -171,7 +182,17 @@ fn checkpoints_lifecycle_pages_atomically_and_resumes_without_duplicates() {
             .iter()
             .map(|event| event.provider_event_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["I_1:issue_created", "E_close", "E_reopen"]
+        vec!["I_1:issue_created", "E_close", "E_milestone", "E_reopen"]
+    );
+    assert_eq!(
+        events[2].kind,
+        HistoryEventKind::MilestoneChanged {
+            from: None,
+            to: Some(MilestoneRef {
+                id: None,
+                title: "Alpha".into(),
+            }),
+        }
     );
 }
 

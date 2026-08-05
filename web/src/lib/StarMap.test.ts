@@ -102,6 +102,36 @@ describe('StarMap wrapper', () => {
     )
   })
 
+  it('updates milestone overlay state without routing a new selection', () => {
+    const setModel = vi.spyOn(Renderer.prototype, 'setModel')
+    const select = vi.spyOn(Renderer.prototype, 'select')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const initial = space(42)
+    initial.stars[0].milestone = 'Alpha'
+
+    const component = mount(StarMapTestHost, {
+      target,
+      props: { initialSpace: initial, initialSelectedIssue: 42 },
+    })
+    mounted.push(component)
+    flushSync()
+
+    select.mockClear()
+    component.updateSpace({
+      ...initial,
+      stars: [{ ...initial.stars[0], milestone: 'Beta <script>alert(1)</script>' }],
+    })
+    flushSync()
+
+    expect(setModel).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ num: 42, milestone: 'Beta <script>alert(1)</script>' })],
+      {},
+      null,
+    )
+    expect(select).not.toHaveBeenCalled()
+  })
+
   it('passes the current conversation issue to the renderer', () => {
     const setModel = vi.spyOn(Renderer.prototype, 'setModel')
     const target = document.createElement('div')

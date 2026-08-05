@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added exact milestone assignment, movement, and removal replay with minimal
+  GitHub event payloads and temporal milestone hulls that reshape around fixed
+  star coordinates without moving the constellation or camera.
 - Added resumable, one-issue-at-a-time close/reopen history import with
   transactional page checkpoints, stable lifecycle replay, and schema migration
   from creation-only ledgers without repository-wide history refetches.

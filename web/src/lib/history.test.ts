@@ -158,3 +158,79 @@ describe('temporal lifecycle projection', () => {
     expect(projectTemporalSpace(space, tied, 150).stars[0].status).toBe('resolved')
   })
 })
+
+describe('temporal milestone projection', () => {
+  const milestoneEvents: HistoryEvent[] = [
+    {
+      sequence: 1,
+      repository_id: 'R_repo',
+      issue_id: 'I_1',
+      issue_number: 1,
+      provider_event_id: 'I_1:issue_created',
+      occurred_at: 100,
+      kind: 'issue_created',
+      milestone: { id: 'M_alpha', title: 'Alpha' },
+    },
+    {
+      sequence: 2,
+      repository_id: 'R_repo',
+      issue_id: 'I_1',
+      issue_number: 1,
+      provider_event_id: 'E_assign_beta',
+      occurred_at: 125,
+      kind: 'milestone_changed',
+      from: { id: null, title: 'Alpha' },
+      to: { id: null, title: 'Beta' },
+    },
+    {
+      sequence: 3,
+      repository_id: 'R_repo',
+      issue_id: 'I_1',
+      issue_number: 1,
+      provider_event_id: 'E_remove_beta',
+      occurred_at: 150,
+      kind: 'milestone_changed',
+      from: { id: null, title: 'Beta' },
+      to: null,
+    },
+  ]
+
+  it('applies creation membership, movement, and removal at exact boundaries', () => {
+    expect(projectTemporalSpace(space, milestoneEvents, 99).stars[0].milestone).toBeNull()
+    expect(projectTemporalSpace(space, milestoneEvents, 100).stars[0].milestone).toBe('Alpha')
+    expect(projectTemporalSpace(space, milestoneEvents, 124).stars[0].milestone).toBe('Alpha')
+    expect(projectTemporalSpace(space, milestoneEvents, 125).stars[0].milestone).toBe('Beta')
+    expect(projectTemporalSpace(space, milestoneEvents, 149).stars[0].milestone).toBe('Beta')
+    expect(projectTemporalSpace(space, milestoneEvents, 150).stars[0].milestone).toBeNull()
+  })
+
+  it('orders same-timestamp milestone transitions by provider event identity', () => {
+    const tied: HistoryEvent[] = [
+      events[0],
+      {
+        sequence: 2,
+        repository_id: 'R_repo',
+        issue_id: 'I_1',
+        issue_number: 1,
+        provider_event_id: 'a-assign',
+        occurred_at: 125,
+        kind: 'milestone_changed',
+        from: null,
+        to: { id: null, title: 'Alpha' },
+      },
+      {
+        sequence: 3,
+        repository_id: 'R_repo',
+        issue_id: 'I_1',
+        issue_number: 1,
+        provider_event_id: 'z-move',
+        occurred_at: 125,
+        kind: 'milestone_changed',
+        from: { id: null, title: 'Alpha' },
+        to: { id: null, title: 'Beta' },
+      },
+    ]
+
+    expect(projectTemporalSpace(space, tied, 125).stars[0].milestone).toBe('Beta')
+  })
+})

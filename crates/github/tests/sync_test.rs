@@ -149,7 +149,7 @@ async fn snapshot_piggybacks_stable_history_metadata_on_the_issue_query() {
     assert_eq!(
         snapshot.history[0].milestone,
         Some(MilestoneRef {
-            id: "M_1".into(),
+            id: Some("M_1".into()),
             title: "M1".into(),
         })
     );

@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
-use stellr_core::{HistoryEventKind, HistoryPageRequest, Provider, ProviderError, RepoRef};
+use stellr_core::{
+    HistoryEventKind, HistoryPageRequest, MilestoneRef, Provider, ProviderError, RepoRef,
+};
 use stellr_github::sync::GithubProvider;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -21,7 +23,7 @@ fn request(cursor: Option<&str>) -> HistoryPageRequest {
 }
 
 #[tokio::test]
-async fn fetches_one_targeted_lifecycle_page_and_normalizes_tracked_events() {
+async fn fetches_one_targeted_history_page_and_normalizes_tracked_events() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/graphql"))
@@ -50,6 +52,18 @@ async fn fetches_one_targeted_lifecycle_page_and_normalizes_tracked_events() {
                                     "createdAt": "2026-08-04T13:00:00Z"
                                 },
                                 {
+                                    "__typename": "DemilestonedEvent",
+                                    "id": "E_demilestone",
+                                    "createdAt": "2026-08-04T13:15:00Z",
+                                    "milestoneTitle": "Alpha"
+                                },
+                                {
+                                    "__typename": "MilestonedEvent",
+                                    "id": "E_milestone",
+                                    "createdAt": "2026-08-04T13:15:00Z",
+                                    "milestoneTitle": "Beta"
+                                },
+                                {
                                     "__typename": "ClosedEvent",
                                     "id": "E_after_cutoff",
                                     "createdAt": "2026-08-04T14:00:00Z"
@@ -74,14 +88,16 @@ async fn fetches_one_targeted_lifecycle_page_and_normalizes_tracked_events() {
     let query = body["query"].as_str().unwrap();
 
     assert!(query.contains("issue(number: $number)"));
-    assert!(query.contains("itemTypes: [CLOSED_EVENT, REOPENED_EVENT]"));
+    assert!(query.contains(
+        "itemTypes: [CLOSED_EVENT, REOPENED_EVENT, DEMILESTONED_EVENT, MILESTONED_EVENT]"
+    ));
     assert_eq!(body["variables"]["owner"], "o");
     assert_eq!(body["variables"]["name"], "r");
     assert_eq!(body["variables"]["number"], 78);
     assert_eq!(body["variables"]["cursor"], "CUR1");
     assert_eq!(page.next_cursor.as_deref(), Some("CUR2"));
     assert!(!page.complete);
-    assert_eq!(page.events.len(), 2);
+    assert_eq!(page.events.len(), 4);
     assert_eq!(page.events[0].provider_event_id, "E_close");
     assert!(matches!(page.events[0].kind, HistoryEventKind::IssueClosed));
     assert_eq!(page.events[1].provider_event_id, "E_reopen");
@@ -89,6 +105,28 @@ async fn fetches_one_targeted_lifecycle_page_and_normalizes_tracked_events() {
         page.events[1].kind,
         HistoryEventKind::IssueReopened
     ));
+    assert_eq!(page.events[2].provider_event_id, "E_demilestone");
+    assert_eq!(
+        page.events[2].kind,
+        HistoryEventKind::MilestoneChanged {
+            from: Some(MilestoneRef {
+                id: None,
+                title: "Alpha".into(),
+            }),
+            to: None,
+        }
+    );
+    assert_eq!(page.events[3].provider_event_id, "E_milestone");
+    assert_eq!(
+        page.events[3].kind,
+        HistoryEventKind::MilestoneChanged {
+            from: None,
+            to: Some(MilestoneRef {
+                id: None,
+                title: "Beta".into(),
+            }),
+        }
+    );
 }
 
 #[tokio::test]
@@ -128,6 +166,49 @@ async fn malformed_tracked_event_reports_issue_cursor_and_stage() {
             assert!(message.contains("issue #78"));
             assert!(message.contains("CUR1"));
             assert!(message.contains("normalizing lifecycle event"));
+        }
+        other => panic!("expected parse error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn malformed_milestone_event_reports_issue_cursor_and_stage() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "repository": {
+                    "id": "R_repo",
+                    "issue": {
+                        "id": "I_78",
+                        "timelineItems": {
+                            "pageInfo": { "hasNextPage": false, "endCursor": null },
+                            "nodes": [{
+                                "__typename": "MilestonedEvent",
+                                "id": "E_milestone",
+                                "createdAt": "2026-08-04T13:00:00Z",
+                                "milestoneTitle": null
+                            }]
+                        }
+                    }
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+
+    let error = provider
+        .fetch_history_page(&repo(), &request(Some("CUR1")))
+        .await
+        .unwrap_err();
+
+    match error {
+        ProviderError::Parse(message) => {
+            assert!(message.contains("issue #78"));
+            assert!(message.contains("CUR1"));
+            assert!(message.contains("normalizing milestone event"));
         }
         other => panic!("expected parse error, got {other:?}"),
     }

@@ -429,6 +429,31 @@ describe('temporal visibility on the renderer seam', () => {
     expect(sm.screenOf(1)).not.toBeNull()
     expect(sm.screenOf(2)).toBeNull()
   })
+
+  it('reshapes milestone membership without moving stars or the camera', () => {
+    const { sm } = mounted()
+    const initial = fixture().map((ticket) => ({
+      ...ticket,
+      milestone: ticket.num <= 2 ? 'Alpha' : null,
+    }))
+    sm.setModel(initial)
+    const positions = sm.positions()
+    const camera = sm.camera()
+
+    sm.setModel(
+      initial.map((ticket) =>
+        ticket.num === 2
+          ? { ...ticket, milestone: 'Beta' }
+          : ticket.num === 3
+            ? { ...ticket, milestone: 'Alpha' }
+            : ticket,
+      ),
+    )
+
+    expect(sm.milestoneMemberships()).toEqual({ Alpha: [1, 3], Beta: [2] })
+    expect(sm.positions()).toEqual(positions)
+    expect(sm.camera()).toEqual(camera)
+  })
 })
 
 // One frame against a recording stub context. The canvas *feel* can only be
@@ -540,6 +565,22 @@ describe('painting the overlay', () => {
     frame()
 
     expect(texts.some((text) => text.startsWith('CURRENT / READY · 08'))).toBe(true)
+  })
+
+  it('draws milestone titles as canvas text without interpreting markup', () => {
+    const { sm } = mounted()
+    const title = 'Launch <script>alert(1)</script>'
+    sm.setModel(
+      fixture().map((ticket) => ({
+        ...ticket,
+        milestone: ticket.num === 1 ? title : null,
+      })),
+    )
+
+    frame()
+
+    expect(texts).toContain(title)
+    expect(document.querySelector('script')).toBeNull()
   })
 
   it('draws every session state without falling over', () => {

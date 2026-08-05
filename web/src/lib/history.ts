@@ -1,7 +1,7 @@
 import type { SpaceModel, Star, Status } from './model'
 
 export interface MilestoneRef {
-  id: string
+  id: string | null
   title: string
 }
 
@@ -54,6 +54,7 @@ export function projectTemporalSpace(
 
   const creationByIssue = new Map<number, Extract<HistoryEvent, { kind: 'issue_created' }>>()
   const statusByIssue = new Map<number, 'open' | 'resolved'>()
+  const milestoneByIssue = new Map<number, MilestoneRef | null>()
   const ordered = events
     .filter((event) => event.occurred_at <= playhead)
     .toSorted(
@@ -65,10 +66,13 @@ export function projectTemporalSpace(
     if (event.kind === 'issue_created') {
       creationByIssue.set(event.issue_number, event)
       statusByIssue.set(event.issue_number, 'open')
+      milestoneByIssue.set(event.issue_number, event.milestone)
     } else if (event.kind === 'issue_closed') {
       statusByIssue.set(event.issue_number, 'resolved')
     } else if (event.kind === 'issue_reopened') {
       statusByIssue.set(event.issue_number, 'open')
+    } else if (event.kind === 'milestone_changed') {
+      milestoneByIssue.set(event.issue_number, event.to)
     }
   }
 
@@ -80,7 +84,7 @@ export function projectTemporalSpace(
         ...star,
         live_status: star.status,
         status: statusByIssue.get(star.number) ?? 'open',
-        milestone: creation?.milestone?.title ?? null,
+        milestone: milestoneByIssue.get(star.number)?.title ?? null,
         temporal_visible: creation !== undefined,
       }
     }),
