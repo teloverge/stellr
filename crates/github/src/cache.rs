@@ -34,7 +34,9 @@ impl Cache {
 
     pub fn load(&self, repo: &RepoRef) -> Option<Snapshot> {
         let bytes = fs::read(self.path_for(repo)).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        let mut snapshot: Snapshot = serde_json::from_slice(&bytes).ok()?;
+        crate::textref::enrich_relationships(&mut snapshot.issues);
+        Some(snapshot)
     }
 
     /// Writes a snapshot through a same-directory temporary file.
@@ -318,6 +320,49 @@ mod tests {
         let snapshot = cache.load(&repo).unwrap();
 
         assert_eq!(snapshot.issues[0].parent_issue, None);
+    }
+
+    #[test]
+    fn load_enriches_relationships_from_cached_bodies() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::new(dir.path().to_path_buf());
+        let repo = repo();
+        let mut source = snapshot("Root", 1_753_000_000);
+        source.issues.push(RawIssue {
+            number: 2,
+            parent_issue: None,
+            title: "Dependent".into(),
+            body: "## Parent\n\n#1\n## Blocked by\n\n- #1".into(),
+            state: IssueState::Open,
+            assignees: vec![],
+            milestone: None,
+            labels: vec![],
+            blocked_by: vec![],
+            url: "u2".into(),
+        });
+        source.issues.push(RawIssue {
+            number: 3,
+            parent_issue: None,
+            title: "Blocker by inversion".into(),
+            body: "## Blocks\n\n- #2".into(),
+            state: IssueState::Open,
+            assignees: vec![],
+            milestone: None,
+            labels: vec![],
+            blocked_by: vec![],
+            url: "u3".into(),
+        });
+
+        cache.store(&repo, &source).unwrap();
+        let loaded = cache.load(&repo).unwrap();
+
+        assert_eq!(loaded.issues[1].parent_issue, Some(1));
+        assert_eq!(loaded.issues[1].blocked_by, vec![1, 3]);
+
+        cache.store(&repo, &loaded).unwrap();
+        let loaded_again = cache.load(&repo).unwrap();
+
+        assert_eq!(loaded_again, loaded);
     }
 
     #[test]

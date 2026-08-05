@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Restored dependency and parent relationship lines from cached Markdown issue
+  bodies without making additional GitHub requests.
 - Upgraded all bundle artifact uploads to `actions/upload-artifact@v7` and
   downloads to `actions/download-artifact@v8`, removing the obsolete
   action-runtime warnings without suppressing them.

@@ -348,6 +348,77 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
 }
 
 #[tokio::test]
+async fn fetch_enriches_markdown_relationship_sections() {
+    let server = MockServer::start().await;
+    mount_graphql_response(
+        &server,
+        page(json!([
+            node(
+                1,
+                "Root",
+                Some(""),
+                "https://example.test/o/r/issues/1",
+                "OPEN",
+                None,
+                &[],
+                None,
+                &[],
+                &[],
+                None,
+            ),
+            node(
+                2,
+                "Markdown child",
+                Some("## Parent\n\n#1\n## Blocked by\n\n- #1"),
+                "https://example.test/o/r/issues/2",
+                "OPEN",
+                None,
+                &[],
+                None,
+                &[],
+                &[],
+                None,
+            ),
+            node(
+                3,
+                "Native parent wins",
+                Some("## Parent\n\n#1\n## Blocks\n\n- #2"),
+                "https://example.test/o/r/issues/3",
+                "OPEN",
+                None,
+                &[],
+                None,
+                &[],
+                &[],
+                Some(9),
+            ),
+            node(
+                4,
+                "Ambiguous parent",
+                Some("## Parent\n\n- #1\n- #2"),
+                "https://example.test/o/r/issues/4",
+                "OPEN",
+                None,
+                &[],
+                None,
+                &[],
+                &[],
+                None,
+            ),
+        ])),
+    )
+    .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let issues = provider.fetch(&repo()).await.unwrap();
+
+    assert_eq!(issues[1].parent_issue, Some(1));
+    assert_eq!(issues[1].blocked_by, vec![1, 3]);
+    assert_eq!(issues[2].parent_issue, Some(9));
+    assert_eq!(issues[3].parent_issue, None);
+}
+
+#[tokio::test]
 async fn fetch_maps_the_first_graphql_error_to_parse() {
     let server = MockServer::start().await;
     mount_graphql_response(
