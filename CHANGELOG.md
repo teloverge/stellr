@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Emphasized the incoming and outgoing edges directly connected to a selected
+  node while preserving dependency direction, state styling, and motion.
 - Restored dependency and parent relationship lines from cached Markdown issue
   bodies without making additional GitHub requests.
 - Upgraded all bundle artifact uploads to `actions/upload-artifact@v7` and

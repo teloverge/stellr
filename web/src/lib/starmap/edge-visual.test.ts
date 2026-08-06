@@ -75,6 +75,7 @@ const SELECTION_FIXTURE: Ticket[] = [
   { num: 4, slug: '4', title: 'unrelated source', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true },
   { num: 5, slug: '5', title: 'unrelated current', type: 'task', status: 'open', blockedBy: [4], parentIssue: null, frontier: false },
   { num: 6, slug: '6', title: 'isolated', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true },
+  { num: 7, slug: '7', title: 'transitive destination', type: 'task', status: 'open', blockedBy: [3], parentIssue: null, frontier: false },
 ]
 
 function edgeStrokes(render: { strokes: Stroke[] }): Stroke[] {
@@ -114,11 +115,11 @@ describe('dependency-edge visual treatment', () => {
     vi.spyOn(performance, 'now').mockReturnValue(1_000)
   }
 
-  function paint(
+  function paintFrames(
     tickets: Ticket[],
     currentIssue: number | null = null,
-    selections: readonly (number | null)[] = [],
-  ): { strokes: Stroke[]; fills: Fill[] } {
+    steps: readonly ((map: StarMap) => void)[],
+  ): Array<{ strokes: Stroke[]; fills: Fill[] }> {
     const { ctx, strokes, fills } = recordingContext()
     HTMLCanvasElement.prototype.getContext = (() => ctx) as never
     frames = []
@@ -131,10 +132,27 @@ describe('dependency-edge visual treatment', () => {
     const map = new StarMap()
     map.mount(host)
     map.setModel(tickets, {}, currentIssue)
-    for (const selection of selections) map.select(selection)
-    frames.shift()!(1_000)
+    const renders = steps.map((step) => {
+      step(map)
+      strokes.length = 0
+      fills.length = 0
+      frames.shift()!(1_000)
+      return { strokes: [...strokes], fills: [...fills] }
+    })
     map.destroy()
-    return { strokes, fills }
+    return renders
+  }
+
+  function paint(
+    tickets: Ticket[],
+    currentIssue: number | null = null,
+    selections: readonly (number | null)[] = [],
+  ): { strokes: Stroke[]; fills: Fill[] } {
+    return paintFrames(tickets, currentIssue, [
+      (map) => {
+        for (const selection of selections) map.select(selection)
+      },
+    ])[0]
   }
 
   function sequenceFixture(sourceStatus: Ticket['status'], destinationStatus: Ticket['status']): Ticket[] {
@@ -220,9 +238,17 @@ describe('dependency-edge visual treatment', () => {
   it('scopes selection emphasis to direct dependency edges and restores ordinary treatment', () => {
     installFrameHarness()
 
-    const selected = paint(SELECTION_FIXTURE, 5, [2])
+    const [selected, deselectedRender] = paintFrames(SELECTION_FIXTURE, 5, [
+      (map) => map.select(2),
+      (map) => map.select(null),
+    ])
     const selectedEdges = edgeStrokes(selected)
-    expect(selectedEdges).toHaveLength(3)
+    expect(selectedEdges.map(({ color, width, alpha }) => ({ color, width, alpha }))).toEqual([
+      { color: 'rgba(174,192,218,0.62)', width: 2.4, alpha: 0.45 },
+      { color: 'rgba(174,192,218,0.62)', width: 2.4, alpha: 0.45 },
+      { color: 'rgba(190,225,200,0.82)', width: 5.1, alpha: 1 },
+      { color: 'rgba(174,192,218,0.62)', width: 4.08, alpha: 1 },
+    ])
     expect(
       selectedEdges.find((stroke) => stroke.color === 'rgba(190,225,200,0.82)'),
     ).toMatchObject({ width: 5.1, dash: [], alpha: 1 })
@@ -248,9 +274,10 @@ describe('dependency-edge visual treatment', () => {
     expectArrowDimensions(contextUnresolvedArrow, 12, 6.5)
     expectParticleMotion(selected, 1)
 
-    const deselected = edgeStrokes(paint(SELECTION_FIXTURE, 5, [2, null]))
+    const deselected = edgeStrokes(deselectedRender)
     expect(deselected.map(({ width, alpha }) => ({ width, alpha }))).toEqual([
       { width: 3, alpha: 0.45 },
+      { width: 2.4, alpha: 0.45 },
       { width: 2.4, alpha: 0.45 },
       { width: 2.4, alpha: 0.45 },
     ])
@@ -258,6 +285,23 @@ describe('dependency-edge visual treatment', () => {
     expect(isolated.map(({ width, alpha }) => ({ width, alpha }))).toEqual(
       deselected.map(({ width, alpha }) => ({ width, alpha })),
     )
+  })
+
+  it('does not restore edge emphasis when a removed selection returns in a later model', () => {
+    installFrameHarness()
+
+    const [, , restored] = paintFrames(SELECTION_FIXTURE, 5, [
+      (map) => map.select(2),
+      (map) => map.setModel(SELECTION_FIXTURE.filter((ticket) => ticket.num !== 2), {}, 5),
+      (map) => map.setModel(SELECTION_FIXTURE, {}, 5),
+    ])
+
+    expect(edgeStrokes(restored).map(({ width, alpha }) => ({ width, alpha }))).toEqual([
+      { width: 3, alpha: 0.45 },
+      { width: 2.4, alpha: 0.45 },
+      { width: 2.4, alpha: 0.45 },
+      { width: 2.4, alpha: 0.45 },
+    ])
   })
 
   it('animates exactly three halo/core pairs on a traversed sequence edge at full path alpha', () => {
@@ -363,7 +407,9 @@ describe('dependency-edge visual treatment', () => {
         alpha: 1,
       })
     }
-    for (const arrow of selectedChild.fills.filter((fill) => fill.color === '#c7b8ff')) {
+    const selectedMiniArrows = selectedChild.fills.filter((fill) => fill.color === '#c7b8ff')
+    expect(selectedMiniArrows).toHaveLength(2)
+    for (const arrow of selectedMiniArrows) {
       expectArrowDimensions(arrow, 15, 8.125)
     }
 
