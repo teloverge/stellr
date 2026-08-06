@@ -40,6 +40,8 @@ const DEFAULT_BG = '#05070d'
 const ISSUE_RADIUS_SCALE = 1.25
 const CONTEXT_ALPHA = 0.3
 const CONTEXT_EDGE_ALPHA = 0.45
+const SELECTED_EDGE_WIDTH_SCALE = 1.7
+const SELECTED_EDGE_ARROW_SCALE = 1.25
 const SUBISSUE_RIM = 'rgba(170,145,255,0.82)'
 
 interface RenderEdge extends WorkflowEdge {
@@ -895,12 +897,20 @@ export class StarMap {
     g.translate(this.#cam.x, this.#cam.y)
     g.scale(this.#cam.s, this.#cam.s)
     const focused = this.#focus.emphasized.size > 0
-    for (const e of this.#edges) {
+    for (const edge of this.#edges) {
+      if (this.#isSelectedEdge(edge)) continue
       g.save()
-      if (focused && !this.#focus.pathEdges.has(edgeKey(e.from, e.to))) {
+      if (focused && !this.#focus.pathEdges.has(edgeKey(edge.from, edge.to))) {
         g.globalAlpha = CONTEXT_EDGE_ALPHA
       }
-      this.#drawEdge(g, e)
+      this.#drawEdge(g, edge)
+      g.restore()
+    }
+    for (const edge of this.#edges) {
+      if (!this.#isSelectedEdge(edge)) continue
+      g.save()
+      g.globalAlpha = 1
+      this.#drawEdge(g, edge, true)
       g.restore()
     }
     for (const n of this.#nodes) {
@@ -914,7 +924,14 @@ export class StarMap {
     this.#drawTicker(g)
   }
 
-  #drawEdge(g: CanvasRenderingContext2D, e: RenderEdge): void {
+  #isSelectedEdge(edge: RenderEdge): boolean {
+    return (
+      this.#selected !== null &&
+      (edge.from === this.#selected || edge.to === this.#selected)
+    )
+  }
+
+  #drawEdge(g: CanvasRenderingContext2D, e: RenderEdge, selected = false): void {
     const a = this.#byNum.get(e.from),
       b = this.#byNum.get(e.to)
     if (!a || !b) return
@@ -962,17 +979,18 @@ export class StarMap {
     g.quadraticCurveTo(cx, cy, bx, by)
     g.lineCap = 'round'
     const usesResolvedStyle = mini ? e.state !== 'incomplete' : e.satisfied
+    const strokeScale = selected ? SELECTED_EDGE_WIDTH_SCALE : 1
     if (usesResolvedStyle) {
       g.strokeStyle = 'rgba(190,225,200,0.82)'
-      g.lineWidth = 3
+      g.lineWidth = 3 * strokeScale
       g.setLineDash([])
     } else if (mini) {
       g.strokeStyle = 'rgba(170,145,255,0.78)'
-      g.lineWidth = 2.6
+      g.lineWidth = 2.6 * strokeScale
       g.setLineDash([8, 7])
     } else {
       g.strokeStyle = 'rgba(174,192,218,0.62)'
-      g.lineWidth = 2.4
+      g.lineWidth = 2.4 * strokeScale
       g.setLineDash([7, 7])
     }
     g.stroke()
@@ -1003,8 +1021,9 @@ export class StarMap {
       al = Math.hypot(tangentX, tangentY) || 1,
       ux = tangentX / al,
       uy = tangentY / al
-    const ah = 12,
-      aw = 6.5,
+    const arrowScale = selected ? SELECTED_EDGE_ARROW_SCALE : 1
+    const ah = 12 * arrowScale,
+      aw = 6.5 * arrowScale,
       px = -uy,
       py = ux,
       tipx = midx + ux * ah * 0.5,
