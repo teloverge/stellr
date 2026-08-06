@@ -68,6 +68,36 @@ const EDGE_FIXTURE: Ticket[] = [
   { num: 4, slug: '4', title: 'context dependent', type: 'task', status: 'open', blockedBy: [3], parentIssue: null, frontier: false },
 ]
 
+const SELECTION_FIXTURE: Ticket[] = [
+  { num: 1, slug: '1', title: 'resolved source', type: 'task', status: 'resolved', blockedBy: [], parentIssue: null, frontier: false },
+  { num: 2, slug: '2', title: 'selected middle', type: 'task', status: 'open', blockedBy: [1], parentIssue: null, frontier: false },
+  { num: 3, slug: '3', title: 'blocked destination', type: 'task', status: 'open', blockedBy: [2], parentIssue: null, frontier: false },
+  { num: 4, slug: '4', title: 'unrelated source', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true },
+  { num: 5, slug: '5', title: 'unrelated current', type: 'task', status: 'open', blockedBy: [4], parentIssue: null, frontier: false },
+  { num: 6, slug: '6', title: 'isolated', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true },
+]
+
+function edgeStrokes(render: { strokes: Stroke[] }): Stroke[] {
+  return render.strokes.filter((stroke) =>
+    ['rgba(190,225,200,0.82)', 'rgba(174,192,218,0.62)', 'rgba(170,145,255,0.78)'].includes(stroke.color),
+  )
+}
+
+function arrowDimensions(fill: Fill): { length: number; halfWidth: number } {
+  const [tip, baseA, baseB] = fill.points
+  const base = { x: (baseA.x + baseB.x) / 2, y: (baseA.y + baseB.y) / 2 }
+  return {
+    length: Math.hypot(tip.x - base.x, tip.y - base.y),
+    halfWidth: Math.hypot(baseA.x - base.x, baseA.y - base.y),
+  }
+}
+
+function expectArrowDimensions(fill: Fill, length: number, halfWidth: number): void {
+  const dimensions = arrowDimensions(fill)
+  expect(dimensions.length).toBeCloseTo(length)
+  expect(dimensions.halfWidth).toBeCloseTo(halfWidth)
+}
+
 describe('dependency-edge visual treatment', () => {
   const realGetContext = HTMLCanvasElement.prototype.getContext
   const realRaf = globalThis.requestAnimationFrame
@@ -84,7 +114,11 @@ describe('dependency-edge visual treatment', () => {
     vi.spyOn(performance, 'now').mockReturnValue(1_000)
   }
 
-  function paint(tickets: Ticket[], currentIssue: number | null = null): { strokes: Stroke[]; fills: Fill[] } {
+  function paint(
+    tickets: Ticket[],
+    currentIssue: number | null = null,
+    selections: readonly (number | null)[] = [],
+  ): { strokes: Stroke[]; fills: Fill[] } {
     const { ctx, strokes, fills } = recordingContext()
     HTMLCanvasElement.prototype.getContext = (() => ctx) as never
     frames = []
@@ -97,6 +131,7 @@ describe('dependency-edge visual treatment', () => {
     const map = new StarMap()
     map.mount(host)
     map.setModel(tickets, {}, currentIssue)
+    for (const selection of selections) map.select(selection)
     frames.shift()!(1_000)
     map.destroy()
     return { strokes, fills }
@@ -182,6 +217,49 @@ describe('dependency-edge visual treatment', () => {
     expectParticleMotion(paint(EDGE_FIXTURE, 4), 0.45)
   })
 
+  it('scopes selection emphasis to direct dependency edges and restores ordinary treatment', () => {
+    installFrameHarness()
+
+    const selected = paint(SELECTION_FIXTURE, 5, [2])
+    const selectedEdges = edgeStrokes(selected)
+    expect(selectedEdges).toHaveLength(3)
+    expect(
+      selectedEdges.find((stroke) => stroke.color === 'rgba(190,225,200,0.82)'),
+    ).toMatchObject({ width: 5.1, dash: [], alpha: 1 })
+    const unresolvedEdges = selectedEdges.filter(
+      (stroke) => stroke.color === 'rgba(174,192,218,0.62)',
+    )
+    expect(unresolvedEdges.find((stroke) => stroke.width === 4.08)).toMatchObject({
+      dash: [7, 7],
+      alpha: 1,
+    })
+    expect(unresolvedEdges.find((stroke) => stroke.width === 2.4)).toMatchObject({
+      dash: [7, 7],
+      alpha: 0.45,
+    })
+
+    const resolvedArrow = selected.fills.find((fill) => fill.color === '#d9f3df')!
+    const unresolvedArrows = selected.fills.filter((fill) => fill.color === '#c8d5e8')
+    expect(resolvedArrow.alpha).toBe(1)
+    expectArrowDimensions(resolvedArrow, 15, 8.125)
+    const selectedUnresolvedArrow = unresolvedArrows.find((fill) => fill.alpha === 1)!
+    const contextUnresolvedArrow = unresolvedArrows.find((fill) => fill.alpha === 0.45)!
+    expectArrowDimensions(selectedUnresolvedArrow, 15, 8.125)
+    expectArrowDimensions(contextUnresolvedArrow, 12, 6.5)
+    expectParticleMotion(selected, 1)
+
+    const deselected = edgeStrokes(paint(SELECTION_FIXTURE, 5, [2, null]))
+    expect(deselected.map(({ width, alpha }) => ({ width, alpha }))).toEqual([
+      { width: 3, alpha: 0.45 },
+      { width: 2.4, alpha: 0.45 },
+      { width: 2.4, alpha: 0.45 },
+    ])
+    const isolated = edgeStrokes(paint(SELECTION_FIXTURE, 5, [6]))
+    expect(isolated.map(({ width, alpha }) => ({ width, alpha }))).toEqual(
+      deselected.map(({ width, alpha }) => ({ width, alpha })),
+    )
+  })
+
   it('animates exactly three halo/core pairs on a traversed sequence edge at full path alpha', () => {
     installFrameHarness()
 
@@ -265,6 +343,28 @@ describe('dependency-edge visual treatment', () => {
         ((tip.y - base.y) / arrowLength) * (tangent.y / tangentLength)
       const angle = Math.atan2(cross, dot)
       expect(angle).toBeLessThan(0.01)
+    }
+
+    const selectedChild = paint(
+      [
+        { num: 16, slug: '16', title: 'parent', type: 'issue', status: 'open', blockedBy: [], parentIssue: null, frontier: false },
+        { num: 37, slug: '37', title: 'child', type: 'task', status: 'open', blockedBy: [], parentIssue: 16, frontier: false },
+      ],
+      null,
+      [37],
+    )
+    const selectedMiniStrokes = edgeStrokes(selectedChild)
+    expect(selectedMiniStrokes).toHaveLength(2)
+    for (const stroke of selectedMiniStrokes) {
+      expect(stroke).toMatchObject({
+        color: 'rgba(170,145,255,0.78)',
+        width: 4.42,
+        dash: [8, 7],
+        alpha: 1,
+      })
+    }
+    for (const arrow of selectedChild.fills.filter((fill) => fill.color === '#c7b8ff')) {
+      expectArrowDimensions(arrow, 15, 8.125)
     }
 
     const completed = paintChild('resolved')
