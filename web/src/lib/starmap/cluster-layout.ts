@@ -1,4 +1,15 @@
 import type { Edge, LayoutNode, Point } from './layout'
+import {
+  boxesOverlap,
+  estimateLabelWidth,
+  labelBox,
+  orbitLabelFontSize,
+  ORBIT_LABEL_REFERENCE_SCALE,
+  outwardLabelGeometryAtScale,
+  segmentIntersectsBox,
+  type LabelBox,
+} from './label-geometry'
+import { validOrbitNodeNumbers } from './parent-topology'
 import { isMiniWorkflowEdge, workflowEdges, type WorkflowEdge } from './workflow'
 import { reverseEdgeKeys } from './workflow-visual'
 import {
@@ -10,15 +21,12 @@ import {
   type Segment,
 } from './workflow-geometry'
 
-export const FIRST_ARC_RADIUS = 92
-export const FIRST_ARC_CAPACITY = 5
-export const SECOND_ARC_RADIUS = 126
-export const ARC_STEP = Math.PI / 6
-export const MIN_CHILD_CENTER_CLEARANCE = 44
-export const UNRELATED_NODE_CLEARANCE = 42
+export const INNER_RING_RADIUS = 180
+export const MIN_CHILD_CENTER_CLEARANCE = 72
+export const UNRELATED_NODE_CLEARANCE = 64
 export const DEPENDENCY_LINE_CLEARANCE = 18
 export const CANDIDATE_SECTORS = 16
-export const CLEARANCE_SCORE_CAP = SECOND_ARC_RADIUS * 2
+export const CLEARANCE_SCORE_CAP = 800
 export const NODE_CLEARANCE_SCORE_WEIGHT = 1
 export const DEPENDENCY_CLEARANCE_SCORE_WEIGHT = 1
 export const CROSSING_SCORE_PENALTY =
@@ -30,6 +38,7 @@ export interface CandidateScoreInput {
   crossings: number
   nodeClearance: number
   dependencyClearance: number
+  labelCollisions?: number
 }
 
 interface Candidate extends CandidateScoreInput {
@@ -55,6 +64,8 @@ interface EvaluationContext {
   parentPoint: Point
   currentPoints: Record<number, Point>
   placedCurveObstacles: SegmentObstacle[]
+  placedLabelObstacles: LabelBox[]
+  topLevelLabelObstacles: LabelBox[]
 }
 
 function siblingOrder(children: LayoutNode[]): LayoutNode[] {
@@ -128,60 +139,99 @@ function hierarchyDepth(
   return depth
 }
 
-function centeredOffsets(count: number): number[] {
-  return Array.from({ length: count }, (_, index) => (index - (count - 1) / 2) * ARC_STEP)
+const MIN_RING_GAP = 220
+const MIN_RING_SLOT_ARC = 112
+const MAX_RING_SLOT_ARC = 170
+const TARGET_INNER_RING_CAPACITY = 7
+const LAYOUT_FONT_SIZE = 14
+const LAYOUT_STAR_RADIUS = 14
+const EXPANSION_STEPS = [0, 70, 140, 210] as const
+
+interface RingMetrics {
+  innerRadius: number
+  ringGap: number
 }
 
-function staggeredSecondArcOffsets(count: number): number[] {
-  const sideCount = count / 2
-  return [
-    ...Array.from({ length: sideCount }, (_, index) => -(sideCount - index) * ARC_STEP),
-    ...Array.from({ length: sideCount }, (_, index) => (index + 1) * ARC_STEP),
-  ]
+function childSlotArc(child: LayoutNode): number {
+  const fontSize = orbitLabelFontSize(ORBIT_LABEL_REFERENCE_SCALE) / ORBIT_LABEL_REFERENCE_SCALE
+  const width = estimateLabelWidth(child.num, child.title ?? '', fontSize)
+  return Math.min(MAX_RING_SLOT_ARC, Math.max(MIN_RING_SLOT_ARC, 70 + width * 0.25))
 }
 
-function firstArcCount(childCount: number): number {
-  if (childCount <= FIRST_ARC_CAPACITY) return childCount
-  return childCount % 2 === 0 ? FIRST_ARC_CAPACITY - 1 : FIRST_ARC_CAPACITY
+function ringMetrics(children: LayoutNode[]): RingMetrics {
+  const fontSize = orbitLabelFontSize(ORBIT_LABEL_REFERENCE_SCALE) / ORBIT_LABEL_REFERENCE_SCALE
+  const widths = children.map((child) =>
+    estimateLabelWidth(child.num, child.title ?? '', fontSize),
+  )
+  const maximumWidth = widths.length === 0 ? 0 : Math.max(...widths)
+  const innerFootprint = children
+    .slice(0, TARGET_INNER_RING_CAPACITY)
+    .reduce((sum, child) => sum + childSlotArc(child), 0)
+  return {
+    innerRadius: Math.max(INNER_RING_RADIUS, innerFootprint / (Math.PI * 2)),
+    ringGap: Math.max(MIN_RING_GAP, Math.min(340, 80 + maximumWidth * 0.55)),
+  }
 }
 
-function arcPoints(
+function orbitRings(children: LayoutNode[], minimumRingCount = 1): LayoutNode[][] {
+  const metrics = ringMetrics(children)
+  const rings: LayoutNode[][] = []
+  let occupiedArc = 0
+  for (const child of children) {
+    let ring = rings.at(-1)
+    const radius = metrics.innerRadius + Math.max(0, rings.length - 1) * metrics.ringGap
+    const footprint = childSlotArc(child)
+    if (!ring || (ring.length > 0 && occupiedArc + footprint > Math.PI * 2 * radius)) {
+      ring = []
+      rings.push(ring)
+      occupiedArc = 0
+    }
+    ring.push(child)
+    occupiedArc += footprint
+  }
+
+  while (rings.length < minimumRingCount) {
+    let splitIndex = -1
+    for (let index = 0; index < rings.length; index++) {
+      if (rings[index].length > 1 && (splitIndex < 0 || rings[index].length > rings[splitIndex].length)) {
+        splitIndex = index
+      }
+    }
+    if (splitIndex < 0) break
+    const ring = rings[splitIndex]
+    const splitAt = Math.ceil(ring.length / 2)
+    rings.splice(splitIndex, 1, ring.slice(0, splitAt), ring.slice(splitAt))
+  }
+  return rings
+}
+
+export function orbitRingCounts(children: LayoutNode[]): number[] {
+  return orbitRings(children).map((ring) => ring.length)
+}
+
+function orbitPoints(
   parent: Point,
   children: LayoutNode[],
   sector: number,
-  expanded = false,
+  radialExpansion = 0,
+  minimumRingCount = 1,
 ): Record<number, Point> {
   const childPoints: Record<number, Point> = {}
   const centerAngle = (sector / CANDIDATE_SECTORS) * Math.PI * 2
-  if (expanded && children.length <= FIRST_ARC_CAPACITY) {
-    const offsets = centeredOffsets(children.length)
-    for (let index = 0; index < offsets.length; index++) {
-      const offset = offsets[index]
-      const angle = centerAngle + offset
-      childPoints[children[index].num] = {
-        x: parent.x + Math.cos(angle) * SECOND_ARC_RADIUS,
-        y: parent.y + Math.sin(angle) * SECOND_ARC_RADIUS,
+  const metrics = ringMetrics(children)
+  const rings = orbitRings(children, minimumRingCount)
+  for (const [ringIndex, ring] of rings.entries()) {
+    const radius = metrics.innerRadius + radialExpansion + ringIndex * metrics.ringGap
+    const count = ring.length
+    const step = (Math.PI * 2) / count
+    const stagger = ringIndex % 2 === 0 ? 0 : step / 2
+    for (let slot = 0; slot < count; slot++) {
+      const child = ring[slot]
+      const angle = centerAngle + stagger + slot * step
+      childPoints[child.num] = {
+        x: parent.x + Math.cos(angle) * radius,
+        y: parent.y + Math.sin(angle) * radius,
       }
-    }
-    return childPoints
-  }
-
-  const firstCount = firstArcCount(children.length)
-  const secondCount = children.length - firstCount
-  const firstOffsets = centeredOffsets(firstCount)
-  const secondOffsets = firstCount % 2 === 0
-    ? staggeredSecondArcOffsets(secondCount)
-    : centeredOffsets(secondCount)
-  const slots = [
-    ...firstOffsets.map((offset) => ({ offset, radius: FIRST_ARC_RADIUS })),
-    ...secondOffsets.map((offset) => ({ offset, radius: SECOND_ARC_RADIUS })),
-  ]
-
-  for (let index = 0; index < children.length; index++) {
-    const angle = centerAngle + slots[index].offset
-    childPoints[children[index].num] = {
-      x: parent.x + Math.cos(angle) * slots[index].radius,
-      y: parent.y + Math.sin(angle) * slots[index].radius,
     }
   }
   return childPoints
@@ -193,6 +243,53 @@ function distance(left: Point, right: Point): number {
 
 function isFinitePoint(point: Point | undefined): point is Point {
   return point !== undefined && Number.isFinite(point.x) && Number.isFinite(point.y)
+}
+
+function pointBox(point: Point, radius: number): LabelBox {
+  return {
+    x0: point.x - radius,
+    y0: point.y - radius,
+    x1: point.x + radius,
+    y1: point.y + radius,
+  }
+}
+
+function topLevelLabelBoxes(
+  nodes: LayoutNode[],
+  points: Record<number, Point>,
+  validOrbitNodes: Set<number>,
+): LabelBox[] {
+  const gap = 4
+  return nodes.flatMap((node) => {
+    if (validOrbitNodes.has(node.num)) return []
+    const point = points[node.num]
+    if (!isFinitePoint(point)) return []
+    const width = estimateLabelWidth(node.num, node.title ?? '', LAYOUT_FONT_SIZE)
+    const below = point.y + LAYOUT_STAR_RADIUS + gap + LAYOUT_FONT_SIZE * 0.82
+    const above = point.y - LAYOUT_STAR_RADIUS - gap - LAYOUT_FONT_SIZE * 0.22
+    return [
+      labelBox(point.x, below, 'center', width, LAYOUT_FONT_SIZE),
+      labelBox(point.x, above, 'center', width, LAYOUT_FONT_SIZE),
+    ]
+  })
+}
+
+function clusterLabelBoxes(
+  children: LayoutNode[],
+  parent: Point,
+  childPoints: Record<number, Point>,
+): Array<{ number: number; box: LabelBox }> {
+  return children.map((child) => ({
+    number: child.num,
+    box: outwardLabelGeometryAtScale({
+      parent,
+      child: childPoints[child.num],
+      number: child.num,
+      title: child.title ?? '',
+      scale: ORBIT_LABEL_REFERENCE_SCALE,
+      starRadius: LAYOUT_STAR_RADIUS,
+    }).box,
+  }))
 }
 
 function clusterCurves(
@@ -253,6 +350,8 @@ function evaluateCandidate(
     parentPoint,
     currentPoints,
     placedCurveObstacles,
+    placedLabelObstacles,
+    topLevelLabelObstacles,
   } = context
   const clusterNumbers = new Set([parentNode.num, ...children.map((child) => child.num)])
   const proposedPoints = { ...currentPoints, ...childPoints }
@@ -261,6 +360,7 @@ function evaluateCandidate(
     .map((node) => proposedPoints[node.num])
     .filter(isFinitePoint)
   const childPointList = children.map((child) => childPoints[child.num])
+  const childLabels = clusterLabelBoxes(children, parentPoint, childPoints)
   const childClearances: number[] = []
   for (let left = 0; left < childPointList.length; left++) {
     for (let right = left + 1; right < childPointList.length; right++) {
@@ -278,6 +378,16 @@ function evaluateCandidate(
   const obstacles = [
     ...dependencyObstacles(edges, clusterNumbers, proposedPoints),
     ...placedCurveObstacles,
+  ]
+  const relationshipSegments: SegmentObstacle[] = [
+    ...obstacles,
+    ...curves.flatMap(({ edge, curve }) => {
+      const samples = sampleQuadratic(curve)
+      return samples.slice(1).map((end, index) => ({
+        edge,
+        segment: { start: samples[index], end },
+      }))
+    }),
   ]
   const dependencyClearances: number[] = []
   let crossings = 0
@@ -305,16 +415,56 @@ function evaluateCandidate(
   const childClearance = minimum(childClearances)
   const nodeClearance = Math.min(minimum(nodeClearances), minimum(curveNodeClearances))
   const dependencyClearance = minimum(dependencyClearances)
+  let labelCollisions = 0
+  const unrelatedLabels = [...placedLabelObstacles, ...topLevelLabelObstacles]
+  for (const childPoint of childPointList) {
+    const childBox = pointBox(childPoint, LAYOUT_STAR_RADIUS)
+    for (const unrelatedLabel of unrelatedLabels) {
+      if (boxesOverlap(childBox, unrelatedLabel)) labelCollisions++
+    }
+  }
+  for (let left = 0; left < childLabels.length; left++) {
+    for (let right = left + 1; right < childLabels.length; right++) {
+      if (boxesOverlap(childLabels[left].box, childLabels[right].box)) labelCollisions++
+    }
+    for (const child of children) {
+      if (child.num === childLabels[left].number) continue
+      if (boxesOverlap(childLabels[left].box, pointBox(childPoints[child.num], LAYOUT_STAR_RADIUS))) {
+        labelCollisions++
+      }
+    }
+    for (const point of unrelatedPoints) {
+      if (boxesOverlap(childLabels[left].box, pointBox(point, LAYOUT_STAR_RADIUS))) {
+        labelCollisions++
+      }
+    }
+    for (const unrelatedLabel of placedLabelObstacles) {
+      if (boxesOverlap(childLabels[left].box, unrelatedLabel)) labelCollisions++
+    }
+    for (const topLevelLabel of topLevelLabelObstacles) {
+      if (boxesOverlap(childLabels[left].box, topLevelLabel)) labelCollisions++
+    }
+    for (const { edge, segment } of relationshipSegments) {
+      if (edge.from === childLabels[left].number || edge.to === childLabels[left].number) {
+        continue
+      }
+      if (segmentIntersectsBox(segment.start, segment.end, childLabels[left].box)) {
+        labelCollisions++
+      }
+    }
+  }
   return {
     childPoints,
     collisionFree:
       crossings === 0 &&
+      labelCollisions === 0 &&
       childClearance >= MIN_CHILD_CENTER_CLEARANCE &&
       nodeClearance >= UNRELATED_NODE_CLEARANCE &&
       dependencyClearance >= DEPENDENCY_LINE_CLEARANCE,
     crossings,
     nodeClearance,
     dependencyClearance,
+    labelCollisions,
   }
 }
 
@@ -328,7 +478,8 @@ function candidateScore(candidate: CandidateScoreInput): number {
     boundedClearanceScore(candidate.nodeClearance) * NODE_CLEARANCE_SCORE_WEIGHT +
     boundedClearanceScore(candidate.dependencyClearance) *
       DEPENDENCY_CLEARANCE_SCORE_WEIGHT -
-    candidate.crossings * CROSSING_SCORE_PENALTY
+    candidate.crossings * CROSSING_SCORE_PENALTY -
+    (candidate.labelCollisions ?? 0) * CROSSING_SCORE_PENALTY
   )
 }
 
@@ -353,15 +504,17 @@ export function placeDirectChildClusters(
   const points = Object.fromEntries(
     Object.entries(broadPoints).map(([number, point]) => [number, { ...point }]),
   ) as Record<number, Point>
-  const present = new Set(nodes.map((node) => node.num))
+  const validOrbitNodes = validOrbitNodeNumbers(nodes)
   const byNumber = new Map(nodes.map((node) => [node.num, node]))
   const depthCache = new Map<number, number | null>()
   const childrenByParent = new Map<number, LayoutNode[]>()
   const placedCurveObstacles: SegmentObstacle[] = []
+  const placedLabelObstacles: LabelBox[] = []
+  const topLevelLabelObstacles = topLevelLabelBoxes(nodes, points, validOrbitNodes)
 
   for (const node of nodes) {
     const parent = node.parentIssue
-    if (parent === null || parent === node.num || !present.has(parent)) continue
+    if (parent === null || !validOrbitNodes.has(node.num)) continue
     const children = childrenByParent.get(parent) ?? []
     children.push(node)
     childrenByParent.set(parent, children)
@@ -390,22 +543,28 @@ export function placeDirectChildClusters(
       parentPoint: parent,
       currentPoints: points,
       placedCurveObstacles,
+      placedLabelObstacles,
+      topLevelLabelObstacles,
     }
-    const candidates = (expanded: boolean) =>
+    const candidates = (radialExpansion: number, minimumRingCount: number) =>
       Array.from({ length: CANDIDATE_SECTORS }, (_, offset) => {
         const sector = (start + offset) % CANDIDATE_SECTORS
         return evaluateCandidate(
           evaluationContext,
-          arcPoints(parent, ordered, sector, expanded),
+          orbitPoints(parent, ordered, sector, radialExpansion, minimumRingCount),
         )
       })
-    const compactCandidates = candidates(false)
-    let pool = compactCandidates
-    if (
-      ordered.length <= FIRST_ARC_CAPACITY &&
-      !compactCandidates.some((candidate) => candidate.collisionFree)
-    ) {
-      pool = [...compactCandidates, ...candidates(true)]
+    const naturalRingCount = orbitRingCounts(ordered).length
+    const baseCandidates = candidates(EXPANSION_STEPS[0], naturalRingCount)
+    let pool = baseCandidates
+    if (!baseCandidates.some((candidate) => candidate.collisionFree)) {
+      const maximumRingCount = Math.min(ordered.length, naturalRingCount + 3)
+      pool = EXPANSION_STEPS.flatMap((radialExpansion) =>
+        Array.from(
+          { length: maximumRingCount - naturalRingCount + 1 },
+          (_, offset) => candidates(radialExpansion, naturalRingCount + offset),
+        ).flat(),
+      )
     }
     let selected: Candidate | null = null
     for (const candidate of pool) {
@@ -413,6 +572,9 @@ export function placeDirectChildClusters(
     }
     if (selected) {
       Object.assign(points, selected.childPoints)
+      placedLabelObstacles.push(
+        ...clusterLabelBoxes(ordered, parent, selected.childPoints).map(({ box }) => box),
+      )
       for (const { edge, curve } of clusterCurves(
         parentNode,
         ordered,

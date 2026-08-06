@@ -28,7 +28,19 @@ describe('workflow-aware layout', () => {
     expect(structureSignature(statuses)).toBe(structureSignature(withParent))
   })
 
-  it('places direct children on a compact parent-local arc without moving broad anchors', () => {
+  it('treats a title footprint change as structural only when labels affect an orbit', () => {
+    const short: LayoutNode[] = [
+      { num: 16, title: 'Parent', blockedBy: [], parentIssue: null },
+      { num: 37, title: 'Short', blockedBy: [], parentIssue: 16 },
+    ]
+    const long = short.map((node) =>
+      node.num === 37 ? { ...node, title: 'A much longer operator-facing subissue title' } : node,
+    )
+
+    expect(structureSignature(long)).not.toBe(structureSignature(short))
+  })
+
+  it('places direct children on a complete parent-local orbit without moving broad anchors', () => {
     const broad: LayoutNode[] = [
       { num: 16, blockedBy: [], parentIssue: null },
       { num: 34, blockedBy: [], parentIssue: null },
@@ -49,22 +61,22 @@ describe('workflow-aware layout', () => {
         clusterPoints[34].x - clusterPoints[16].x,
         clusterPoints[34].y - clusterPoints[16].y,
       ),
-    ).toBeCloseTo(92, 6)
+    ).toBeCloseTo(180, 6)
     expect(
       Math.hypot(
         clusterPoints[35].x - clusterPoints[16].x,
         clusterPoints[35].y - clusterPoints[16].y,
       ),
-    ).toBeCloseTo(92, 6)
+    ).toBeCloseTo(180, 6)
     expect(
       Math.hypot(
         clusterPoints[35].x - clusterPoints[34].x,
         clusterPoints[35].y - clusterPoints[34].y,
       ),
-    ).toBeCloseTo(47.62, 2)
+    ).toBeCloseTo(360, 6)
   })
 
-  it('orders a sibling blocker sequence around the arc independently of snapshot order', () => {
+  it('orders a sibling blocker sequence around the orbit independently of snapshot order', () => {
     const sequence: LayoutNode[] = [
       { num: 16, blockedBy: [], parentIssue: null },
       { num: 50, blockedBy: [], parentIssue: 16 },
@@ -89,7 +101,7 @@ describe('workflow-aware layout', () => {
     expect(cross(10, 40)).toBeGreaterThan(0)
   })
 
-  it('fits five direct children on the compact first arc with the approved clearance', () => {
+  it('fits five direct children around one complete orbit with the approved clearance', () => {
     const nodes: LayoutNode[] = [
       { num: 16, blockedBy: [], parentIssue: null },
       ...[31, 32, 33, 34, 35].map((num) => ({ num, blockedBy: [], parentIssue: 16 })),
@@ -99,12 +111,12 @@ describe('workflow-aware layout', () => {
     for (const number of [31, 32, 33, 34, 35]) {
       expect(
         Math.hypot(points[number].x - points[16].x, points[number].y - points[16].y),
-      ).toBeCloseTo(92, 6)
+      ).toBeCloseTo(180, 6)
     }
     for (const [left, right] of [[31, 32], [32, 33], [33, 34], [34, 35]]) {
       expect(
         Math.hypot(points[left].x - points[right].x, points[left].y - points[right].y),
-      ).toBeGreaterThanOrEqual(44)
+      ).toBeGreaterThanOrEqual(72)
     }
   })
 })

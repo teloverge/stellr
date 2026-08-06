@@ -69,6 +69,15 @@ function pan(host: HTMLElement, dx: number, dy: number): void {
   window.dispatchEvent(new MouseEvent('mouseup', { clientX: dx, clientY: dy, bubbles: true }))
 }
 
+function zoomOut(host: HTMLElement): void {
+  const canvas = host.querySelector('canvas')!
+  for (let index = 0; index < 20; index++) {
+    canvas.dispatchEvent(
+      new WheelEvent('wheel', { cancelable: true, deltaY: 500, clientX: 500, clientY: 350 }),
+    )
+  }
+}
+
 describe('deterministic layout', () => {
   it('lays the same data out to the same positions every time', () => {
     const a = computeLayout(fixture())
@@ -91,8 +100,11 @@ describe('deterministic layout', () => {
 
 describe('the island seam', () => {
   let sm: StarMap
+  let host: HTMLDivElement
   beforeEach(() => {
-    sm = mounted().sm
+    const instance = mounted()
+    sm = instance.sm
+    host = instance.host
   })
 
   it('renders all five base states without a 2D context', () => {
@@ -169,6 +181,148 @@ describe('the island seam', () => {
     // A click far from any star deselects.
     expect(sm.selectAtScreen(-9999, -9999)).toBe(null)
     expect(emitted.at(-1)).toBe(null)
+  })
+
+  it('gives subissues a larger invisible target without changing top-level targets', () => {
+    sm.setModel([
+      { num: 16, slug: '16', title: 'Parent', type: 'issue', status: 'open', frontier: true, blockedBy: [], parentIssue: null },
+      { num: 31, slug: '31', title: 'Child', type: 'task', status: 'open', frontier: false, blockedBy: [], parentIssue: 16 },
+      { num: 99, slug: '99', title: 'Top level', type: 'issue', status: 'open', frontier: true, blockedBy: [], parentIssue: null },
+    ])
+    const child = sm.screenOf(31)!
+    const topLevel = sm.screenOf(99)!
+
+    expect(sm.selectAtScreen(child.x + 24, child.y)).toBe(31)
+    expect(sm.selectAtScreen(topLevel.x + 24, topLevel.y)).toBe(null)
+  })
+
+  it('does not enlarge targets for nodes in a parent cycle', () => {
+    sm.setModel([
+      { num: 6, slug: '6', title: 'Cycle A', type: 'task', status: 'open', frontier: false, blockedBy: [], parentIssue: 7 },
+      { num: 7, slug: '7', title: 'Cycle B', type: 'task', status: 'open', frontier: false, blockedBy: [], parentIssue: 6 },
+      { num: 99, slug: '99', title: 'Anchor', type: 'issue', status: 'open', frontier: true, blockedBy: [], parentIssue: null },
+    ])
+    const cycle = sm.screenOf(6)!
+
+    expect(sm.selectAtScreen(cycle.x + 24, cycle.y)).toBe(null)
+  })
+
+  it('chooses the nearest subissue in overlapping targets with a numeric tie-breaker', () => {
+    const children = [31, 32, 33, 34]
+    sm.setModel([
+      { num: 16, slug: '16', title: 'Parent', type: 'issue', status: 'open', frontier: true, blockedBy: [], parentIssue: null },
+      ...children.map((num) => ({
+        num,
+        slug: `${num}`,
+        title: `Child ${num}`,
+        type: 'task',
+        status: 'open' as const,
+        frontier: false,
+        blockedBy: [],
+        parentIssue: 16,
+      })),
+    ])
+    zoomOut(host)
+    const pairs = children.flatMap((left, index) =>
+      children.slice(index + 1).map((right) => {
+        const a = sm.screenOf(left)!
+        const b = sm.screenOf(right)!
+        return { left, right, a, b, distance: Math.hypot(a.x - b.x, a.y - b.y) }
+      }),
+    )
+    const nearest = pairs.sort((a, b) => a.distance - b.distance)[0]
+    expect(nearest.distance).toBeLessThan(46)
+
+    const towardRight = {
+      x: nearest.a.x * 0.6 + nearest.b.x * 0.4,
+      y: nearest.a.y * 0.6 + nearest.b.y * 0.4,
+    }
+    expect(sm.selectAtScreen(towardRight.x, towardRight.y)).toBe(nearest.left)
+    expect(
+      sm.selectAtScreen(
+        (nearest.a.x + nearest.b.x) / 2,
+        (nearest.a.y + nearest.b.y) / 2,
+      ),
+    ).toBe(Math.min(nearest.left, nearest.right))
+  })
+
+  it('preserves last-drawn arbitration for overlapping top-level targets', () => {
+    const tickets: Ticket[] = Array.from({ length: 14 }, (_, index) => ({
+      num: index + 1,
+      slug: `${index + 1}`,
+      title: `Top-level issue ${index + 1}`,
+      type: 'issue',
+      status: 'open',
+      frontier: true,
+      blockedBy: [],
+      parentIssue: null,
+    }))
+    sm.setModel(tickets)
+    zoomOut(host)
+    const points = tickets.map((ticket) => ({ number: ticket.num, point: sm.screenOf(ticket.num)! }))
+    const nearest = points.flatMap((left, index) =>
+      points.slice(index + 1).map((right) => ({
+        left,
+        right,
+        distance: Math.hypot(left.point.x - right.point.x, left.point.y - right.point.y),
+      })),
+    ).sort((a, b) => a.distance - b.distance)[0]
+    const click = {
+      x: (nearest.left.point.x + nearest.right.point.x) / 2,
+      y: (nearest.left.point.y + nearest.right.point.y) / 2,
+    }
+    const eligible = points
+      .filter(({ point }) => Math.hypot(point.x - click.x, point.y - click.y) < 14)
+      .map(({ number }) => number)
+
+    expect(eligible.length).toBeGreaterThan(1)
+    expect(sm.selectAtScreen(click.x, click.y)).toBe(eligible.at(-1))
+  })
+
+  it('lets a nearer top-level star win a cross-type target overlap', () => {
+    const children = [31, 32, 33, 34]
+    const topLevel = Array.from({ length: 14 }, (_, index) => index + 1)
+    sm.setModel([
+      ...topLevel.map((num) => ({
+        num,
+        slug: `${num}`,
+        title: `Top-level ${num}`,
+        type: 'issue',
+        status: 'open' as const,
+        frontier: true,
+        blockedBy: [],
+        parentIssue: null,
+      })),
+      { num: 16, slug: '16', title: 'Parent', type: 'issue', status: 'open', frontier: true, blockedBy: [], parentIssue: null },
+      ...children.map((num) => ({
+        num,
+        slug: `${num}`,
+        title: `Child ${num}`,
+        type: 'task',
+        status: 'open' as const,
+        frontier: false,
+        blockedBy: [],
+        parentIssue: 16,
+      })),
+    ])
+    zoomOut(host)
+    const pairs = topLevel.flatMap((top) =>
+      children.map((child) => {
+        const topPoint = sm.screenOf(top)!
+        const childPoint = sm.screenOf(child)!
+        return {
+          top,
+          child,
+          topPoint,
+          childPoint,
+          distance: Math.hypot(topPoint.x - childPoint.x, topPoint.y - childPoint.y),
+        }
+      }),
+    ).sort((left, right) => left.distance - right.distance)
+    const overlap = pairs[0]
+    expect(overlap.distance).toBeLessThan(29)
+
+    expect(sm.selectAtScreen(overlap.topPoint.x, overlap.topPoint.y)).toBe(overlap.top)
   })
 
   it('seats a selected star in the free rect the pane leaves, in either docking', () => {
@@ -659,6 +813,48 @@ describe('label placement', () => {
   const overlaps = (a: { x0: number; y0: number; x1: number; y1: number },
                     b: { x0: number; y0: number; x1: number; y1: number }) =>
     a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
+
+  it('aligns subissue labels outward while keeping the parent label centred', () => {
+    const tickets: Ticket[] = [
+      { num: 16, slug: '16', title: 'Parent issue', type: 'issue', status: 'open', blockedBy: [], parentIssue: null, frontier: true },
+      ...[31, 32, 33, 34].map((num) => ({
+        num,
+        slug: `${num}`,
+        title: `Subissue ${num}`,
+        type: 'task',
+        status: 'open' as const,
+        blockedBy: [],
+        parentIssue: 16,
+        frontier: false,
+      })),
+    ]
+    const { sm, labels } = place(tickets)
+    const points = sm.positions()
+    const parentLabel = labels.find((label) => label.text.startsWith('16'))
+
+    expect(parentLabel?.align).toBe('center')
+    for (const number of [31, 32, 33, 34]) {
+      const label = labels.find((candidate) => candidate.text.startsWith(`${number}`))
+      const dx = points[number].x - points[16].x
+      const dy = points[number].y - points[16].y
+      const expected = Math.abs(dx) <= Math.abs(dy) * 0.5
+        ? 'center'
+        : dx < 0
+          ? 'right'
+          : 'left'
+      expect(label?.align, `subissue #${number} label`).toBe(expected)
+    }
+  })
+
+  it('keeps labels centred for nodes in a parent cycle', () => {
+    const { labels } = place([
+      { num: 6, slug: '6', title: 'Cycle A', type: 'task', status: 'open', frontier: false, blockedBy: [], parentIssue: 7 },
+      { num: 7, slug: '7', title: 'Cycle B', type: 'task', status: 'open', frontier: false, blockedBy: [], parentIssue: 6 },
+    ])
+
+    expect(labels.find((label) => label.text.startsWith('06'))?.align).toBe('center')
+    expect(labels.find((label) => label.text.startsWith('07'))?.align).toBe('center')
+  })
 
   it('never draws a label across a star', () => {
     const tickets = CROWDED

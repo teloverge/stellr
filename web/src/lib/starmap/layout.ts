@@ -13,11 +13,14 @@
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
 import { placeDirectChildClusters } from './cluster-layout'
+import { validOrbitNodeNumbers } from './parent-topology'
 import { workflowEdges, type WorkflowNode } from './workflow'
 
 export const TAU = 6.2831853
 
-export interface LayoutNode extends WorkflowNode {}
+export interface LayoutNode extends WorkflowNode {
+  title?: string
+}
 
 export interface Point {
   x: number
@@ -150,6 +153,7 @@ export function computeLayout(nodes: LayoutNode[]): Record<number, Point> {
 // their statuses. The renderer recomputes layout only when this changes, so a
 // pure status push keeps every star exactly where it was.
 export function structureSignature(nodes: LayoutNode[]): string {
+  const validOrbitNodes = validOrbitNodeNumbers(nodes)
   const nums = nodes
     .map((n) => n.num)
     .sort((a, b) => a - b)
@@ -158,5 +162,10 @@ export function structureSignature(nodes: LayoutNode[]): string {
     .map((edge) => `${edge.from}>${edge.to}:${edge.roles.join('+')}`)
     .sort()
     .join(',')
-  return `${nums}|${edges}`
+  const orbitLabels = nodes
+    .filter((node) => validOrbitNodes.has(node.num))
+    .map((node) => `${node.num}:${JSON.stringify(node.title ?? '')}`)
+    .sort()
+    .join(',')
+  return `${nums}|${edges}|${orbitLabels}`
 }
