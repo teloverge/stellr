@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Clarified active-work priority with dimensional issue nodes, a maximum of two
+  status/selection rings, compact arrows, and literal `in-progress` label
+  support ahead of `ready-for-agent` and blocked work.
 - Emphasized the incoming and outgoing edges directly connected to a selected
   node while preserving dependency direction, state styling, and motion.
 - Restored dependency and parent relationship lines from cached Markdown issue
