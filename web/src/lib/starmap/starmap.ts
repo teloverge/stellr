@@ -49,7 +49,6 @@ const ISSUE_RADIUS_SCALE = 1.25
 const CONTEXT_ALPHA = 0.3
 const CONTEXT_EDGE_ALPHA = 0.45
 const SELECTED_EDGE_WIDTH_SCALE = 1.7
-const SELECTED_EDGE_ARROW_SCALE = 1.25
 
 interface RenderEdge extends WorkflowEdge {
   state: WorkflowVisualState
@@ -1029,9 +1028,8 @@ export class StarMap {
       al = Math.hypot(tangentX, tangentY) || 1,
       ux = tangentX / al,
       uy = tangentY / al
-    const arrowScale = selected ? SELECTED_EDGE_ARROW_SCALE : 1
-    const ah = 12 * arrowScale,
-      aw = 6.5 * arrowScale,
+    const ah = 8,
+      aw = 4,
       px = -uy,
       py = ux,
       tipx = midx + ux * ah * 0.5,

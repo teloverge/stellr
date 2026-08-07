@@ -219,10 +219,7 @@ describe('dependency-edge visual treatment', () => {
     expect(unresolvedArrow.alpha).toBe(0.45)
     for (const arrow of [resolvedArrow, unresolvedArrow]) {
       expect(arrow.points).toHaveLength(3)
-      const [tip, baseA, baseB] = arrow.points
-      const base = { x: (baseA.x + baseB.x) / 2, y: (baseA.y + baseB.y) / 2 }
-      expect(Math.hypot(tip.x - base.x, tip.y - base.y)).toBeCloseTo(12)
-      expect(Math.hypot(baseA.x - base.x, baseA.y - base.y)).toBeCloseTo(6.5)
+      expectArrowDimensions(arrow, 8, 4)
     }
 
     expectParticleMotion(focused, 1)
@@ -267,11 +264,17 @@ describe('dependency-edge visual treatment', () => {
     const resolvedArrow = selected.fills.find((fill) => fill.color === '#d9f3df')!
     const unresolvedArrows = selected.fills.filter((fill) => fill.color === '#c8d5e8')
     expect(resolvedArrow.alpha).toBe(1)
-    expectArrowDimensions(resolvedArrow, 15, 8.125)
+    expectArrowDimensions(resolvedArrow, 8, 4)
     const selectedUnresolvedArrow = unresolvedArrows.find((fill) => fill.alpha === 1)!
     const contextUnresolvedArrow = unresolvedArrows.find((fill) => fill.alpha === 0.45)!
-    expectArrowDimensions(selectedUnresolvedArrow, 15, 8.125)
-    expectArrowDimensions(contextUnresolvedArrow, 12, 6.5)
+    expectArrowDimensions(selectedUnresolvedArrow, 8, 4)
+    expectArrowDimensions(contextUnresolvedArrow, 8, 4)
+    expect(arrowDimensions(selectedUnresolvedArrow).length).toBeCloseTo(
+      arrowDimensions(contextUnresolvedArrow).length,
+    )
+    expect(arrowDimensions(selectedUnresolvedArrow).halfWidth).toBeCloseTo(
+      arrowDimensions(contextUnresolvedArrow).halfWidth,
+    )
     expectParticleMotion(selected, 1)
 
     const deselected = edgeStrokes(deselectedRender)
@@ -364,6 +367,7 @@ describe('dependency-edge visual treatment', () => {
     expect(firstCurve.control.y + secondCurve.control.y).toBeCloseTo(sharedMidpoint.y * 2)
 
     for (let index = 0; index < violetArrows.length; index++) {
+      expectArrowDimensions(violetArrows[index], 8, 4)
       const [tip, baseA, baseB] = violetArrows[index].points
       const base = { x: (baseA.x + baseB.x) / 2, y: (baseA.y + baseB.y) / 2 }
       const stroke = violetStrokes[index]
@@ -410,7 +414,7 @@ describe('dependency-edge visual treatment', () => {
     const selectedMiniArrows = selectedChild.fills.filter((fill) => fill.color === '#c7b8ff')
     expect(selectedMiniArrows).toHaveLength(2)
     for (const arrow of selectedMiniArrows) {
-      expectArrowDimensions(arrow, 15, 8.125)
+      expectArrowDimensions(arrow, 8, 4)
     }
 
     const completed = paintChild('resolved')
@@ -418,6 +422,7 @@ describe('dependency-edge visual treatment', () => {
     const mintArrows = completed.fills.filter((fill) => fill.color === '#d9f3df')
     expect(mintStrokes).toHaveLength(2)
     expect(mintArrows).toHaveLength(2)
+    for (const arrow of mintArrows) expectArrowDimensions(arrow, 8, 4)
     for (const stroke of mintStrokes) {
       expect(stroke).toMatchObject({ width: 3, dash: [], cap: 'round', alpha: 1 })
       expect(stroke.curves).toHaveLength(1)
