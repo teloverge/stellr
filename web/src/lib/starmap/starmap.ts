@@ -18,7 +18,14 @@
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
 import { computeLayout, structureSignature, TAU } from './layout'
-import { STAR, LABEL, SESSION_HUE, visualState, hexA, type VisualState } from './theme'
+import {
+  STAR,
+  SESSION_HUE,
+  visualState,
+  priorityLabelColor,
+  hexA,
+  type VisualState,
+} from './theme'
 import { GRAMMAR, type SessionState } from './session'
 import { analyzeFocus, type Focus } from './focus'
 import { edgeKey, isMiniWorkflowEdge, workflowEdges, type WorkflowEdge } from './workflow'
@@ -29,6 +36,7 @@ import {
   type WorkflowVisualState,
 } from './workflow-visual'
 import type { Ticket } from './model'
+import { ticketWorkPriority, type WorkPriority } from './work-priority'
 
 export type SelectHandler = (num: number | null) => void
 
@@ -56,6 +64,7 @@ interface Node {
   type: string
   parentIssue: number | null
   vstate: VisualState
+  priority: WorkPriority
   // The session overlay riding this star, or null when no session speaks for it
   // (ticket 13). Strictly additive: it never touches layout or the base star.
   sstate: SessionState | null
@@ -89,17 +98,9 @@ function hits(a: Box, b: Box): boolean {
 }
 
 // Who gets first pick of the good slots. A contested slot should go to the star
-// the operator is most likely to be reading — the selected one, then the bright
-// actionable states — rather than to whichever ticket happens to be numbered
-// lowest, which is what array order gave us.
-const LABEL_PRIORITY: Record<VisualState, number> = {
-  frontier: 0,
-  claimed: 1,
-  resolved: 2,
-  blocked: 3,
-  out_of_scope: 4,
-}
-
+// the operator is most likely to be reading — selected, distinct CURRENT, then
+// the approved workflow priority — rather than to whichever ticket happens to
+// be numbered lowest, which is what array order gave us.
 // A star just off-screen can still own a label that reaches back on-screen, so
 // the viewport cull keeps a generous skirt around the canvas.
 const CULL_MARGIN = 140
@@ -355,12 +356,14 @@ export class StarMap {
         n.title = t.title
         n.type = t.type
         const vstate = visualState(t)
+        const priority = ticketWorkPriority(t)
         const sstate = sessions[t.num] ?? null
-        if (vstate !== n.vstate || sstate !== n.sstate) {
+        if (vstate !== n.vstate || priority !== n.priority || sstate !== n.sstate) {
           n.flare = 1
           changed.push(`#${t.num < 10 ? '0' : ''}${t.num} → ${sstate ?? vstate.replace('_', ' ')}`)
         }
         n.vstate = vstate
+        n.priority = priority
         n.sstate = sstate
       }
       if (changed.length) this.#tick(changed.join('   ·   '))
@@ -388,6 +391,7 @@ export class StarMap {
         type: t.type,
         parentIssue: t.parentIssue,
         vstate: visualState(t),
+        priority: ticketWorkPriority(t),
         sstate: sessions[t.num] ?? null,
         x: p.x,
         y: p.y,
@@ -1336,11 +1340,15 @@ export class StarMap {
 
     const order = [...vis].sort((a, b) => {
       const priority = (n: Node) => {
-        if (this.#focus.current === n.num) return 0
-        if (this.#focus.readySet.has(n.num)) return 1
-        if (this.#selected === n.num) return 2
-        if (this.#focus.pathNodes.has(n.num)) return 3
-        return 4 + LABEL_PRIORITY[n.vstate]
+        if (this.#selected === n.num) return 0
+        if (this.#focus.current === n.num) return 1
+        switch (n.priority) {
+          case 'in_progress': return 2
+          case 'ready': return 3
+          case 'frontier': return 4
+          case 'blocked': return 5
+          case 'terminal': return n.vstate === 'resolved' ? 6 : 7
+        }
       }
       const pa = priority(a.n)
       const pb = priority(b.n)
@@ -1406,7 +1414,7 @@ export class StarMap {
           text,
           x: v.sx,
           y: c.y,
-          fill: LABEL[v.n.vstate],
+          fill: priorityLabelColor(v.n.vstate, v.n.priority),
           alpha:
             this.#focus.emphasized.size === 0 || this.#focus.emphasized.has(v.n.num)
               ? 1

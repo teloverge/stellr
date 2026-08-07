@@ -14,6 +14,7 @@
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
 import type { Ticket } from './model'
+import type { WorkPriority } from './work-priority'
 
 export type VisualState =
   | 'resolved'
@@ -52,6 +53,19 @@ export const LABEL: Record<VisualState, string> = {
   claimed: '#ffe6a0',
   blocked: '#d0b3b3',
   out_of_scope: '#a89fb2',
+}
+
+export function priorityStarStyle(vstate: VisualState, priority: WorkPriority): StarStyle {
+  if (priority === 'in_progress') return { ...STAR.claimed, r: 8.1, gr: 42 }
+  if (priority === 'ready') return { ...STAR.frontier, r: 7.2, gr: 34 }
+  if (priority === 'frontier') return { ...STAR.frontier, r: 6.2, gr: 28 }
+  return STAR[vstate]
+}
+
+export function priorityLabelColor(vstate: VisualState, priority: WorkPriority): string {
+  if (priority === 'in_progress') return LABEL.claimed
+  if (priority === 'ready' || priority === 'frontier') return LABEL.frontier
+  return LABEL[vstate]
 }
 
 // Derive the visual state of a ticket from its pushed status and frontier flag.
