@@ -593,7 +593,7 @@ describe('label placement', () => {
   // Like stubContext, but recording where each string landed and how it was
   // aligned, so the drawn boxes can be reconstructed.
   function recordingContext() {
-    const drawn: { text: string; x: number; y: number; align: string; font: string }[] = []
+    const drawn: { text: string; x: number; y: number; align: string; font: string; fill: string }[] = []
     const ctx: Record<string, unknown> = {
       textAlign: 'center',
       font: '',
@@ -606,6 +606,7 @@ describe('label placement', () => {
           y,
           align: this.textAlign as string,
           font: this.font as string,
+          fill: this.fillStyle as string,
         })
       },
     }
@@ -623,7 +624,12 @@ describe('label placement', () => {
     globalThis.requestAnimationFrame = realRaf
   })
 
-  function place(tickets: Ticket[], sessions: Record<number, SessionState> = {}) {
+  function place(
+    tickets: Ticket[],
+    sessions: Record<number, SessionState> = {},
+    currentIssue: number | null = null,
+    selectedIssue: number | null = null,
+  ) {
     const { ctx, drawn } = recordingContext()
     let frames: FrameRequestCallback[] = []
     HTMLCanvasElement.prototype.getContext = (() => ctx) as never
@@ -634,7 +640,8 @@ describe('label placement', () => {
     globalThis.cancelAnimationFrame = (() => {}) as never
 
     const { sm } = mounted()
-    sm.setModel(tickets, sessions)
+    sm.setModel(tickets, sessions, currentIssue)
+    if (selectedIssue !== null) sm.select(selectedIssue)
     const cb = frames.pop()
     frames = []
     cb?.(0)
@@ -655,6 +662,24 @@ describe('label placement', () => {
     })
     return { sm, labels, boxes }
   }
+
+  it('gives label slots and colours to selected, current, then workflow priority', () => {
+    const tickets: Ticket[] = [
+      { num: 5, slug: '5', title: 'Selected blocked', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: false, workPriority: 'blocked' },
+      { num: 6, slug: '6', title: 'Current blocked', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: false, workPriority: 'blocked' },
+      { num: 40, slug: '40', title: 'In progress', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: false, workPriority: 'in_progress' },
+      { num: 30, slug: '30', title: 'Ready', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true, readyForAgent: true, workPriority: 'ready' },
+      { num: 20, slug: '20', title: 'Frontier', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true, workPriority: 'frontier' },
+      { num: 10, slug: '10', title: 'Blocked', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: false, workPriority: 'blocked' },
+    ]
+
+    const { labels } = place(tickets, {}, 6, 5)
+    const issueNumber = (text: string) => Number(text.match(/\b(\d+)\b/)?.[1])
+
+    expect(labels.map((label) => issueNumber(label.text))).toEqual([5, 6, 40, 30, 20, 10])
+    expect(labels.find((label) => issueNumber(label.text) === 40)?.fill).toBe('#ffe6a0')
+    expect(labels.find((label) => issueNumber(label.text) === 30)?.fill).toBe('#b3e5ff')
+  })
 
   const overlaps = (a: { x0: number; y0: number; x1: number; y1: number },
                     b: { x0: number; y0: number; x1: number; y1: number }) =>

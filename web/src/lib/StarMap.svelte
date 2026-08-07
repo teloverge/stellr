@@ -43,6 +43,14 @@
 
   onMount(() => {
     renderer = new Renderer()
+    const motionQuery = typeof matchMedia === 'function'
+      ? matchMedia('(prefers-reduced-motion: reduce)')
+      : null
+    const updateReducedMotion = (event: MediaQueryListEvent) => {
+      renderer?.setReducedMotion(event.matches)
+    }
+    renderer.setReducedMotion(motionQuery?.matches ?? false)
+    motionQuery?.addEventListener('change', updateReducedMotion)
     const background = getComputedStyle(host).getPropertyValue('--map-background').trim()
     renderer.setBackground(background)
     renderer.mount(host)
@@ -51,6 +59,7 @@
     })
 
     return () => {
+      motionQuery?.removeEventListener('change', updateReducedMotion)
       renderer?.destroy()
       renderer = undefined
     }
