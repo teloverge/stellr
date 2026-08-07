@@ -89,10 +89,12 @@ status ring and one selection ring around a node.
 
 Remove the node-level parent/subissue rim. Parent and subissue meaning already
 travels through the workflow edges and must not consume another ring channel.
-Remove the two CURRENT rings because CURRENT is the selected issue in this
-renderer and the selection ring already communicates that state. Replace the
-ring-shaped click flare with a brief increase in sphere glow so interaction
-feedback cannot create a third outer ring.
+Remove the two CURRENT rings because CURRENT already has a label and path
+emphasis, while selection alone owns the neutral white ring. CURRENT and
+selection may name different nodes; removing CURRENT's rings must not merge or
+otherwise change those states. Replace the ring-shaped click flare with a brief
+increase in sphere glow so interaction feedback cannot create a third outer
+ring.
 
 The maximum stable count is therefore two outer rings for a selected
 in-progress or ready issue, one for an unselected in-progress or ready issue,
@@ -113,11 +115,12 @@ existing issue-radius scale is applied:
 - out-of-scope: retain `4.5` and `18`.
 
 Selection remains the first label-placement priority because it reflects the
-operator's immediate action. Among unselected nodes, an in-progress issue gets
-a contested label slot before a ready issue, a ready issue gets it before an
-ordinary frontier issue, and an ordinary frontier issue gets it before a
-blocked issue. Completed and out-of-scope nodes retain their existing relative
-label priority after active work.
+operator's immediate action. A distinct CURRENT node remains second because it
+anchors the active session. After those two interaction states, an in-progress
+issue gets a contested label slot before a ready issue, a ready issue gets it
+before an ordinary frontier issue, and an ordinary frontier issue gets it
+before a blocked issue. Completed and out-of-scope nodes retain their existing
+relative label priority after active work.
 
 Keep the existing selected label and detail-pane behavior. A selected ready
 issue may still say `CURRENT / READY`; this design changes the surrounding
@@ -180,8 +183,8 @@ Add or update tests that prove:
 - click feedback changes glow without adding a ring;
 - sphere painting records the highlight, semantic body, shade, shadow, and body
   boundary in the intended order;
-- label priority orders selected first, then in-progress, ready, ordinary
-  frontier, and blocked;
+- label priority orders selected first, a distinct CURRENT node second, then
+  in-progress, ready, ordinary frontier, and blocked;
 - ordinary and selected arrowheads both use length `8` and half-width `4`;
 - selected edges retain `1.7` stroke scaling, full-opacity selected-last paint,
   semantic styling, and direct-only scope;
