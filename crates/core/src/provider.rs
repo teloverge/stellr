@@ -30,6 +30,10 @@ impl RepoRef {
 #[async_trait::async_trait]
 pub trait Provider {
     async fn fetch(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError>;
+
+    fn allows_cached_viewer_identity(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

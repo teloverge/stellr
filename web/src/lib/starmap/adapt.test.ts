@@ -85,4 +85,18 @@ describe('toRendererModel', () => {
     })
     expect(model[3]).toMatchObject({ assignedToViewer: false })
   })
+
+  it('never guesses ownership when viewer identity is unavailable', () => {
+    const input = space()
+    input.stars[2].assignees = ['previous-account']
+    Object.assign(input.stars[2], { ready_for_agent: true })
+
+    const model = toRendererModel(input)
+
+    expect(model[2]).toMatchObject({
+      status: 'claimed',
+      assignedToViewer: false,
+      readyForAgent: true,
+    })
+  })
 })

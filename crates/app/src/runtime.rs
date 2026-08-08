@@ -1,4 +1,14 @@
-use std::{io, net::SocketAddr, num::NonZeroU64, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    io,
+    net::SocketAddr,
+    num::NonZeroU64,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use stellr_core::{Model, Provider, ProviderError, ProviderSnapshot, RepoRef};
 use stellr_github::cache::Cache;
@@ -17,25 +27,43 @@ use tokio::{
 #[derive(Clone)]
 pub struct ProviderSlot {
     current: Arc<RwLock<Arc<dyn Provider + Send + Sync>>>,
+    generation: Arc<AtomicU64>,
+    confirmed_generation: Arc<AtomicU64>,
 }
 
 impl ProviderSlot {
     pub fn new(provider: Arc<dyn Provider + Send + Sync>) -> Self {
         Self {
             current: Arc::new(RwLock::new(provider)),
+            generation: Arc::new(AtomicU64::new(0)),
+            confirmed_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub async fn replace(&self, provider: Arc<dyn Provider + Send + Sync>) {
-        *self.current.write().await = provider;
+        let mut current = self.current.write().await;
+        *current = provider;
+        self.generation.fetch_add(1, Ordering::AcqRel);
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for ProviderSlot {
     async fn fetch(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
-        let provider = self.current.read().await.clone();
-        provider.fetch(repo).await
+        let (provider, generation) = {
+            let current = self.current.read().await;
+            (current.clone(), self.generation.load(Ordering::Acquire))
+        };
+        let result = provider.fetch(repo).await;
+        if result.is_ok() && self.generation.load(Ordering::Acquire) == generation {
+            self.confirmed_generation
+                .store(generation, Ordering::Release);
+        }
+        result
+    }
+
+    fn allows_cached_viewer_identity(&self) -> bool {
+        self.confirmed_generation.load(Ordering::Acquire) == self.generation.load(Ordering::Acquire)
     }
 }
 

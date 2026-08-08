@@ -115,6 +115,7 @@ async fn sync_space(
             let _ = cache.store(
                 &entry.repo,
                 &Snapshot {
+                    viewer_login: snapshot.viewer_login.clone(),
                     issues: snapshot.issues.clone(),
                     synced_at,
                 },
@@ -130,13 +131,23 @@ async fn sync_space(
         }
         Err(error) => {
             let snapshot = cache.load(&entry.repo);
-            let (issues, synced_at) = snapshot
-                .map(|snapshot| (snapshot.issues, Some(snapshot.synced_at)))
+            let (issues, cached_viewer_login, synced_at) = snapshot
+                .map(|snapshot| {
+                    (
+                        snapshot.issues,
+                        snapshot.viewer_login,
+                        Some(snapshot.synced_at),
+                    )
+                })
                 .unwrap_or_default();
+            let viewer_login = provider
+                .allows_cached_viewer_identity()
+                .then_some(cached_viewer_login)
+                .flatten();
             model(
                 entry,
                 issues,
-                None,
+                viewer_login,
                 synced_at,
                 true,
                 Some(error.to_string()),
