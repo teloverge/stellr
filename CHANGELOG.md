@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Reworked the star map around viewer-aware work priorities: current and owned
+  work now remains prominent when zoomed out, team and closure states stay
+  distinct, account changes cannot reuse stale ownership, and completed paths
+  remain quiet except for subtle directional motion into immediately actionable
+  nodes.
 - Kept ready subissue labels visible and clear of their emphasis rings while
   the star-map camera eases.
 - Declared npm 12.0.2 as the web workspace's development package manager and
