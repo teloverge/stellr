@@ -18,6 +18,7 @@ import type { Ticket } from './model'
 export type VisualState =
   | 'resolved'
   | 'frontier'
+  | 'my_next'
   | 'claimed'
   | 'blocked'
   | 'out_of_scope'
@@ -41,6 +42,7 @@ export interface StarStyle {
 export const STAR: Record<VisualState, StarStyle> = {
   resolved: { core: '#b9d6c4', glow: '#5b9077', r: 5.4, gr: 24 },
   frontier: { core: '#8ad8ff', glow: '#2f9be0', r: 8.1, gr: 49 },
+  my_next: { core: '#8ad8ff', glow: '#2f9be0', r: 8.8, gr: 49 },
   claimed: { core: '#ffd873', glow: '#ffb020', r: 7.2, gr: 36 },
   blocked: { core: '#e2c3c3', glow: '#9a6f6f', r: 4.5, gr: 20 },
   out_of_scope: { core: '#948da4', glow: '#6b6478', r: 4.5, gr: 18 },
@@ -49,6 +51,7 @@ export const STAR: Record<VisualState, StarStyle> = {
 export const LABEL: Record<VisualState, string> = {
   resolved: '#a2c1ac',
   frontier: '#b3e5ff',
+  my_next: '#b3e5ff',
   claimed: '#ffe6a0',
   blocked: '#d0b3b3',
   out_of_scope: '#a89fb2',
@@ -58,7 +61,10 @@ export const LABEL: Record<VisualState, string> = {
 // The frontier flag is what splits an open ticket into the bright, takeable
 // `frontier` star and the small, dim `blocked` one — the whole reason the map
 // exists is this at-a-glance read.
-export function visualState(t: Pick<Ticket, 'status' | 'frontier'>): VisualState {
+export function visualState(
+  t: Pick<Ticket, 'status' | 'frontier' | 'readyForAgent' | 'assignedToViewer'>,
+): VisualState {
+  if (t.assignedToViewer && t.readyForAgent) return 'my_next'
   switch (t.status) {
     case 'resolved':
       return 'resolved'

@@ -109,24 +109,38 @@ async fn sync_space(
     cache: &Cache,
 ) -> SpaceModel {
     match provider.fetch(&entry.repo).await {
-        Ok(issues) => {
+        Ok(snapshot) => {
             let synced_at = Utc::now().timestamp();
             // A successful provider sync is fresh even if its fallback cache cannot be updated.
             let _ = cache.store(
                 &entry.repo,
                 &Snapshot {
-                    issues: issues.clone(),
+                    issues: snapshot.issues.clone(),
                     synced_at,
                 },
             );
-            model(entry, issues, Some(synced_at), false, None)
+            model(
+                entry,
+                snapshot.issues,
+                snapshot.viewer_login,
+                Some(synced_at),
+                false,
+                None,
+            )
         }
         Err(error) => {
             let snapshot = cache.load(&entry.repo);
             let (issues, synced_at) = snapshot
                 .map(|snapshot| (snapshot.issues, Some(snapshot.synced_at)))
                 .unwrap_or_default();
-            model(entry, issues, synced_at, true, Some(error.to_string()))
+            model(
+                entry,
+                issues,
+                None,
+                synced_at,
+                true,
+                Some(error.to_string()),
+            )
         }
     }
 }
@@ -134,6 +148,7 @@ async fn sync_space(
 fn model(
     entry: &SpaceEntry,
     issues: Vec<stellr_core::RawIssue>,
+    viewer_login: Option<String>,
     synced_at: Option<i64>,
     stale: bool,
     error: Option<String>,
@@ -142,6 +157,7 @@ fn model(
         id: entry.id.clone(),
         repo: entry.repo.slug(),
         name: entry.repo.name.clone(),
+        viewer_login,
         stars: derive(&issues),
         synced_at,
         stale,

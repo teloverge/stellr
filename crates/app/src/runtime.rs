@@ -1,6 +1,6 @@
 use std::{io, net::SocketAddr, num::NonZeroU64, path::PathBuf, sync::Arc, time::Duration};
 
-use stellr_core::{Model, Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{Model, Provider, ProviderError, ProviderSnapshot, RepoRef};
 use stellr_github::cache::Cache;
 use stellr_server::{
     poll::{PollingControl, spawn_controlled_poller},
@@ -33,7 +33,7 @@ impl ProviderSlot {
 
 #[async_trait::async_trait]
 impl Provider for ProviderSlot {
-    async fn fetch(&self, repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         let provider = self.current.read().await.clone();
         provider.fetch(repo).await
     }

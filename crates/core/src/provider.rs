@@ -1,5 +1,20 @@
 use crate::RawIssue;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderSnapshot {
+    pub viewer_login: Option<String>,
+    pub issues: Vec<RawIssue>,
+}
+
+impl ProviderSnapshot {
+    pub fn without_viewer(issues: Vec<RawIssue>) -> Self {
+        Self {
+            viewer_login: None,
+            issues,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoRef {
     pub owner: String,
@@ -14,7 +29,7 @@ impl RepoRef {
 
 #[async_trait::async_trait]
 pub trait Provider {
-    async fn fetch(&self, repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError>;
+    async fn fetch(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError>;
 }
 
 #[derive(Debug, thiserror::Error)]

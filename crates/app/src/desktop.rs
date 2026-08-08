@@ -9,7 +9,7 @@ use std::{
 };
 
 use serde::Serialize;
-use stellr_core::{Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{Provider, ProviderError, ProviderSnapshot, RepoRef};
 use stellr_github::{
     auth::resolve_token,
     cache::Cache,
@@ -231,7 +231,7 @@ struct SignedOutProvider;
 
 #[async_trait::async_trait]
 impl Provider for SignedOutProvider {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         Err(ProviderError::Auth("GitHub sign-in required".to_owned()))
     }
 }

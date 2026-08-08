@@ -5,6 +5,7 @@ export interface Star {
   parent_issue: number | null
   title: string
   status: Status
+  ready_for_agent?: boolean
   blocked_by: number[]
   milestone: string | null
   labels: string[]
@@ -17,6 +18,7 @@ export interface SpaceModel {
   id: string
   repo: string
   name: string
+  viewer_login?: string | null
   stars: Star[]
   synced_at: number | null
   stale: boolean

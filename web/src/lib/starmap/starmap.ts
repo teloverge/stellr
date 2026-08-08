@@ -105,10 +105,11 @@ type Box = LabelBox
 // lowest, which is what array order gave us.
 const LABEL_PRIORITY: Record<VisualState, number> = {
   frontier: 0,
-  claimed: 1,
-  resolved: 2,
-  blocked: 3,
-  out_of_scope: 4,
+  my_next: 1,
+  claimed: 2,
+  resolved: 3,
+  blocked: 4,
+  out_of_scope: 5,
 }
 
 // A star just off-screen can still own a label that reaches back on-screen, so
@@ -1114,7 +1115,12 @@ export class StarMap {
       g.arc(x, y, cr + 4, 0, TAU)
       g.stroke()
     }
-    if (n.vstate === 'resolved') {
+    if (n.vstate === 'my_next') {
+      g.fillStyle = c.core
+      g.beginPath()
+      g.arc(x, y, cr, 0, TAU)
+      g.fill()
+    } else if (n.vstate === 'resolved') {
       const cg = g.createRadialGradient(x, y, 0, x, y, cr * 1.35)
       cg.addColorStop(0, hexA(c.core, 1))
       cg.addColorStop(0.6, hexA(c.core, 0.92))

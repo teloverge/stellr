@@ -67,4 +67,22 @@ describe('toRendererModel', () => {
       false,
     ])
   })
+
+  it('matches viewer ownership case-insensitively without redefining claimed', () => {
+    const input = space() as SpaceModel & { viewer_login: string }
+    input.viewer_login = 'octocat'
+    input.stars[2].assignees = ['OctoCat']
+    Object.assign(input.stars[2], { ready_for_agent: true })
+    input.stars[3].assignees = ['hubot']
+    Object.assign(input.stars[3], { ready_for_agent: true })
+
+    const model = toRendererModel(input)
+
+    expect(model[2]).toMatchObject({
+      status: 'claimed',
+      assignedToViewer: true,
+      readyForAgent: true,
+    })
+    expect(model[3]).toMatchObject({ assignedToViewer: false })
+  })
 })

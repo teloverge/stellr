@@ -67,6 +67,14 @@ const READY_CHILD: Ticket = {
   parentIssue: 99,
   readyForAgent: true,
 }
+const MY_NEXT: Ticket = {
+  ...CLAIMED,
+  num: 10,
+  slug: '10',
+  title: 'My next work',
+  readyForAgent: true,
+  assignedToViewer: true,
+}
 
 function recordingContext(): {
   ctx: Record<string, unknown>
@@ -176,6 +184,14 @@ describe('issue core visual grammar', () => {
       arc: { radius: 9.1125 },
     })
     expect(fills.some((fill) => fill.style === '#000')).toBe(false)
+  })
+
+  it('paints My next work as a solid blue core without a black disk', () => {
+    const { fills, strokes } = paint(MY_NEXT)
+
+    expect(fills[1]).toEqual({ style: '#8ad8ff', arc: { radius: 11 } })
+    expect(fills.some((fill) => fill.style === '#000')).toBe(false)
+    expect(strokes.some((stroke) => stroke.style === 'rgba(138,216,255,0.95)')).toBe(false)
   })
 
   it('paints every incomplete state with its unchanged glow, black disk, and status rim', () => {

@@ -6,4 +6,4 @@ pub mod provider;
 
 pub use derive::derive;
 pub use model::{IssueState, Model, RawIssue, SpaceModel, Star, Status};
-pub use provider::{Provider, ProviderError, RepoRef};
+pub use provider::{Provider, ProviderError, ProviderSnapshot, RepoRef};

@@ -1,15 +1,15 @@
 use std::{path::Path, process::Command, sync::Arc};
 
 use stellr_app::desktop::{DesktopRuntimeOptions, start_runtime, start_runtime_with_entry};
-use stellr_core::{Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{Provider, ProviderError, ProviderSnapshot, RepoRef};
 use stellr_server::spaces::{SpaceEntry, detect_repo};
 
 struct EmptyProvider;
 
 #[async_trait::async_trait]
 impl Provider for EmptyProvider {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
-        Ok(vec![])
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        Ok(ProviderSnapshot::without_viewer(vec![]))
     }
 }
 

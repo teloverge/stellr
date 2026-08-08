@@ -16,8 +16,20 @@ fn page(nodes: Value) -> Value {
 }
 
 fn page_with_pagination(nodes: Value, has_next_page: bool, end_cursor: Option<&str>) -> Value {
+    page_for_viewer("octocat", nodes, has_next_page, end_cursor)
+}
+
+fn page_for_viewer(
+    viewer_login: &str,
+    nodes: Value,
+    has_next_page: bool,
+    end_cursor: Option<&str>,
+) -> Value {
     json!({
         "data": {
+            "viewer": {
+                "login": viewer_login
+            },
             "repository": {
                 "issues": {
                     "pageInfo": {
@@ -83,12 +95,66 @@ async fn fetch_follows_pagination_until_the_repository_is_complete() {
         .await;
 
     let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
-    let issues = provider.fetch(&repo()).await.unwrap();
+    let result = provider.fetch(&repo()).await.unwrap();
 
+    assert_eq!(result.viewer_login.as_deref(), Some("octocat"));
     assert_eq!(
-        issues.iter().map(|issue| issue.number).collect::<Vec<_>>(),
+        result
+            .issues
+            .iter()
+            .map(|issue| issue.number)
+            .collect::<Vec<_>>(),
         vec![1, 2]
     );
+}
+
+#[tokio::test]
+async fn fetch_rejects_missing_viewer_identity_as_a_parse_failure() {
+    let server = MockServer::start().await;
+    let mut response = page(json!([]));
+    response["data"].as_object_mut().unwrap().remove("viewer");
+    mount_graphql_response(&server, response).await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    assert!(matches!(error, ProviderError::Parse(_)));
+    assert!(error.to_string().contains("viewer"));
+}
+
+#[tokio::test]
+async fn fetch_rejects_a_viewer_change_during_pagination() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_partial_json(
+            json!({ "variables": { "cursor": "CUR1" } }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(page_for_viewer(
+            "hubot",
+            json!([]),
+            false,
+            None,
+        )))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(page_with_pagination(
+                json!([]),
+                true,
+                Some("CUR1"),
+            )),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    assert!(matches!(error, ProviderError::Parse(_)));
+    assert!(error.to_string().contains("viewer login changed"));
 }
 
 #[tokio::test]
@@ -218,6 +284,7 @@ async fn mount_graphql_response(server: &MockServer, response: Value) {
         .and(body_string_contains(
             "issues(first: 100, after: $cursor, states: [OPEN, CLOSED])",
         ))
+        .and(body_string_contains("viewer { login }"))
         .and(body_string_contains("parent { number }"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response))
         .mount(server)
@@ -287,7 +354,7 @@ async fn fetch_maps_complete_issue_shape_and_merges_dependency_sources() {
     .await;
 
     let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
-    let issues = provider.fetch(&repo()).await.unwrap();
+    let issues = provider.fetch(&repo()).await.unwrap().issues;
 
     assert_eq!(issues[0].parent_issue, None);
     assert_eq!(issues[2].parent_issue, Some(16));
@@ -410,7 +477,7 @@ async fn fetch_enriches_markdown_relationship_sections() {
     .await;
 
     let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
-    let issues = provider.fetch(&repo()).await.unwrap();
+    let issues = provider.fetch(&repo()).await.unwrap().issues;
 
     assert_eq!(issues[1].parent_issue, Some(1));
     assert_eq!(issues[1].blocked_by, vec![1, 3]);
