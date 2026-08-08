@@ -80,7 +80,7 @@ const SELECTION_FIXTURE: Ticket[] = [
 
 function edgeStrokes(render: { strokes: Stroke[] }): Stroke[] {
   return render.strokes.filter((stroke) =>
-    ['rgba(190,225,200,0.82)', 'rgba(174,192,218,0.62)', 'rgba(170,145,255,0.78)'].includes(stroke.color),
+    ['rgba(150,178,160,0.36)', 'rgba(174,192,218,0.62)', 'rgba(170,145,255,0.78)'].includes(stroke.color),
   )
 }
 
@@ -174,23 +174,21 @@ describe('dependency-edge visual treatment', () => {
   }
 
   function expectParticleMotion(render: { fills: Fill[] }, edgeAlpha: number, edgePhase = 0.27): void {
-    const halos = render.fills.filter((fill) => typeof fill.color === 'string' && fill.color.startsWith('rgba(190,225,200,') && fill.arcs[0]?.radius === 5)
-    const cores = render.fills.filter((fill) => typeof fill.color === 'string' && fill.color.startsWith('rgba(220,255,230,') && fill.arcs[0]?.radius === 2.6)
-    expect(halos).toHaveLength(3)
-    expect(cores).toHaveLength(3)
-    for (let index = 0; index < 3; index++) {
-      const u = (0.1 + index / 3 + edgePhase) % 1
-      const expectedHalo = 0.14 + 0.18 * Math.sin(Math.PI * u)
-      const expectedCore = 0.45 + 0.5 * Math.sin(Math.PI * u)
-      const halo = halos[index]
-      const core = cores[index]
-      const haloAlpha = Number((halo.color as string).slice((halo.color as string).lastIndexOf(',') + 1, -1))
-      const coreAlpha = Number((core.color as string).slice((core.color as string).lastIndexOf(',') + 1, -1))
-      expect(halo.alpha).toBe(edgeAlpha)
-      expect(core.alpha).toBe(edgeAlpha)
-      expect(haloAlpha * halo.alpha).toBeCloseTo(expectedHalo * edgeAlpha)
-      expect(coreAlpha * core.alpha).toBeCloseTo(expectedCore * edgeAlpha)
-      expect(core.arcs[0]).toMatchObject({ x: halo.arcs[0].x, y: halo.arcs[0].y })
+    const particles = render.fills.filter((fill) =>
+      typeof fill.color === 'string' &&
+      fill.color.startsWith('rgba(190,218,198,') &&
+      fill.arcs[0]?.radius === 1.8,
+    )
+    expect(particles).toHaveLength(2)
+    for (let index = 0; index < 2; index++) {
+      const u = (0.1 + index / 2 + edgePhase) % 1
+      const expectedAlpha = 0.35 + 0.4 * Math.sin(Math.PI * u)
+      const particle = particles[index]
+      const particleAlpha = Number(
+        (particle.color as string).slice((particle.color as string).lastIndexOf(',') + 1, -1),
+      )
+      expect(particle.alpha).toBe(edgeAlpha)
+      expect(particleAlpha * particle.alpha).toBeCloseTo(expectedAlpha * edgeAlpha)
     }
   }
 
@@ -208,12 +206,12 @@ describe('dependency-edge visual treatment', () => {
     const focused = paint(EDGE_FIXTURE, 2)
     const { strokes, fills } = focused
 
-    const resolved = strokes.find((stroke) => stroke.color === 'rgba(190,225,200,0.82)')!
+    const resolved = strokes.find((stroke) => stroke.color === 'rgba(150,178,160,0.36)')!
     const unresolved = strokes.find((stroke) => stroke.color === 'rgba(174,192,218,0.62)')!
-    expect(resolved).toMatchObject({ width: 3, dash: [], cap: 'round', alpha: 1 })
+    expect(resolved).toMatchObject({ width: 1.6, dash: [], cap: 'round', alpha: 1 })
     expect(unresolved).toMatchObject({ width: 2.4, dash: [7, 7], cap: 'round', alpha: 0.45 })
 
-    const resolvedArrow = fills.find((fill) => fill.color === '#d9f3df')!
+    const resolvedArrow = fills.find((fill) => fill.color === 'rgba(190,218,198,0.52)')!
     const unresolvedArrow = fills.find((fill) => fill.color === '#c8d5e8')!
     expect(resolvedArrow.alpha).toBe(1)
     expect(unresolvedArrow.alpha).toBe(0.45)
@@ -232,7 +230,7 @@ describe('dependency-edge visual treatment', () => {
 
     // Current issue 4 has no ready-to-current path: both edges are context.
     // This makes the resolved 1 → 2 particle flow itself prove the multiplier.
-    expectParticleMotion(paint(EDGE_FIXTURE, 4), 0.45)
+    expect(paint(EDGE_FIXTURE, 4).fills.filter((fill) => fill.arcs[0]?.radius === 1.8)).toEqual([])
   })
 
   it('scopes selection emphasis to direct dependency edges and restores ordinary treatment', () => {
@@ -246,12 +244,12 @@ describe('dependency-edge visual treatment', () => {
     expect(selectedEdges.map(({ color, width, alpha }) => ({ color, width, alpha }))).toEqual([
       { color: 'rgba(174,192,218,0.62)', width: 2.4, alpha: 0.45 },
       { color: 'rgba(174,192,218,0.62)', width: 2.4, alpha: 0.45 },
-      { color: 'rgba(190,225,200,0.82)', width: 5.1, alpha: 1 },
+      { color: 'rgba(150,178,160,0.36)', width: 2.72, alpha: 1 },
       { color: 'rgba(174,192,218,0.62)', width: 4.08, alpha: 1 },
     ])
     expect(
-      selectedEdges.find((stroke) => stroke.color === 'rgba(190,225,200,0.82)'),
-    ).toMatchObject({ width: 5.1, dash: [], alpha: 1 })
+      selectedEdges.find((stroke) => stroke.color === 'rgba(150,178,160,0.36)'),
+    ).toMatchObject({ width: 2.72, dash: [], alpha: 1 })
     const unresolvedEdges = selectedEdges.filter(
       (stroke) => stroke.color === 'rgba(174,192,218,0.62)',
     )
@@ -264,7 +262,7 @@ describe('dependency-edge visual treatment', () => {
       alpha: 0.45,
     })
 
-    const resolvedArrow = selected.fills.find((fill) => fill.color === '#d9f3df')!
+    const resolvedArrow = selected.fills.find((fill) => fill.color === 'rgba(190,218,198,0.52)')!
     const unresolvedArrows = selected.fills.filter((fill) => fill.color === '#c8d5e8')
     expect(resolvedArrow.alpha).toBe(1)
     expectArrowDimensions(resolvedArrow, 15, 8.125)
@@ -272,11 +270,11 @@ describe('dependency-edge visual treatment', () => {
     const contextUnresolvedArrow = unresolvedArrows.find((fill) => fill.alpha === 0.45)!
     expectArrowDimensions(selectedUnresolvedArrow, 15, 8.125)
     expectArrowDimensions(contextUnresolvedArrow, 12, 6.5)
-    expectParticleMotion(selected, 1)
+    expect(selected.fills.filter((fill) => fill.arcs[0]?.radius === 1.8)).toEqual([])
 
     const deselected = edgeStrokes(deselectedRender)
     expect(deselected.map(({ width, alpha }) => ({ width, alpha }))).toEqual([
-      { width: 3, alpha: 0.45 },
+      { width: 1.6, alpha: 0.45 },
       { width: 2.4, alpha: 0.45 },
       { width: 2.4, alpha: 0.45 },
       { width: 2.4, alpha: 0.45 },
@@ -297,31 +295,103 @@ describe('dependency-edge visual treatment', () => {
     ])
 
     expect(edgeStrokes(restored).map(({ width, alpha }) => ({ width, alpha }))).toEqual([
-      { width: 3, alpha: 0.45 },
+      { width: 1.6, alpha: 0.45 },
       { width: 2.4, alpha: 0.45 },
       { width: 2.4, alpha: 0.45 },
       { width: 2.4, alpha: 0.45 },
     ])
   })
 
-  it('animates exactly three halo/core pairs on a traversed sequence edge at full path alpha', () => {
+  it('animates exactly two subtle particles on a traversed edge into available work', () => {
     installFrameHarness()
 
     expectParticleMotion(paint(sequenceFixture('resolved', 'frontier'), 16), 1, 0.47)
+  })
+
+  it('renders traversed history as a subtle static line unless it points into active work', () => {
+    installFrameHarness()
+
+    const render = paint(sequenceFixture('resolved', 'blocked'))
+    const history = render.strokes.find(
+      (stroke) => stroke.color === 'rgba(150,178,160,0.36)',
+    )!
+    const arrow = render.fills.find(
+      (fill) => fill.color === 'rgba(190,218,198,0.52)',
+    )!
+
+    expect(history).toMatchObject({ width: 1.6, dash: [], cap: 'round', alpha: 1 })
+    expect(arrow).toBeDefined()
+    expect(render.fills.filter((fill) => fill.arcs[0]?.radius === 1.8)).toHaveLength(0)
+
+    for (const destination of [
+      { status: 'claimed' as const, assignedToViewer: true },
+      { status: 'claimed' as const, assignedToViewer: false },
+    ]) {
+      const tickets = sequenceFixture('resolved', destination.status).map((ticket) =>
+        ticket.num === 38 ? { ...ticket, ...destination } : ticket,
+      )
+      expect(paint(tickets).fills.filter((fill) => fill.arcs[0]?.radius === 1.8)).toEqual([])
+    }
+  })
+
+  it('animates exactly two small particles only into doing, my-next, and available work', () => {
+    installFrameHarness()
+
+    const variants: Array<{ tickets: Ticket[]; current: number | null }> = [
+      { tickets: sequenceFixture('resolved', 'blocked'), current: 38 },
+      {
+        tickets: sequenceFixture('resolved', 'claimed').map((ticket) =>
+          ticket.num === 38
+            ? { ...ticket, readyForAgent: true, assignedToViewer: true }
+            : ticket,
+        ),
+        current: null,
+      },
+      { tickets: sequenceFixture('resolved', 'frontier'), current: null },
+    ]
+
+    for (const variant of variants) {
+      const particles = paint(variant.tickets, variant.current).fills.filter(
+        (fill) => fill.arcs[0]?.radius === 1.8,
+      )
+      expect(particles).toHaveLength(2)
+      for (const particle of particles) {
+        expect(particle.color).toMatch(/^rgba\(190,218,198,0\.[0-9]+\)$/)
+      }
+    }
+  })
+
+  it('keeps motion directional, direct, and independent from selection', () => {
+    installFrameHarness()
+    const chain: Ticket[] = [
+      { num: 1, slug: '1', title: 'history', type: 'task', status: 'resolved', blockedBy: [], parentIssue: null, frontier: false },
+      { num: 2, slug: '2', title: 'available', type: 'task', status: 'frontier', blockedBy: [1], parentIssue: null, frontier: true, readyForAgent: true },
+      { num: 3, slug: '3', title: 'later', type: 'task', status: 'blocked', blockedBy: [2], parentIssue: null, frontier: false },
+    ]
+
+    expect(paint(chain).fills.filter((fill) => fill.arcs[0]?.radius === 1.8)).toHaveLength(2)
+
+    const selectedStatic = paint(sequenceFixture('resolved', 'blocked'), null, [38])
+    expect(selectedStatic.fills.filter((fill) => fill.arcs[0]?.radius === 1.8)).toHaveLength(0)
+    expect(
+      selectedStatic.strokes.find(
+        (stroke) => stroke.color === 'rgba(150,178,160,0.36)' && stroke.width > 1.6,
+      ),
+    ).toMatchObject({ width: 2.72, alpha: 1 })
   })
 
   it('does not animate a resolved sequence source whose destination remains blocked', () => {
     installFrameHarness()
 
     const render = paint(sequenceFixture('resolved', 'blocked'), 16)
-    expect(render.fills.filter((fill) => [5, 2.6].includes(fill.arcs[0]?.radius ?? 0))).toEqual([])
+    expect(render.fills.filter((fill) => fill.arcs[0]?.radius === 1.8)).toEqual([])
   })
 
   it('does not animate an open sequence source whose destination is frontier', () => {
     installFrameHarness()
 
     const render = paint(sequenceFixture('open', 'frontier'), 16)
-    expect(render.fills.filter((fill) => [5, 2.6].includes(fill.arcs[0]?.radius ?? 0))).toEqual([])
+    expect(render.fills.filter((fill) => fill.arcs[0]?.radius === 1.8)).toEqual([])
   })
 
   it('multiplies contextual traversed sequence particles by context edge alpha', () => {
@@ -414,14 +484,14 @@ describe('dependency-edge visual treatment', () => {
     }
 
     const completed = paintChild('resolved')
-    const mintStrokes = completed.strokes.filter((stroke) => stroke.color === 'rgba(190,225,200,0.82)')
-    const mintArrows = completed.fills.filter((fill) => fill.color === '#d9f3df')
+    const mintStrokes = completed.strokes.filter((stroke) => stroke.color === 'rgba(150,178,160,0.36)')
+    const mintArrows = completed.fills.filter((fill) => fill.color === 'rgba(190,218,198,0.52)')
     expect(mintStrokes).toHaveLength(2)
     expect(mintArrows).toHaveLength(2)
     for (const stroke of mintStrokes) {
-      expect(stroke).toMatchObject({ width: 3, dash: [], cap: 'round', alpha: 1 })
+      expect(stroke).toMatchObject({ width: 1.6, dash: [], cap: 'round', alpha: 1 })
       expect(stroke.curves).toHaveLength(1)
     }
-    expect(completed.fills.filter((fill) => [5, 2.6].includes(fill.arcs[0]?.radius ?? 0))).toEqual([])
+    expect(completed.fills.filter((fill) => fill.arcs[0]?.radius === 1.8)).toEqual([])
   })
 })

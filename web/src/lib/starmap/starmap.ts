@@ -1046,11 +1046,11 @@ export class StarMap {
     g.moveTo(ax, ay)
     g.quadraticCurveTo(cx, cy, bx, by)
     g.lineCap = 'round'
-    const usesResolvedStyle = mini ? e.state !== 'incomplete' : e.satisfied
+    const usesResolvedStyle = e.state !== 'incomplete' || e.satisfied
     const strokeScale = selected ? SELECTED_EDGE_WIDTH_SCALE : 1
     if (usesResolvedStyle) {
-      g.strokeStyle = 'rgba(190,225,200,0.82)'
-      g.lineWidth = 3 * strokeScale
+      g.strokeStyle = 'rgba(150,178,160,0.36)'
+      g.lineWidth = 1.6 * strokeScale
       g.setLineDash([])
     } else if (mini) {
       g.strokeStyle = 'rgba(170,145,255,0.78)'
@@ -1063,21 +1063,20 @@ export class StarMap {
     }
     g.stroke()
     g.setLineDash([])
-    // A satisfied edge (blocker resolved) flows particles blocker→dependent, so
-    // the frontier visibly ignites as paths clear (starmap-design.md dec. 5).
-    if (mini ? e.state === 'traversed' : e.satisfied) {
-      for (let k = 0; k < 3; k++) {
-        const u = mod(this.#clock * 0.1 + k / 3 + (e.from * 0.13 + e.to * 0.07), 1),
+    // Historical paths stay quiet. Only a traversed edge directed into work the
+    // operator can act on now carries two small particles toward that endpoint.
+    const animatesIntoActiveWork =
+      e.state === 'traversed' &&
+      (b.vstate === 'doing_now' || b.vstate === 'my_next' || b.vstate === 'available_next')
+    if (animatesIntoActiveWork) {
+      for (let k = 0; k < 2; k++) {
+        const u = mod(this.#motionClock * 0.1 + k / 2 + (e.from * 0.13 + e.to * 0.07), 1),
           m = 1 - u
         const fx = m * m * ax + 2 * m * u * cx + u * u * bx,
           fy = m * m * ay + 2 * m * u * cy + u * u * by
-        g.fillStyle = 'rgba(190,225,200,' + (0.14 + 0.18 * Math.sin(u * Math.PI)) + ')'
+        g.fillStyle = 'rgba(190,218,198,' + (0.35 + 0.4 * Math.sin(u * Math.PI)) + ')'
         g.beginPath()
-        g.arc(fx, fy, 5, 0, TAU)
-        g.fill()
-        g.fillStyle = 'rgba(220,255,230,' + (0.45 + 0.5 * Math.sin(u * Math.PI)) + ')'
-        g.beginPath()
-        g.arc(fx, fy, 2.6, 0, TAU)
+        g.arc(fx, fy, 1.8, 0, TAU)
         g.fill()
       }
     }
@@ -1101,7 +1100,11 @@ export class StarMap {
     g.lineTo(tipx - ux * ah + px * aw, tipy - uy * ah + py * aw)
     g.lineTo(tipx - ux * ah - px * aw, tipy - uy * ah - py * aw)
     g.closePath()
-    g.fillStyle = usesResolvedStyle ? '#d9f3df' : mini ? '#c7b8ff' : '#c8d5e8'
+    g.fillStyle = usesResolvedStyle
+      ? 'rgba(190,218,198,0.52)'
+      : mini
+        ? '#c7b8ff'
+        : '#c8d5e8'
     g.fill()
   }
 

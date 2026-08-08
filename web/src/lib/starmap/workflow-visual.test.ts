@@ -41,9 +41,15 @@ describe('workflow visual policy', () => {
     }
 
     expect(workflowVisualState(entryToOpenChild, tickets)).toBe('incomplete')
-    expect(workflowVisualState(returnFromResolvedChild, tickets)).toBe('completed')
+    expect(workflowVisualState(returnFromResolvedChild, tickets)).toBe('traversed')
     expect(workflowVisualState(sequenceFromResolvedToFrontier, tickets)).toBe('traversed')
-    expect(workflowVisualState(sequenceFromResolvedToBlocked, tickets)).toBe('incomplete')
+    expect(workflowVisualState(sequenceFromResolvedToBlocked, tickets)).toBe('traversed')
+    expect(
+      workflowVisualState(
+        { from: 3, to: 1, roles: ['dependency'], child: null },
+        tickets,
+      ),
+    ).toBe('traversed')
   })
 
   it('bows reverse directions apart and gives single edges a stable default side', () => {
