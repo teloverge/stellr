@@ -123,6 +123,20 @@ async fn fetch_rejects_missing_viewer_identity_as_a_parse_failure() {
 }
 
 #[tokio::test]
+async fn fetch_rejects_an_empty_viewer_login_as_a_parse_failure() {
+    for login in ["", "   "] {
+        let server = MockServer::start().await;
+        mount_graphql_response(&server, page_for_viewer(login, json!([]), false, None)).await;
+
+        let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+        let error = provider.fetch(&repo()).await.unwrap_err();
+
+        assert!(matches!(error, ProviderError::Parse(_)));
+        assert!(error.to_string().contains("viewer login"));
+    }
+}
+
+#[tokio::test]
 async fn fetch_rejects_a_viewer_change_during_pagination() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

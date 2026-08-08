@@ -55,7 +55,10 @@ impl Provider for ProviderSlot {
             (current.clone(), self.generation.load(Ordering::Acquire))
         };
         let result = provider.fetch(repo).await;
-        if result.is_ok() && self.generation.load(Ordering::Acquire) == generation {
+        if self.generation.load(Ordering::Acquire) != generation {
+            return Err(ProviderError::Superseded);
+        }
+        if result.is_ok() {
             self.confirmed_generation
                 .store(generation, Ordering::Release);
         }

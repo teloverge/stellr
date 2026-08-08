@@ -46,4 +46,6 @@ pub enum ProviderError {
     Http(String),
     #[error("response parsing failed: {0}")]
     Parse(String),
+    #[error("provider changed while the request was in flight")]
+    Superseded,
 }

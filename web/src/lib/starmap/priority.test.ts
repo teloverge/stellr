@@ -28,6 +28,21 @@ describe('work priority hierarchy', () => {
   it('treats current or actively implementing work as doing now', () => {
     expect(deriveWorkPriority(ticket({ num: 7 }), null, 7)).toBe('doing_now')
     expect(deriveWorkPriority(ticket(), 'implementing', null)).toBe('doing_now')
+    expect(
+      deriveWorkPriority(ticket({ num: 7, status: 'resolved' }), 'implementing', null),
+    ).toBe('doing_now')
+    expect(
+      deriveWorkPriority(ticket({ num: 7, status: 'out_of_scope' }), null, 7),
+    ).toBe('doing_now')
+  })
+
+  it('keeps session trouble above closed context', () => {
+    expect(deriveWorkPriority(ticket({ status: 'resolved' }), 'blocked', null)).toBe(
+      'attention',
+    )
+    expect(deriveWorkPriority(ticket({ status: 'out_of_scope' }), 'dead', null)).toBe(
+      'attention',
+    )
   })
 
   it('orders owned, available, and team work by the viewer hierarchy', () => {

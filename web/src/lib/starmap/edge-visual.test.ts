@@ -105,14 +105,14 @@ describe('dependency-edge visual treatment', () => {
   const realCancelRaf = globalThis.cancelAnimationFrame
   let frames: FrameRequestCallback[] = []
 
-  function installFrameHarness(): void {
+  function installFrameHarness(): ReturnType<typeof vi.spyOn> {
     frames = []
     globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
       frames.push(cb)
       return frames.length
     }) as never
     globalThis.cancelAnimationFrame = (() => {}) as never
-    vi.spyOn(performance, 'now').mockReturnValue(1_000)
+    return vi.spyOn(performance, 'now').mockReturnValue(1_000)
   }
 
   function paintFrames(
@@ -197,6 +197,7 @@ describe('dependency-edge visual treatment', () => {
     globalThis.requestAnimationFrame = realRaf
     globalThis.cancelAnimationFrame = realCancelRaf
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
     document.body.replaceChildren()
   })
 
@@ -378,6 +379,26 @@ describe('dependency-edge visual treatment', () => {
         (stroke) => stroke.color === 'rgba(150,178,160,0.36)' && stroke.width > 1.6,
       ),
     ).toMatchObject({ width: 2.72, alpha: 1 })
+  })
+
+  it('freezes eligible edge particles when reduced motion is requested', () => {
+    const clock = installFrameHarness()
+    vi.stubGlobal('matchMedia', () => ({
+      matches: true,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    const [first, second] = paintFrames(sequenceFixture('resolved', 'frontier'), null, [
+      () => clock.mockReturnValue(1_000),
+      () => clock.mockReturnValue(2_000),
+    ])
+    const particlePositions = (render: { fills: Fill[] }) =>
+      render.fills
+        .filter((fill) => fill.arcs[0]?.radius === 1.8)
+        .map((fill) => ({ x: fill.arcs[0].x, y: fill.arcs[0].y }))
+
+    expect(particlePositions(first)).toHaveLength(2)
+    expect(particlePositions(second)).toEqual(particlePositions(first))
   })
 
   it('does not animate a resolved sequence source whose destination remains blocked', () => {

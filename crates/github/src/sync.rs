@@ -164,6 +164,10 @@ impl Provider for GithubProvider {
                         .map_err(|error| ProviderError::Parse(error.to_string()))
                 })?;
 
+            if data.viewer.login.trim().is_empty() {
+                return Err(ProviderError::Parse("viewer login is empty".into()));
+            }
+
             match viewer_login.as_deref() {
                 Some(login) if login != data.viewer.login => {
                     return Err(ProviderError::Parse(

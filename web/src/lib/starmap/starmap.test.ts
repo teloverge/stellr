@@ -183,6 +183,27 @@ describe('the island seam', () => {
     expect(emitted.at(-1)).toBe(null)
   })
 
+  it('uses the zoomed-out active radius floor in pointer hit testing', () => {
+    const ticket: Ticket = {
+      num: 1,
+      slug: '1',
+      title: 'Current work',
+      type: 'issue',
+      status: 'open',
+      blockedBy: [],
+      parentIssue: null,
+      frontier: false,
+    }
+    sm.setModel([ticket], {}, 1)
+    zoomOut(host)
+    const active = sm.screenOf(1)!
+    expect(sm.selectAtScreen(active.x + 19, active.y)).toBe(1)
+
+    sm.setModel([ticket])
+    const planning = sm.screenOf(1)!
+    expect(sm.selectAtScreen(planning.x + 19, planning.y)).toBe(null)
+  })
+
   it('gives subissues a larger invisible target without changing top-level targets', () => {
     sm.setModel([
       { num: 16, slug: '16', title: 'Parent', type: 'issue', status: 'open', frontier: true, blockedBy: [], parentIssue: null },
