@@ -28,7 +28,23 @@ import {
   workflowVisualState,
   type WorkflowVisualState,
 } from './workflow-visual'
+import {
+  boxesOverlap,
+  clipTitle,
+  issueNumberText,
+  labelBox,
+  orbitLabelFontSize,
+  ORBIT_LABEL_REFERENCE_SCALE,
+  outwardLabelGeometryAtScale,
+  subissueLabelText,
+  subissueMarker,
+  type LabelAlign,
+  type LabelBox,
+} from './label-geometry'
+import { validOrbitNodeNumbers } from './parent-topology'
 import type { Ticket } from './model'
+
+export { clipTitle } from './label-geometry'
 
 export type SelectHandler = (num: number | null) => void
 
@@ -43,6 +59,7 @@ const CONTEXT_EDGE_ALPHA = 0.45
 const SELECTED_EDGE_WIDTH_SCALE = 1.7
 const SELECTED_EDGE_ARROW_SCALE = 1.25
 const SUBISSUE_RIM = 'rgba(170,145,255,0.82)'
+const HIT_DISTANCE_EPSILON = 1e-9
 
 interface RenderEdge extends WorkflowEdge {
   state: WorkflowVisualState
@@ -72,21 +89,15 @@ interface LabelDraw {
   text: string
   x: number
   y: number
+  align: LabelAlign
+  fontSize: number
   fill: string
   alpha: number
 }
 
 // A screen-space rectangle. Both stars and already-placed labels become one of
 // these, so the solver has a single kind of thing to test against.
-interface Box {
-  x0: number
-  y0: number
-  x1: number
-  y1: number
-}
-function hits(a: Box, b: Box): boolean {
-  return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
-}
+type Box = LabelBox
 
 // Who gets first pick of the good slots. A contested slot should go to the star
 // the operator is most likely to be reading — the selected one, then the bright
@@ -140,7 +151,7 @@ type Side = typeof BELOW | typeof ABOVE
 // anchors (a bare number at the bottom, the full title at the top) and lifts
 // everything between them, so the title only shortens sharply once the stars
 // have genuinely closed up.
-const TITLE_MIN_SCALE = 0.42
+const TITLE_MIN_SCALE = ORBIT_LABEL_REFERENCE_SCALE
 const TITLE_FULL_SCALE = 1.6
 const TITLE_MIN_CHARS = 12
 const TITLE_MAX_CHARS = 60
@@ -154,16 +165,6 @@ export function titleBudget(scale: number): number {
   return Math.round(
     TITLE_MIN_CHARS + Math.pow(u, TITLE_RAMP_EASE) * (TITLE_MAX_CHARS - TITLE_MIN_CHARS),
   )
-}
-
-// Clip a title to `budget`, preferring a word boundary near the cut. At the
-// short end of the ramp "The agent a…" is a worse label than "The agent…", and
-// the difference costs one lastIndexOf.
-export function clipTitle(title: string, budget: number): string {
-  if (title.length <= budget) return title
-  const cut = title.slice(0, budget)
-  const sp = cut.lastIndexOf(' ')
-  return (sp >= budget - 6 && sp > 0 ? cut.slice(0, sp) : cut.trimEnd()) + '…'
 }
 
 // How long one ticker line lingers before it fades out, and how long the fade
@@ -251,6 +252,7 @@ export class StarMap {
 
   #nodes: Node[] = []
   #byNum = new Map<number, Node>()
+  #validOrbitNodes = new Set<number>()
   #edges: RenderEdge[] = []
   #miniCurve: MutableMiniCurve = { control: { x: 0, y: 0 }, bow: 0 }
   #miniCurveStart = { x: 0, y: 0 }
@@ -345,6 +347,7 @@ export class StarMap {
     this.#focus = analyzeFocus(tickets, currentIssue)
     const focusChanged = priorFocus !== focusSignature(this.#focus)
     const sig = structureSignature(tickets)
+    this.#validOrbitNodes = validOrbitNodeNumbers(tickets)
     this.#resolved = new Set(tickets.filter((t) => t.status === 'resolved').map((t) => t.num))
 
     if (sig === this.#sig && this.#nodes.length) {
@@ -379,7 +382,14 @@ export class StarMap {
     // memory is exactly what we want kept.
     this.#labelSide.clear()
     this.#sig = sig
-    const pts = computeLayout(tickets.map(({ num, blockedBy, parentIssue }) => ({ num, blockedBy, parentIssue })))
+    const pts = computeLayout(
+      tickets.map(({ num, title, blockedBy, parentIssue }) => ({
+        num,
+        title,
+        blockedBy,
+        parentIssue,
+      })),
+    )
     this.#nodes = tickets.map((t) => {
       const p = pts[t.num]
       return {
@@ -555,12 +565,50 @@ export class StarMap {
   // exact path a click drives. Returns the selected ticket number, or null for a
   // click on empty space (which deselects).
   selectAtScreen(sx: number, sy: number): number | null {
-    let hit: Node | null = null
+    let topLevelHit: Node | null = null
+    let nearestTopLevelHit: Node | null = null
+    let nearestTopLevelDistance = Number.POSITIVE_INFINITY
+    let subissueHit: Node | null = null
+    let subissueDistance = Number.POSITIVE_INFINITY
     for (const n of this.#nodes) {
       const px = n._x * this.#cam.s + this.#cam.x
       const py = n._y * this.#cam.s + this.#cam.y
-      const r = Math.max(14, this.#radius(n) * this.#cam.s + 10)
-      if (Math.hypot(sx - px, sy - py) < r) hit = n
+      const baseRadius = Math.max(14, this.#radius(n) * this.#cam.s + 10)
+      const hasValidParent = this.#validOrbitNodes.has(n.num)
+      const radius = hasValidParent ? Math.max(28, baseRadius + 8) : baseRadius
+      const distance = Math.hypot(sx - px, sy - py)
+      if (distance >= radius) continue
+      if (!hasValidParent) {
+        topLevelHit = n
+        if (
+          distance < nearestTopLevelDistance - HIT_DISTANCE_EPSILON ||
+          (Math.abs(distance - nearestTopLevelDistance) <= HIT_DISTANCE_EPSILON &&
+            (nearestTopLevelHit === null || n.num < nearestTopLevelHit.num))
+        ) {
+          nearestTopLevelHit = n
+          nearestTopLevelDistance = distance
+        }
+        continue
+      }
+      if (
+        distance < subissueDistance - HIT_DISTANCE_EPSILON ||
+        (Math.abs(distance - subissueDistance) <= HIT_DISTANCE_EPSILON &&
+          (subissueHit === null || n.num < subissueHit.num))
+      ) {
+        subissueHit = n
+        subissueDistance = distance
+      }
+    }
+    let hit = topLevelHit
+    if (subissueHit && nearestTopLevelHit) {
+      hit =
+        subissueDistance < nearestTopLevelDistance - HIT_DISTANCE_EPSILON ||
+        (Math.abs(subissueDistance - nearestTopLevelDistance) <= HIT_DISTANCE_EPSILON &&
+          subissueHit.num < nearestTopLevelHit.num)
+          ? subissueHit
+          : nearestTopLevelHit
+    } else if (subissueHit) {
+      hit = subissueHit
     }
     const num = hit ? hit.num : null
     if (hit) hit.flare = Math.max(hit.flare, 0.6)
@@ -1262,13 +1310,13 @@ export class StarMap {
       cache = this.#solveLabels(g, key)
       this.#labelCache = cache
     }
-    g.textAlign = 'center'
-    g.font = cache.fs.toFixed(1) + 'px ui-sans-serif,system-ui,sans-serif'
     g.shadowColor = 'rgba(0,0,0,0.85)'
     g.shadowBlur = 4
     for (const it of cache.items) {
+      g.font = it.fontSize.toFixed(1) + 'px ui-sans-serif,system-ui,sans-serif'
       g.globalAlpha = it.alpha
       g.fillStyle = it.fill
+      g.textAlign = it.align
       g.fillText(it.text, it.x, it.y)
     }
     g.globalAlpha = 1
@@ -1349,19 +1397,56 @@ export class StarMap {
 
     const items: LabelDraw[] = []
     for (const v of order) {
+      const parent = this.#validOrbitNodes.has(v.n.num) && v.n.parentIssue !== null
+        ? this.#byNum.get(v.n.parentIssue)
+        : undefined
+      const labelFontSize = parent ? orbitLabelFontSize(s) : fs
+      g.font = labelFontSize.toFixed(1) + 'px ui-sans-serif,system-ui,sans-serif'
       const isCurrent = this.#focus.current === v.n.num
       const isReady = this.#focus.readySet.has(v.n.num)
-      const marker =
-        isCurrent && isReady
-          ? 'CURRENT / READY \u00b7 '
-          : isCurrent
-            ? 'CURRENT \u00b7 '
-            : isReady
-              ? 'READY \u00b7 '
-              : ''
-      let text = marker + (v.n.num < 10 ? '0' : '') + v.n.num
+      const marker = subissueMarker(isCurrent, isReady)
+      let text = marker + issueNumberText(v.n.num)
       if (!numOnly || marker) text += '  ' + clipTitle(v.n.title, budget)
       const w = g.measureText(text).width
+
+      if (parent) {
+        text = marker + subissueLabelText(v.n.num, v.n.title)
+        const worldGeometry = outwardLabelGeometryAtScale({
+          parent: { x: parent.x, y: parent.y },
+          child: { x: v.n.x, y: v.n.y },
+          number: v.n.num,
+          title: v.n.title,
+          scale: s,
+          starRadius: v.rad / s,
+        })
+        const geometry = {
+          x: worldGeometry.x * s + this.#cam.x,
+          y: worldGeometry.y * s + this.#cam.y,
+          align: worldGeometry.align,
+          box: {
+            x0: worldGeometry.box.x0 * s + this.#cam.x,
+            y0: worldGeometry.box.y0 * s + this.#cam.y,
+            x1: worldGeometry.box.x1 * s + this.#cam.x,
+            y1: worldGeometry.box.y1 * s + this.#cam.y,
+          },
+        }
+        if (!obstacles.some((obstacle) => boxesOverlap(geometry.box, obstacle))) {
+          obstacles.push(geometry.box)
+          items.push({
+            text,
+            x: geometry.x,
+            y: geometry.y,
+            align: geometry.align,
+            fontSize: labelFontSize,
+            fill: LABEL[v.n.vstate],
+            alpha:
+              this.#focus.emphasized.size === 0 || this.#focus.emphasized.has(v.n.num)
+                ? 1
+                : CONTEXT_ALPHA,
+          })
+        }
+        continue
+      }
 
       // Every candidate is centred on the star and differs only in how far above
       // or below it sits. A label always reads as hanging off its own star, and
@@ -1385,17 +1470,11 @@ export class StarMap {
         if (j >= 0 && j <= 3) cands.push({ y: slot(other, j), side: other })
       }
 
-      const left = v.sx - w / 2
       for (const c of cands) {
-        const box: Box = {
-          x0: left - 3,
-          y0: c.y - fs * 0.82 - 2,
-          x1: left + w + 3,
-          y1: c.y + fs * 0.22 + 2,
-        }
+        const box = labelBox(v.sx, c.y, 'center', w, fs)
         let ok = true
         for (const o of obstacles) {
-          if (hits(box, o)) {
+          if (boxesOverlap(box, o)) {
             ok = false
             break
           }
@@ -1406,6 +1485,8 @@ export class StarMap {
           text,
           x: v.sx,
           y: c.y,
+          align: 'center',
+          fontSize: labelFontSize,
           fill: LABEL[v.n.vstate],
           alpha:
             this.#focus.emphasized.size === 0 || this.#focus.emphasized.has(v.n.num)

@@ -2,8 +2,12 @@
 
 ## Unreleased
 
+- Made newly added repositories appear in the sidebar without restarting
+  Stellr or performing another space action.
 - Emphasized the incoming and outgoing edges directly connected to a selected
   node while preserving dependency direction, state styling, and motion.
+- Replaced compact subissue arcs with adaptive, label-aware concentric orbits,
+  outward titles, and larger nearest-node pointer targets for dense workflows.
 - Restored dependency and parent relationship lines from cached Markdown issue
   bodies without making additional GitHub requests.
 - Upgraded all bundle artifact uploads to `actions/upload-artifact@v7` and
