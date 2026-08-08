@@ -111,6 +111,7 @@ async fn add_space(
             .into_response();
     }
     drop(spaces);
+    state.refresh.notify_one();
 
     Json(AddSpaceResponse { id }).into_response()
 }

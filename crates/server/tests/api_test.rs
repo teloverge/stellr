@@ -181,7 +181,7 @@ impl Provider for SequenceProvider {
 }
 
 #[tokio::test]
-async fn add_repo_space_then_refresh_populates_the_model() {
+async fn add_repo_space_immediately_populates_the_model() {
     let directory = tempfile::tempdir().unwrap();
     let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
     let state = Arc::new(AppState {
@@ -226,13 +226,6 @@ async fn add_repo_space_then_refresh_populates_the_model() {
         json!({ "id": "o-r" })
     );
 
-    let refreshed = client
-        .post(format!("{base}/api/spaces/o-r/refresh"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(refreshed.status(), reqwest::StatusCode::OK);
-
     let model = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             let model = client
@@ -253,7 +246,7 @@ async fn add_repo_space_then_refresh_populates_the_model() {
         }
     })
     .await
-    .expect("refresh should publish the derived model");
+    .expect("adding a space should publish the derived model");
 
     assert_eq!(model.spaces[0].id, "o-r");
     assert_eq!(model.spaces[0].repo, "o/r");
