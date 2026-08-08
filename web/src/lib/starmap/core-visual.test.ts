@@ -7,6 +7,7 @@ type Arc = { radius: number }
 type Gradient = { kind: 'radial-gradient'; stops: Array<{ at: number; color: string }> }
 type Fill = { style: string | Gradient; arc: Arc | undefined }
 type Stroke = { style: string | Gradient; lineWidth: number; arc: Arc | undefined }
+type ArcCenter = { x: number; y: number; radius: number }
 
 const RESOLVED: Ticket = {
   num: 1,
@@ -95,9 +96,11 @@ function recordingContext(): {
   ctx: Record<string, unknown>
   fills: Fill[]
   strokes: Stroke[]
+  arcs: ArcCenter[]
 } {
   const fills: Fill[] = []
   const strokes: Stroke[] = []
+  const arcs: ArcCenter[] = []
   let arc: Arc | undefined
   const ctx: Record<string, unknown> = {
     createRadialGradient: () => {
@@ -110,8 +113,9 @@ function recordingContext(): {
     beginPath: () => {
       arc = undefined
     },
-    arc: (_x: number, _y: number, radius: number) => {
+    arc: (x: number, y: number, radius: number) => {
       arc = { radius }
+      arcs.push({ x, y, radius })
     },
     fill: () => fills.push({ style: ctx.fillStyle as string | Gradient, arc }),
     stroke: () =>
@@ -139,7 +143,7 @@ function recordingContext(): {
   ]) {
     ctx[method] = () => {}
   }
-  return { ctx, fills, strokes }
+  return { ctx, fills, strokes, arcs }
 }
 
 describe('issue core visual grammar', () => {
@@ -169,7 +173,14 @@ describe('issue core visual grammar', () => {
     ticket: Ticket,
     currentIssue: number | null = null,
     session: SessionState | null = null,
-  ): { fills: Fill[]; strokes: Stroke[] } {
+    options: { scale?: number; timeMs?: number; reducedMotion?: boolean } = {},
+  ): { fills: Fill[]; strokes: Stroke[]; arcs: ArcCenter[] } {
+    now.mockReturnValue(options.timeMs ?? 0)
+    vi.stubGlobal('matchMedia', () => ({
+      matches: options.reducedMotion ?? false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
     const recording = recordingContext()
     getContext.mockReturnValue(recording.ctx as never)
     const host = document.createElement('div')
@@ -179,6 +190,9 @@ describe('issue core visual grammar', () => {
     const map = new StarMap()
     map.mount(host)
     map.setModel([ticket], session ? { [ticket.num]: session } : {}, currentIssue)
+    if (options.scale !== undefined) {
+      map.restoreCamera({ x: 500, y: 350, s: options.scale })
+    }
     const frame = frames.pop()
     frames = []
     frame?.(0)
@@ -214,7 +228,7 @@ describe('issue core visual grammar', () => {
   })
 
   it('paints doing now and team work as distinct solid cores', () => {
-    const doing = paint(BLOCKED, BLOCKED.num)
+    const doing = paint(BLOCKED, BLOCKED.num, null, { reducedMotion: true })
     expect(doing.fills[1]).toEqual({ style: '#ffd873', arc: { radius: 12 } })
     expect(doing.fills.some((fill) => fill.style === '#000')).toBe(false)
 
@@ -228,6 +242,51 @@ describe('issue core visual grammar', () => {
 
     expect(attention.fills[1]).toEqual({ style: '#ffd873', arc: { radius: 12 } })
     expect(attention.fills.some((fill) => fill.style === '#000')).toBe(false)
+  })
+
+  it('keeps active priorities readable with screen-space radius floors', () => {
+    for (const expected of [
+      { ticket: BLOCKED, current: BLOCKED.num, radius: 50 },
+      { ticket: MY_NEXT, current: null, radius: 42.5 },
+      { ticket: MY_FUTURE, current: null, radius: 35 },
+      { ticket: AVAILABLE_NEXT, current: null, radius: 35 },
+      { ticket: CLAIMED, current: null, radius: 30 },
+      { ticket: OUT_OF_SCOPE, current: null, radius: 5.625 },
+    ]) {
+      const { fills } = paint(expected.ticket, expected.current, null, {
+        scale: 0.2,
+        reducedMotion: true,
+      })
+      expect(fills[1].arc?.radius).toBe(expected.radius)
+    }
+
+    const session = paint(CLAIMED, null, 'implementing', {
+      scale: 0.2,
+      reducedMotion: true,
+    })
+    expect(session.arcs).toContainEqual(expect.objectContaining({ radius: 60 }))
+  })
+
+  it('pulses only doing-now cores from 1.00 to 1.08 and freezes under reduced motion', () => {
+    const lowMs = ((Math.PI * 1.5) / 2.8) * 1000
+    const highMs = ((Math.PI * 0.5) / 2.8) * 1000
+
+    expect(paint(BLOCKED, BLOCKED.num, null, { timeMs: lowMs }).fills[1].arc?.radius).toBeCloseTo(12)
+    expect(paint(BLOCKED, BLOCKED.num, null, { timeMs: highMs }).fills[1].arc?.radius).toBeCloseTo(12.96)
+    expect(paint(MY_NEXT, null, null, { timeMs: highMs }).fills[1].arc?.radius).toBe(11)
+    expect(
+      paint(BLOCKED, BLOCKED.num, null, { timeMs: highMs, reducedMotion: true }).fills[1].arc?.radius,
+    ).toBe(12)
+  })
+
+  it('freezes the existing session proton under reduced motion', () => {
+    const moon = (timeMs: number, reducedMotion: boolean) =>
+      paint(CLAIMED, null, 'implementing', { timeMs, reducedMotion }).arcs.find(
+        (arc) => arc.radius === 2.7,
+      )
+
+    expect(moon(0, false)).not.toEqual(moon(1000, false))
+    expect(moon(0, true)).toEqual(moon(1000, true))
   })
 
   it('paints future, available, planning, and not-planned work as hollow priority cores', () => {
@@ -295,7 +354,7 @@ describe('issue core visual grammar', () => {
   })
 
   it('keeps both CURRENT rings around the solid doing-now core', () => {
-    const { fills, strokes } = paint(BLOCKED, BLOCKED.num)
+    const { fills, strokes } = paint(BLOCKED, BLOCKED.num, null, { reducedMotion: true })
 
     expect(fills).toHaveLength(2)
     expect(fills[1]).toEqual({ style: '#ffd873', arc: { radius: 12 } })

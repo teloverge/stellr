@@ -274,6 +274,8 @@ export class StarMap {
   // actually leaves free, in either docking.
   #insets = { top: 16, right: 16, bottom: 16, left: 16 }
   #clock = 0
+  #motionClock = 0
+  #reducedMotion = false
   #last = 0
   #raf = 0
   // The live WebKit pinch, if one is in flight — it also mutes the wheel path,
@@ -315,6 +317,18 @@ export class StarMap {
     // it (model + layout + selection all work, nothing is drawn).
     this.#ctx = canvas.getContext('2d')
     this.#dpr = Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1)
+
+    const motionQuery = typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(prefers-reduced-motion: reduce)')
+      : null
+    if (motionQuery) {
+      this.#reducedMotion = motionQuery.matches
+      const onMotionPreference = (event: MediaQueryListEvent) => {
+        this.#reducedMotion = event.matches
+      }
+      motionQuery.addEventListener?.('change', onMotionPreference)
+      this.#detach.push(() => motionQuery.removeEventListener?.('change', onMotionPreference))
+    }
 
     this.#measure()
     if (typeof ResizeObserver !== 'undefined') {
@@ -562,7 +576,8 @@ export class StarMap {
   }
 
   #radius(n: Node): number {
-    return STAR[n.vstate].r
+    const style = STAR[n.vstate]
+    return Math.max(style.r, style.minScreen / this.#cam.s)
   }
 
   // Hit-test a screen point and, if it lands on a star, select and emit it — the
@@ -921,11 +936,12 @@ export class StarMap {
     if (dt < 0 || dt > 0.1) dt = 0.016
     this.#last = t
     this.#clock = t
+    this.#motionClock = this.#reducedMotion ? 0 : t
 
     for (const n of this.#nodes) {
       const ph = n.num * 1.7
-      n._x = n.x + Math.sin(this.#clock * 0.7 + ph) * 2.4
-      n._y = n.y + Math.cos(this.#clock * 0.55 + ph) * 2.4
+      n._x = this.#reducedMotion ? n.x : n.x + Math.sin(this.#motionClock * 0.7 + ph) * 2.4
+      n._y = this.#reducedMotion ? n.y : n.y + Math.cos(this.#motionClock * 0.55 + ph) * 2.4
       if (n.flare > 0) n.flare = Math.max(0, n.flare - dt / 1.1)
     }
     this.#easeCamera(dt)
@@ -968,7 +984,7 @@ export class StarMap {
     for (const n of this.#nodes) {
       g.save()
       if (focused && !this.#focus.emphasized.has(n.num)) g.globalAlpha = CONTEXT_ALPHA
-      this.#drawStar(g, n, this.#clock)
+      this.#drawStar(g, n, this.#motionClock)
       g.restore()
     }
     g.restore()
@@ -1094,8 +1110,11 @@ export class StarMap {
     const x = n._x,
       y = n._y,
       fl = n.flare || 0
+    const cr = this.#radius(n)
+    const beat = 0.5 + 0.5 * Math.sin(t * 2.8)
+    const corePulse = n.vstate === 'doing_now' && !this.#reducedMotion ? 1 + 0.08 * beat : 1
     const pulse = 1
-    const gr = c.gr * (1 + fl * 0.5)
+    const gr = c.gr * (cr / c.r) * (1 + fl * 0.5)
 
     const grd = g.createRadialGradient(x, y, 0, x, y, gr)
     grd.addColorStop(0, hexA(c.glow, Math.min(1, 0.85 * pulse + fl * 0.5)))
@@ -1106,7 +1125,7 @@ export class StarMap {
     g.arc(x, y, gr, 0, TAU)
     g.fill()
 
-    const cr = this.#radius(n)
+    const paintedCoreRadius = cr * corePulse
     const hasSubissueRim = n.parentIssue !== null && n.vstate !== 'resolved' && n.vstate !== 'out_of_scope'
     if (hasSubissueRim) {
       g.strokeStyle = SUBISSUE_RIM
@@ -1118,7 +1137,7 @@ export class StarMap {
     if (c.solid && n.vstate !== 'resolved') {
       g.fillStyle = c.core
       g.beginPath()
-      g.arc(x, y, cr, 0, TAU)
+      g.arc(x, y, paintedCoreRadius, 0, TAU)
       g.fill()
     } else if (n.vstate === 'resolved') {
       const cg = g.createRadialGradient(x, y, 0, x, y, cr * 1.35)
