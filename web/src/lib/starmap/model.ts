@@ -19,6 +19,7 @@ export interface Ticket {
   frontier: boolean
   readyForAgent?: boolean
   assignedToViewer?: boolean
+  blocked?: boolean
 }
 
 export interface Map {

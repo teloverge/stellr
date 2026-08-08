@@ -18,8 +18,9 @@
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
 import { computeLayout, structureSignature, TAU } from './layout'
-import { STAR, LABEL, SESSION_HUE, visualState, hexA, type VisualState } from './theme'
+import { STAR, LABEL, SESSION_HUE, hexA, type VisualState } from './theme'
 import { GRAMMAR, type SessionState } from './session'
+import { deriveWorkPriority } from './priority'
 import { analyzeFocus, type Focus } from './focus'
 import { edgeKey, isMiniWorkflowEdge, workflowEdges, type WorkflowEdge } from './workflow'
 import { writeMiniEdgeCurve, type MutableMiniCurve } from './workflow-geometry'
@@ -53,7 +54,6 @@ export type SelectHandler = (num: number | null) => void
 // StarMap.svelte through tokens.ts and handed in at the seam; the renderer
 // itself never reads CSS (ADR 0010).
 const DEFAULT_BG = '#05070d'
-const ISSUE_RADIUS_SCALE = 1.25
 const CONTEXT_ALPHA = 0.3
 const CONTEXT_EDGE_ALPHA = 0.45
 const SELECTED_EDGE_WIDTH_SCALE = 1.7
@@ -104,12 +104,15 @@ type Box = LabelBox
 // actionable states — rather than to whichever ticket happens to be numbered
 // lowest, which is what array order gave us.
 const LABEL_PRIORITY: Record<VisualState, number> = {
-  frontier: 0,
-  my_next: 1,
-  claimed: 2,
-  resolved: 3,
-  blocked: 4,
-  out_of_scope: 5,
+  attention: 0,
+  doing_now: 1,
+  my_next: 2,
+  my_future: 3,
+  available_next: 4,
+  team_work: 5,
+  planning: 6,
+  resolved: 7,
+  out_of_scope: 8,
 }
 
 // A star just off-screen can still own a label that reaches back on-screen, so
@@ -358,8 +361,8 @@ export class StarMap {
         if (!n) continue
         n.title = t.title
         n.type = t.type
-        const vstate = visualState(t)
         const sstate = sessions[t.num] ?? null
+        const vstate = deriveWorkPriority(t, sstate, currentIssue)
         if (vstate !== n.vstate || sstate !== n.sstate) {
           n.flare = 1
           changed.push(`#${t.num < 10 ? '0' : ''}${t.num} → ${sstate ?? vstate.replace('_', ' ')}`)
@@ -398,7 +401,7 @@ export class StarMap {
         title: t.title,
         type: t.type,
         parentIssue: t.parentIssue,
-        vstate: visualState(t),
+        vstate: deriveWorkPriority(t, sessions[t.num] ?? null, currentIssue),
         sstate: sessions[t.num] ?? null,
         x: p.x,
         y: p.y,
@@ -559,7 +562,7 @@ export class StarMap {
   }
 
   #radius(n: Node): number {
-    return STAR[n.vstate].r * ISSUE_RADIUS_SCALE
+    return STAR[n.vstate].r
   }
 
   // Hit-test a screen point and, if it lands on a star, select and emit it — the
@@ -1091,11 +1094,8 @@ export class StarMap {
     const x = n._x,
       y = n._y,
       fl = n.flare || 0
-    const isF = n.vstate === 'frontier',
-      isC = n.vstate === 'claimed'
-    const beat = 0.5 + 0.5 * Math.sin(t * 2.8)
-    const pulse = isF ? 0.8 + 0.2 * beat : 1
-    const gr = (isF ? c.gr * (0.92 + 0.16 * beat) : c.gr) * (1 + fl * 0.5)
+    const pulse = 1
+    const gr = c.gr * (1 + fl * 0.5)
 
     const grd = g.createRadialGradient(x, y, 0, x, y, gr)
     grd.addColorStop(0, hexA(c.glow, Math.min(1, 0.85 * pulse + fl * 0.5)))
@@ -1115,7 +1115,7 @@ export class StarMap {
       g.arc(x, y, cr + 4, 0, TAU)
       g.stroke()
     }
-    if (n.vstate === 'my_next') {
+    if (c.solid && n.vstate !== 'resolved') {
       g.fillStyle = c.core
       g.beginPath()
       g.arc(x, y, cr, 0, TAU)
@@ -1156,21 +1156,6 @@ export class StarMap {
       g.lineWidth = 1.5 + 2 * fl
       g.beginPath()
       g.arc(x, y, cr + (1 - fl) * 40, 0, TAU)
-      g.stroke()
-    }
-    // A live claim breathes with two soft rings. A session overlay speaks for
-    // the claim when there is one, so the vanilla claimed rings stand down rather
-    // than competing with the moon's orbit.
-    if (isC && !n.sstate) {
-      g.strokeStyle = hexA(c.core, 0.45 + 0.25 * beat)
-      g.lineWidth = 1.5
-      g.beginPath()
-      g.arc(x, y, cr + 5 + 1.2 * beat, 0, TAU)
-      g.stroke()
-      g.strokeStyle = hexA(c.core, 0.18 + 0.14 * beat)
-      g.lineWidth = 1
-      g.beginPath()
-      g.arc(x, y, cr + 11 + 1.8 * beat, 0, TAU)
       g.stroke()
     }
     if (n.sstate) this.#drawSession(g, n, x, y, cr, t)

@@ -72,7 +72,7 @@ describe('toRendererModel', () => {
     const input = space() as SpaceModel & { viewer_login: string }
     input.viewer_login = 'octocat'
     input.stars[2].assignees = ['OctoCat']
-    Object.assign(input.stars[2], { ready_for_agent: true })
+    Object.assign(input.stars[2], { ready_for_agent: true, blocked: true })
     input.stars[3].assignees = ['hubot']
     Object.assign(input.stars[3], { ready_for_agent: true })
 
@@ -82,6 +82,7 @@ describe('toRendererModel', () => {
       status: 'claimed',
       assignedToViewer: true,
       readyForAgent: true,
+      blocked: true,
     })
     expect(model[3]).toMatchObject({ assignedToViewer: false })
   })

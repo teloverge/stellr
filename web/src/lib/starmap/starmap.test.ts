@@ -922,7 +922,7 @@ describe('label placement', () => {
 
         const readyWorld = sm.positions()[30]
         const readyRing = arcs.find((arc) =>
-          Math.abs(arc.worldRadius - (8.1 * 1.25 + 8)) < 1e-6 &&
+          Math.abs(arc.worldRadius - 18) < 1e-6 &&
           Math.hypot(arc.worldX - readyWorld.x, arc.worldY - readyWorld.y) < 4,
         )
         expect(readyRing).toBeDefined()

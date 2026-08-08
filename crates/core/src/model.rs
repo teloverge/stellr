@@ -19,6 +19,8 @@ pub struct Star {
     pub status: Status,
     #[serde(default)]
     pub ready_for_agent: bool,
+    #[serde(default)]
+    pub blocked: bool,
     pub blocked_by: Vec<u64>,
     pub milestone: Option<String>,
     pub labels: Vec<String>,
@@ -94,6 +96,7 @@ mod tests {
                     title: "Fix login".into(),
                     status: Status::Frontier,
                     ready_for_agent: false,
+                    blocked: false,
                     blocked_by: vec![],
                     milestone: Some("v1".into()),
                     labels: vec!["research".into()],
@@ -147,5 +150,6 @@ mod tests {
 
         assert_eq!(model.spaces[0].viewer_login, None);
         assert_eq!(model.spaces[0].stars[0].parent_issue, None);
+        assert!(!model.spaces[0].stars[0].blocked);
     }
 }

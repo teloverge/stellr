@@ -41,6 +41,7 @@ pub fn derive(issues: &[RawIssue]) -> Vec<Star> {
                 title: issue.title.clone(),
                 status,
                 ready_for_agent,
+                blocked: has_open_blocker,
                 blocked_by,
                 milestone: issue.milestone.clone(),
                 labels: issue.labels.clone(),
@@ -134,6 +135,8 @@ mod tests {
                 .unwrap()
                 .ready_for_agent
         );
+        assert!(!stars.iter().find(|star| star.number == 1).unwrap().blocked);
+        assert!(stars.iter().find(|star| star.number == 2).unwrap().blocked);
     }
 
     #[test]

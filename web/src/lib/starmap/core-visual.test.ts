@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StarMap } from './starmap'
 import type { Ticket } from './model'
+import type { SessionState } from './session'
 
 type Arc = { radius: number }
 type Gradient = { kind: 'radial-gradient'; stops: Array<{ at: number; color: string }> }
@@ -74,6 +75,20 @@ const MY_NEXT: Ticket = {
   title: 'My next work',
   readyForAgent: true,
   assignedToViewer: true,
+}
+const MY_FUTURE: Ticket = {
+  ...CLAIMED,
+  num: 11,
+  slug: '11',
+  title: 'My future work',
+  assignedToViewer: true,
+}
+const AVAILABLE_NEXT: Ticket = {
+  ...FRONTIER,
+  num: 12,
+  slug: '12',
+  title: 'Available next',
+  readyForAgent: true,
 }
 
 function recordingContext(): {
@@ -150,7 +165,11 @@ describe('issue core visual grammar', () => {
     document.body.replaceChildren()
   })
 
-  function paint(ticket: Ticket, currentIssue: number | null = null): { fills: Fill[]; strokes: Stroke[] } {
+  function paint(
+    ticket: Ticket,
+    currentIssue: number | null = null,
+    session: SessionState | null = null,
+  ): { fills: Fill[]; strokes: Stroke[] } {
     const recording = recordingContext()
     getContext.mockReturnValue(recording.ctx as never)
     const host = document.createElement('div')
@@ -159,7 +178,7 @@ describe('issue core visual grammar', () => {
     document.body.appendChild(host)
     const map = new StarMap()
     map.mount(host)
-    map.setModel([ticket], {}, currentIssue)
+    map.setModel([ticket], session ? { [ticket.num]: session } : {}, currentIssue)
     const frame = frames.pop()
     frames = []
     frame?.(0)
@@ -194,39 +213,56 @@ describe('issue core visual grammar', () => {
     expect(strokes.some((stroke) => stroke.style === 'rgba(138,216,255,0.95)')).toBe(false)
   })
 
-  it('paints every incomplete state with its unchanged glow, black disk, and status rim', () => {
+  it('paints doing now and team work as distinct solid cores', () => {
+    const doing = paint(BLOCKED, BLOCKED.num)
+    expect(doing.fills[1]).toEqual({ style: '#ffd873', arc: { radius: 12 } })
+    expect(doing.fills.some((fill) => fill.style === '#000')).toBe(false)
+
+    const team = paint(CLAIMED)
+    expect(team.fills[1]).toEqual({ style: '#b9a7ee', arc: { radius: 9 } })
+    expect(team.fills.some((fill) => fill.style === '#000')).toBe(false)
+  })
+
+  it('uses the doing-now amber core size when a session needs attention', () => {
+    const attention = paint(CLAIMED, null, 'blocked')
+
+    expect(attention.fills[1]).toEqual({ style: '#ffd873', arc: { radius: 12 } })
+    expect(attention.fills.some((fill) => fill.style === '#000')).toBe(false)
+  })
+
+  it('paints future, available, planning, and not-planned work as hollow priority cores', () => {
     for (const expected of [
       {
-        ticket: FRONTIER,
+        ticket: MY_FUTURE,
         glow: [
-          { at: 0, color: 'rgba(47,155,224,0.765)' },
-          { at: 0.4, color: 'rgba(47,155,224,0.198)' },
+          { at: 0, color: 'rgba(47,155,224,0.85)' },
+          { at: 0.4, color: 'rgba(47,155,224,0.22)' },
           { at: 1, color: 'rgba(47,155,224,0)' },
         ],
-        blackRadius: 10.125,
+        blackRadius: 10,
         rim: 'rgba(138,216,255,0.95)',
-        width: 3.24,
+        width: 3.2,
       },
       {
-        ticket: CLAIMED,
+        ticket: AVAILABLE_NEXT,
         glow: [
-          { at: 0, color: 'rgba(255,176,32,0.85)' },
-          { at: 0.4, color: 'rgba(255,176,32,0.22)' },
-          { at: 1, color: 'rgba(255,176,32,0)' },
+          { at: 0, color: 'rgba(59,159,104,0.85)' },
+          { at: 0.4, color: 'rgba(59,159,104,0.22)' },
+          { at: 1, color: 'rgba(59,159,104,0)' },
         ],
-        blackRadius: 9,
-        rim: 'rgba(255,216,115,0.95)',
-        width: 2.88,
+        blackRadius: 10,
+        rim: 'rgba(142,215,172,0.95)',
+        width: 3.2,
       },
       {
         ticket: BLOCKED,
         glow: [
-          { at: 0, color: 'rgba(154,111,111,0.85)' },
-          { at: 0.4, color: 'rgba(154,111,111,0.22)' },
-          { at: 1, color: 'rgba(154,111,111,0)' },
+          { at: 0, color: 'rgba(113,104,132,0.85)' },
+          { at: 0.4, color: 'rgba(113,104,132,0.22)' },
+          { at: 1, color: 'rgba(113,104,132,0)' },
         ],
         blackRadius: 5.625,
-        rim: 'rgba(226,195,195,0.95)',
+        rim: 'rgba(170,160,189,0.95)',
         width: 2.2,
       },
       {
@@ -258,15 +294,14 @@ describe('issue core visual grammar', () => {
     }
   })
 
-  it('keeps both CURRENT rings around an incomplete issue after its hollow core', () => {
+  it('keeps both CURRENT rings around the solid doing-now core', () => {
     const { fills, strokes } = paint(BLOCKED, BLOCKED.num)
 
     expect(fills).toHaveLength(2)
-    expect(fills[1]).toEqual({ style: '#000', arc: { radius: 5.625 } })
+    expect(fills[1]).toEqual({ style: '#ffd873', arc: { radius: 12 } })
     expect(strokes.map((stroke) => ({ style: stroke.style, lineWidth: stroke.lineWidth, radius: stroke.arc?.radius }))).toEqual([
-      { style: 'rgba(226,195,195,0.95)', lineWidth: 2.2, radius: 4.525 },
-      { style: 'rgba(255,255,255,0.95)', lineWidth: 2, radius: 13.625 },
-      { style: 'rgba(255,255,255,0.55)', lineWidth: 1, radius: 18.625 },
+      { style: 'rgba(255,255,255,0.95)', lineWidth: 2, radius: 20 },
+      { style: 'rgba(255,255,255,0.55)', lineWidth: 1, radius: 25 },
     ])
   })
 
@@ -278,7 +313,7 @@ describe('issue core visual grammar', () => {
     expect(relationshipRims).toHaveLength(1)
     expect(relationshipRims[0].arc!.radius).toBeGreaterThan(blackCore.arc!.radius)
     expect(incomplete.strokes).toContainEqual({
-      style: 'rgba(226,195,195,0.95)',
+      style: 'rgba(170,160,189,0.95)',
       lineWidth: 2.2,
       arc: { radius: 4.525 },
     })
@@ -293,7 +328,7 @@ describe('issue core visual grammar', () => {
     const readyRelationshipRadius = ready.strokes[readyRelationshipIndex].arc!.radius
     const readyEmphasisIndexes = ready.strokes
       .map((stroke, index) =>
-        stroke.style === 'rgba(138,216,255,0.95)' &&
+        stroke.style === 'rgba(142,215,172,0.95)' &&
         (stroke.arc?.radius ?? 0) > readyRelationshipRadius
           ? index
           : -1,

@@ -6,6 +6,7 @@ export interface Star {
   title: string
   status: Status
   ready_for_agent?: boolean
+  blocked?: boolean
   blocked_by: number[]
   milestone: string | null
   labels: string[]

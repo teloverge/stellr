@@ -17,6 +17,7 @@ export function toRendererModel(space: SpaceModel): Ticket[] {
       parentIssue: star.parent_issue,
       frontier: star.status === 'frontier',
       readyForAgent: star.ready_for_agent ?? legacyReadyForAgent,
+      blocked: star.blocked ?? star.status === 'blocked',
       assignedToViewer:
         viewerLogin !== undefined &&
         star.assignees.some((assignee) => assignee.toLowerCase() === viewerLogin),
