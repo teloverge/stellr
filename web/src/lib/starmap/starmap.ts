@@ -1370,17 +1370,23 @@ export class StarMap {
       const core = this.#radius(n)
       let r = core + 2
       if (n.sstate) r = core + 15
+      if (
+        n.parentIssue !== null &&
+        this.#focus.readySet.has(n.num) &&
+        this.#focus.current !== n.num
+      ) r = Math.max(r, core + 9)
       if (this.#focus.current === n.num) r = Math.max(r, core + 14)
       if (this.#selected === n.num) r = Math.max(r, core + 19)
       vis.push({ n, sx, sy, rad: r * s })
     }
 
-    const obstacles: Box[] = vis.map((v) => ({
+    const starObstacles = new Map<number, Box>(vis.map((v) => [v.n.num, {
       x0: v.sx - v.rad,
       y0: v.sy - v.rad,
       x1: v.sx + v.rad,
       y1: v.sy + v.rad,
-    }))
+    }]))
+    const obstacles: Box[] = [...starObstacles.values()]
 
     const order = [...vis].sort((a, b) => {
       const priority = (n: Node) => {
@@ -1430,7 +1436,14 @@ export class StarMap {
             y1: worldGeometry.box.y1 * s + this.#cam.y,
           },
         }
-        if (!obstacles.some((obstacle) => boxesOverlap(geometry.box, obstacle))) {
+        // The outward anchor already clears the visible glyphs from this star.
+        // Its padded reservation can graze the square star obstacle on diagonal
+        // spokes, which must not make the label disappear. Every other star and
+        // every previously placed label remain hard obstacles.
+        const ownStar = starObstacles.get(v.n.num)
+        if (!obstacles.some((obstacle) =>
+          obstacle !== ownStar && boxesOverlap(geometry.box, obstacle),
+        )) {
           obstacles.push(geometry.box)
           items.push({
             text,

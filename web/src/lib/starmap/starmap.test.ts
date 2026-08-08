@@ -748,11 +748,47 @@ describe('label placement', () => {
   // aligned, so the drawn boxes can be reconstructed.
   function recordingContext() {
     const drawn: { text: string; x: number; y: number; align: string; font: string }[] = []
+    const arcs: {
+      x: number
+      y: number
+      radius: number
+      lineWidth: number
+      worldX: number
+      worldY: number
+      worldRadius: number
+    }[] = []
+    let translateX = 0
+    let translateY = 0
+    let scale = 1
     const ctx: Record<string, unknown> = {
       textAlign: 'center',
       font: '',
+      lineWidth: 1,
       createRadialGradient: () => ({ addColorStop: () => {} }),
       measureText: (s: string) => ({ width: s.length * 6 }),
+      setTransform() {
+        translateX = 0
+        translateY = 0
+        scale = 1
+      },
+      translate(x: number, y: number) {
+        translateX += x
+        translateY += y
+      },
+      scale(x: number) {
+        scale *= x
+      },
+      arc(this: Record<string, unknown>, x: number, y: number, radius: number) {
+        arcs.push({
+          x: x * scale + translateX,
+          y: y * scale + translateY,
+          radius: radius * scale,
+          lineWidth: (this.lineWidth as number) * scale,
+          worldX: x,
+          worldY: y,
+          worldRadius: radius,
+        })
+      },
       fillText(this: Record<string, unknown>, text: string, x: number, y: number) {
         drawn.push({
           text,
@@ -764,12 +800,12 @@ describe('label placement', () => {
       },
     }
     for (const m of [
-      'setTransform', 'fillRect', 'beginPath', 'arc', 'fill', 'stroke', 'moveTo', 'lineTo',
-      'closePath', 'quadraticCurveTo', 'setLineDash', 'save', 'restore', 'translate', 'scale', 'rotate',
+      'fillRect', 'beginPath', 'fill', 'stroke', 'moveTo', 'lineTo',
+      'closePath', 'quadraticCurveTo', 'setLineDash', 'save', 'restore', 'rotate',
     ]) {
       ctx[m] = () => {}
     }
-    return { ctx, drawn }
+    return { ctx, drawn, arcs }
   }
 
   afterEach(() => {
@@ -843,6 +879,94 @@ describe('label placement', () => {
           ? 'right'
           : 'left'
       expect(label?.align, `subissue #${number} label`).toBe(expected)
+    }
+  })
+
+  it('keeps a ready subissue label visible and clear of its emphasis ring', () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    const { ctx, drawn, arcs } = recordingContext()
+    let frames: FrameRequestCallback[] = []
+    HTMLCanvasElement.prototype.getContext = (() => ctx) as never
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+      frames.push(cb)
+      return frames.length
+    }) as never
+    globalThis.cancelAnimationFrame = (() => {}) as never
+
+    const tickets: Ticket[] = [
+      { num: 15, slug: '15', title: 'Milestone parent', type: 'issue', status: 'open', blockedBy: [], parentIssue: null, frontier: false },
+      { num: 16, slug: '16', title: 'Current issue', type: 'issue', status: 'open', blockedBy: [], parentIssue: 15, frontier: false },
+      { num: 24, slug: '24', title: 'Orbit parent', type: 'issue', status: 'open', blockedBy: [], parentIssue: 15, frontier: false },
+      { num: 28, slug: '28', title: 'Add the canonical SHA-256 digest contract', type: 'task', status: 'frontier', blockedBy: [], parentIssue: 24, frontier: true },
+      { num: 29, slug: '29', title: 'Adopt canonical digests', type: 'task', status: 'blocked', blockedBy: [28], parentIssue: 24, frontier: false },
+      { num: 30, slug: '30', title: 'Verify the digest branch', type: 'task', status: 'frontier', blockedBy: [29], parentIssue: 24, frontier: true, readyForAgent: true },
+    ]
+    try {
+      const host = document.createElement('div')
+      Object.defineProperty(host, 'clientWidth', { value: 475 })
+      Object.defineProperty(host, 'clientHeight', { value: 952 })
+      document.body.appendChild(host)
+      const sm = new StarMap()
+      sm.mount(host)
+      sm.setModel(tickets, {}, 16)
+
+      const sample = (elapsed = 16) => {
+        drawn.length = 0
+        arcs.length = 0
+        vi.advanceTimersByTime(elapsed)
+        const cb = frames.pop()
+        frames = []
+        cb?.(0)
+        const readyLabel = drawn.find((label) => label.text.startsWith('READY · 30'))
+        expect(readyLabel).toBeDefined()
+
+        const readyWorld = sm.positions()[30]
+        const readyRing = arcs.find((arc) =>
+          Math.abs(arc.worldRadius - (8.1 * 1.25 + 8)) < 1e-6 &&
+          Math.hypot(arc.worldX - readyWorld.x, arc.worldY - readyWorld.y) < 4,
+        )
+        expect(readyRing).toBeDefined()
+
+        const fontSize = Number.parseFloat(readyLabel!.font)
+        const width = readyLabel!.text.length * 6
+        const left = readyLabel!.align === 'left'
+          ? readyLabel!.x
+          : readyLabel!.align === 'right'
+            ? readyLabel!.x - width
+            : readyLabel!.x - width / 2
+        const textBox = {
+          x0: left,
+          y0: readyLabel!.y - fontSize * 0.82,
+          x1: left + width,
+          y1: readyLabel!.y + fontSize * 0.22,
+        }
+        const nearestX = Math.max(textBox.x0, Math.min(readyRing!.x, textBox.x1))
+        const nearestY = Math.max(textBox.y0, Math.min(readyRing!.y, textBox.y1))
+        expect(Math.hypot(nearestX - readyRing!.x, nearestY - readyRing!.y)).toBeGreaterThanOrEqual(
+          readyRing!.radius + readyRing!.lineWidth / 2,
+        )
+        return readyRing!.radius
+      }
+
+      const parent = sm.positions()[24]
+      sm.restoreCamera({
+        s: 1,
+        x: 237.5 - parent.x,
+        y: 476 - parent.y,
+      })
+      sample()
+
+      const canvas = host.querySelector('canvas')!
+      canvas.dispatchEvent(new WheelEvent('wheel', {
+        clientX: 237.5,
+        clientY: 476,
+        deltaY: 140,
+      }))
+      const easingRadii = Array.from({ length: 20 }, () => sample(100))
+      expect(new Set(easingRadii.map((radius) => radius.toFixed(4))).size).toBeGreaterThan(5)
+      expect(easingRadii.at(-1)).toBeLessThan(easingRadii[0])
+    } finally {
+      vi.useRealTimers()
     }
   })
 

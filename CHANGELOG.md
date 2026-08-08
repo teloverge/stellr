@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Kept ready subissue labels visible and clear of their emphasis rings while
+  the star-map camera eases.
+- Declared npm 12.0.2 as the web workspace's development package manager and
+  activated it across CI, bundle, and release workflows.
 - Made newly added repositories appear in the sidebar without restarting
   Stellr or performing another space action.
 - Emphasized the incoming and outgoing edges directly connected to a selected
