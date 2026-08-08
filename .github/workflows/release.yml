@@ -23,6 +23,7 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - run: npm install --global npm@12.0.2
       - run: npm --prefix web ci
       - run: npm --prefix web run check
       - run: npm --prefix web test
@@ -56,6 +57,7 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - run: npm install --global npm@12.0.2
       - name: Fail closed unless Windows signing credentials exist
         shell: powershell
         run: .\scripts\assert-windows-signing.ps1 -CertificateBase64 $env:WINDOWS_CERTIFICATE_BASE64 -CertificatePassword $env:WINDOWS_CERTIFICATE_PASSWORD
@@ -121,6 +123,7 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - run: npm install --global npm@12.0.2
       - name: Import Developer ID certificate
         run: |
           keychain="$RUNNER_TEMP/stellr-signing.keychain-db"
@@ -160,6 +163,7 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - run: npm install --global npm@12.0.2
       - name: Install Tauri Linux build dependencies
         run: |
           sudo apt-get update
