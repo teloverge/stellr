@@ -29,6 +29,7 @@ pub struct ProviderSlot {
     current: Arc<RwLock<Arc<dyn Provider + Send + Sync>>>,
     generation: Arc<AtomicU64>,
     confirmed_generation: Arc<AtomicU64>,
+    publication: Arc<std::sync::Mutex<()>>,
 }
 
 impl ProviderSlot {
@@ -37,11 +38,16 @@ impl ProviderSlot {
             current: Arc::new(RwLock::new(provider)),
             generation: Arc::new(AtomicU64::new(0)),
             confirmed_generation: Arc::new(AtomicU64::new(0)),
+            publication: Arc::new(std::sync::Mutex::new(())),
         }
     }
 
     pub async fn replace(&self, provider: Arc<dyn Provider + Send + Sync>) {
         let mut current = self.current.write().await;
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *current = provider;
         self.generation.fetch_add(1, Ordering::AcqRel);
     }
@@ -62,11 +68,27 @@ impl Provider for ProviderSlot {
             self.confirmed_generation
                 .store(generation, Ordering::Release);
         }
-        result
+        result.map(|snapshot| snapshot.with_publication_generation(generation))
     }
 
     fn allows_cached_viewer_identity(&self) -> bool {
         self.confirmed_generation.load(Ordering::Acquire) == self.generation.load(Ordering::Acquire)
+    }
+
+    fn commit_if_current(&self, publication_generations: &[u64], commit: &mut dyn FnMut()) -> bool {
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let generation = self.generation.load(Ordering::Acquire);
+        if publication_generations
+            .iter()
+            .any(|candidate| *candidate != generation)
+        {
+            return false;
+        }
+        commit();
+        true
     }
 }
 

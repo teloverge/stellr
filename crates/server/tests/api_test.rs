@@ -208,9 +208,9 @@ async fn add_repo_space_immediately_populates_the_model() {
     });
     let poller = spawn_poller(
         state.clone(),
-        Arc::new(StubProvider(ProviderSnapshot {
-            viewer_login: Some("octocat".into()),
-            issues: vec![RawIssue {
+        Arc::new(StubProvider(ProviderSnapshot::new(
+            Some("octocat".into()),
+            vec![RawIssue {
                 number: 1,
                 parent_issue: None,
                 title: "Ready work".into(),
@@ -222,7 +222,7 @@ async fn add_repo_space_immediately_populates_the_model() {
                 blocked_by: vec![],
                 url: "https://github.com/o/r/issues/1".into(),
             }],
-        })),
+        ))),
         Cache::new(directory.path().join("cache")),
         Duration::from_secs(60),
     );

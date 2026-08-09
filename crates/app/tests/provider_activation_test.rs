@@ -51,9 +51,9 @@ impl Provider for DelayedSuccess {
     async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         self.started.notify_one();
         self.release.notified().await;
-        Ok(ProviderSnapshot {
-            viewer_login: Some("previous-account".into()),
-            issues: vec![RawIssue {
+        Ok(ProviderSnapshot::new(
+            Some("previous-account".into()),
+            vec![RawIssue {
                 number: 92,
                 parent_issue: None,
                 title: "Previous account work".into(),
@@ -65,7 +65,7 @@ impl Provider for DelayedSuccess {
                 blocked_by: vec![],
                 url: "https://github.com/teloverge/stellr/issues/92".into(),
             }],
-        })
+        ))
     }
 }
 
@@ -115,6 +115,24 @@ async fn an_old_in_flight_success_cannot_confirm_a_replacement_generation() {
     ));
 
     assert!(!slot.allows_cached_viewer_identity());
+}
+
+#[tokio::test]
+async fn replacement_invalidates_a_fetched_snapshot_before_publication() {
+    let slot = ProviderSlot::new(Arc::new(Active));
+    let repo = RepoRef {
+        owner: "teloverge".into(),
+        name: "stellr".into(),
+    };
+    let snapshot = slot.fetch(&repo).await.unwrap();
+    let generation = snapshot.publication_generation().unwrap();
+
+    slot.replace(Arc::new(SignedOut)).await;
+
+    let mut published = false;
+    let committed = slot.commit_if_current(&[generation], &mut || published = true);
+    assert!(!committed);
+    assert!(!published);
 }
 
 #[tokio::test]

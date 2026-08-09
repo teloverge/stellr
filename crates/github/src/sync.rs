@@ -194,10 +194,7 @@ impl Provider for GithubProvider {
 
         let mut issues = map_issues(nodes);
         issues.sort_by_key(|issue| issue.number);
-        Ok(ProviderSnapshot {
-            viewer_login,
-            issues,
-        })
+        Ok(ProviderSnapshot::new(viewer_login, issues))
     }
 }
 

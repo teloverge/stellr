@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
-use stellr_core::{Model, Provider, SpaceModel, derive};
+use stellr_core::{Model, Provider, ProviderError, ProviderSnapshot, SpaceModel, derive};
 use stellr_github::cache::{Cache, Snapshot};
 
 use crate::{spaces::SpaceEntry, state::AppState};
@@ -96,19 +96,51 @@ async fn run_poller(
 
 async fn sync_spaces(state: &AppState, provider: &(dyn Provider + Send + Sync), cache: &Cache) {
     let entries = state.spaces.lock().await.entries().to_vec();
-    let mut spaces = Vec::with_capacity(entries.len());
-    for entry in entries {
-        spaces.push(sync_space(&entry, provider, cache).await);
+    let mut results = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        results.push(provider.fetch(&entry.repo).await);
     }
-    state.hub.send_replace(Model { spaces });
+    let publication_generations: Vec<u64> = results
+        .iter()
+        .filter_map(|result| {
+            result
+                .as_ref()
+                .ok()
+                .and_then(ProviderSnapshot::publication_generation)
+        })
+        .collect();
+    let mut pending = Some(results);
+    let mut publish = || {
+        let spaces = entries
+            .iter()
+            .zip(pending.take().expect("provider commit runs once"))
+            .map(|(entry, result)| sync_result(entry, result, provider, cache))
+            .collect();
+        state.hub.send_replace(Model { spaces });
+    };
+    if provider.commit_if_current(&publication_generations, &mut publish) {
+        return;
+    }
+
+    let superseded = ProviderError::Superseded.to_string();
+    let mut publish_safe_fallback = || {
+        let spaces = entries
+            .iter()
+            .map(|entry| cached_model(entry, provider, cache, superseded.clone()))
+            .collect();
+        state.hub.send_replace(Model { spaces });
+    };
+    let committed = provider.commit_if_current(&[], &mut publish_safe_fallback);
+    debug_assert!(committed, "an empty fallback batch must be current");
 }
 
-async fn sync_space(
+fn sync_result(
     entry: &SpaceEntry,
+    result: Result<ProviderSnapshot, ProviderError>,
     provider: &(dyn Provider + Send + Sync),
     cache: &Cache,
 ) -> SpaceModel {
-    match provider.fetch(&entry.repo).await {
+    match result {
         Ok(snapshot) => {
             let synced_at = Utc::now().timestamp();
             // A successful provider sync is fresh even if its fallback cache cannot be updated.
@@ -129,31 +161,31 @@ async fn sync_space(
                 None,
             )
         }
-        Err(error) => {
-            let snapshot = cache.load(&entry.repo);
-            let (issues, cached_viewer_login, synced_at) = snapshot
-                .map(|snapshot| {
-                    (
-                        snapshot.issues,
-                        snapshot.viewer_login,
-                        Some(snapshot.synced_at),
-                    )
-                })
-                .unwrap_or_default();
-            let viewer_login = provider
-                .allows_cached_viewer_identity()
-                .then_some(cached_viewer_login)
-                .flatten();
-            model(
-                entry,
-                issues,
-                viewer_login,
-                synced_at,
-                true,
-                Some(error.to_string()),
-            )
-        }
+        Err(error) => cached_model(entry, provider, cache, error.to_string()),
     }
+}
+
+fn cached_model(
+    entry: &SpaceEntry,
+    provider: &(dyn Provider + Send + Sync),
+    cache: &Cache,
+    error: String,
+) -> SpaceModel {
+    let snapshot = cache.load(&entry.repo);
+    let (issues, cached_viewer_login, synced_at) = snapshot
+        .map(|snapshot| {
+            (
+                snapshot.issues,
+                snapshot.viewer_login,
+                Some(snapshot.synced_at),
+            )
+        })
+        .unwrap_or_default();
+    let viewer_login = provider
+        .allows_cached_viewer_identity()
+        .then_some(cached_viewer_login)
+        .flatten();
+    model(entry, issues, viewer_login, synced_at, true, Some(error))
 }
 
 fn model(
