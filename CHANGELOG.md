@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Suspended star-map GPU rendering while the app is minimized or its browser
+  document is hidden, while retaining five-minute native background polling.
 - Kept ready subissue labels visible and clear of their emphasis rings while
   the star-map camera eases.
 - Declared npm 12.0.2 as the web workspace's development package manager and

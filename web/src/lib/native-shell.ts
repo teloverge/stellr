@@ -29,7 +29,13 @@ export async function observeWindowSuspension(
     return () => document.removeEventListener('visibilitychange', publish)
   }
 
-  const window = getCurrentWindow()
+  let window: ReturnType<typeof getCurrentWindow>
+  try {
+    window = getCurrentWindow()
+  } catch {
+    notify(false)
+    return () => undefined
+  }
   const unlisteners: UnlistenFn[] = []
   let disposed = false
   let revision = 0

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import type { SpaceModel } from './model'
+  import { observeWindowSuspension } from './native-shell'
   import { toRendererModel } from './starmap/adapt'
   import { StarMap as Renderer } from './starmap/starmap'
 
@@ -42,17 +43,32 @@
   })
 
   onMount(() => {
-    renderer = new Renderer()
+    let disposed = false
+    let stopObserving: (() => void) | undefined
+    const activeRenderer = new Renderer()
+    renderer = activeRenderer
+    activeRenderer.suspend()
     const background = getComputedStyle(host).getPropertyValue('--map-background').trim()
-    renderer.setBackground(background)
-    renderer.mount(host)
-    renderer.onSelect((issueNumber) => {
+    activeRenderer.setBackground(background)
+    activeRenderer.mount(host)
+    activeRenderer.onSelect((issueNumber) => {
       if (issueNumber !== null && issueNumber !== selectedIssue) select?.(issueNumber)
     })
 
+    void observeWindowSuspension((suspended) => {
+      if (disposed) return
+      if (suspended) activeRenderer.suspend()
+      else activeRenderer.resume()
+    }).then((unlisten) => {
+      if (disposed) unlisten()
+      else stopObserving = unlisten
+    })
+
     return () => {
-      renderer?.destroy()
-      renderer = undefined
+      disposed = true
+      stopObserving?.()
+      activeRenderer.destroy()
+      if (renderer === activeRenderer) renderer = undefined
     }
   })
 </script>

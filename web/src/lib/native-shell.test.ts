@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const native = vi.hoisted(() => ({
   active: false,
+  windowError: undefined as Error | undefined,
   minimized: vi.fn<() => Promise<boolean>>(),
   onResized: vi.fn(),
   onFocusChanged: vi.fn(),
@@ -17,17 +18,21 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 vi.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: () => ({
-    isMinimized: native.minimized,
-    onResized: native.onResized,
-    onFocusChanged: native.onFocusChanged,
-  }),
+  getCurrentWindow: () => {
+    if (native.windowError) throw native.windowError
+    return {
+      isMinimized: native.minimized,
+      onResized: native.onResized,
+      onFocusChanged: native.onFocusChanged,
+    }
+  },
 }))
 
 import { observeWindowSuspension } from './native-shell'
 
 beforeEach(() => {
   native.active = false
+  native.windowError = undefined
   native.resize = undefined
   native.focus = undefined
   native.minimized.mockReset()
@@ -124,6 +129,17 @@ describe('window rendering suspension', () => {
 
     expect(states).toEqual([false])
     expect(native.offResize).toHaveBeenCalledOnce()
+    expect(() => stop()).not.toThrow()
+  })
+
+  it('fails open when the current native window is unavailable', async () => {
+    native.active = true
+    native.windowError = new Error('window metadata unavailable')
+    const states: boolean[] = []
+
+    const stop = await observeWindowSuspension((state) => states.push(state))
+
+    expect(states).toEqual([false])
     expect(() => stop()).not.toThrow()
   })
 })

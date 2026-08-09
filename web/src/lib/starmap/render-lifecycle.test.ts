@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { Ticket } from './model'
 import { StarMap } from './starmap'
 
@@ -37,7 +37,7 @@ describe('render lifecycle', () => {
   let nextFrame: number
   let frames: Map<number, FrameRequestCallback>
   let hostWidth: number
-  let paint: ReturnType<typeof vi.fn>
+  let paint: Mock<() => void>
   let resize: ResizeObserverCallback
   let renderers: StarMap[]
 

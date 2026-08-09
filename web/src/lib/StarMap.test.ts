@@ -181,4 +181,34 @@ describe('StarMap wrapper', () => {
 
     expect(selected).toEqual([42])
   })
+
+  it('suspends rendering with document visibility and removes the observer on unmount', async () => {
+    let hidden = false
+    vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden)
+    const suspend = vi.spyOn(Renderer.prototype, 'suspend')
+    const resume = vi.spyOn(Renderer.prototype, 'resume')
+    const destroy = vi.spyOn(Renderer.prototype, 'destroy')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const component = mount(StarMap, { target, props: { space: space(42) } })
+    flushSync()
+    await Promise.resolve()
+
+    expect(suspend).toHaveBeenCalledOnce()
+    expect(resume).toHaveBeenCalledOnce()
+
+    hidden = true
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(suspend).toHaveBeenCalledTimes(2)
+
+    hidden = false
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(resume).toHaveBeenCalledTimes(2)
+
+    await unmount(component)
+    hidden = true
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(suspend).toHaveBeenCalledTimes(2)
+    expect(destroy).toHaveBeenCalledOnce()
+  })
 })
