@@ -1,7 +1,7 @@
 # Project Layout Cache and Transition Design
 
 **Date:** 2026-08-08
-**Status:** Approved in conversation; pending written-spec review
+**Status:** Approved
 
 ## Problem
 
@@ -59,8 +59,9 @@ user cancellation is not reported as an error.
 
 If initial startup has no committed project to restore, a critical failure leaves
 the application shell and requested selection available with an error state and a
-Retry action. Cancel remains available during an initial layout and returns to the
-empty, no-project selection when there is no previous successful selection.
+Retry action. Cancel remains available during an initial layout, stops the work,
+and leaves the requested selection in a canceled state with a Retry action because
+there is no successful project to restore.
 
 ## Loading State
 
@@ -184,7 +185,8 @@ caching prevents repeated computation.
   visible whole-seconds stopwatch, and Cancel button before computation begins.
 - The UI, stopwatch, and Cancel action remain responsive while layout runs.
 - Cancel terminates the pending calculation and restores the last successfully
-  displayed project, or the empty selection when no project has succeeded yet.
+  displayed project. Without a successful project, it stops at a canceled state
+  with Retry.
 - Critical failure restores the last successfully displayed project and presents a
   useful error notice.
 - Initial failure without a previous successful project presents Error and Retry
