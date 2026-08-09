@@ -233,7 +233,7 @@ describe('render lifecycle', () => {
 Run from `web`:
 
 ```powershell
-vpr.exe test -- src/lib/starmap/render-lifecycle.test.ts
+vpr.exe test src/lib/starmap/render-lifecycle.test.ts
 ```
 
 Expected: FAIL because `StarMap` has no `suspend()` or `resume()` methods. Do not implement until the failure is confirmed to be this missing behavior.
@@ -244,6 +244,8 @@ In `starmap.ts`, add the suspension flag beside `#raf`, prevent a suspended moun
 
 ```ts
 #clock = 0
+#pausedDuration = 0
+#pauseStarted: number | null = null
 #last = 0
 #raf = 0
 #suspended = false
@@ -260,6 +262,7 @@ if (this.#ctx && !this.#suspended) {
 suspend(): void {
   if (this.#suspended) return
   this.#suspended = true
+  if (this.#ctx) this.#pauseStarted = now()
   if (this.#raf) cancelAnimationFrame(this.#raf)
   this.#raf = 0
 }
@@ -267,7 +270,12 @@ suspend(): void {
 resume(): void {
   if (!this.#suspended) return
   this.#suspended = false
-  this.#last = now()
+  const t = now()
+  if (this.#pauseStarted !== null) {
+    this.#pausedDuration += Math.max(0, t - this.#pauseStarted)
+    this.#pauseStarted = null
+  }
+  this.#last = t
   if (this.#ctx && !this.#raf) this.#raf = requestAnimationFrame(this.#render)
 }
 ```
@@ -307,7 +315,7 @@ Replace `#render` with this ordering so a callback racing with cancellation cann
   let dt = t - this.#last
   if (dt < 0 || dt > 0.1) dt = 0.016
   this.#last = t
-  this.#clock += dt
+  this.#clock = t - this.#pausedDuration
 
   for (const n of this.#nodes) {
     const ph = n.num * 1.7
@@ -326,7 +334,7 @@ Keep `destroy()`'s existing frame cancellation and context cleanup unchanged.
 - [ ] **Step 5: Run the focused test and existing renderer tests to verify GREEN**
 
 ```powershell
-vpr.exe test -- src/lib/starmap/render-lifecycle.test.ts src/lib/starmap/starmap.test.ts src/lib/starmap/edge-visual.test.ts
+vpr.exe test src/lib/starmap/render-lifecycle.test.ts src/lib/starmap/starmap.test.ts src/lib/starmap/edge-visual.test.ts
 ```
 
 Expected: all focused and existing renderer tests PASS with no warnings.
@@ -489,7 +497,7 @@ describe('window rendering suspension', () => {
 Run from `web`:
 
 ```powershell
-vpr.exe test -- src/lib/native-shell.test.ts
+vpr.exe test src/lib/native-shell.test.ts
 ```
 
 Expected: FAIL because `observeWindowSuspension` is not exported.
@@ -561,7 +569,7 @@ export async function observeWindowSuspension(
 - [ ] **Step 4: Run native-shell and related frontend tests to verify GREEN**
 
 ```powershell
-vpr.exe test -- src/lib/native-shell.test.ts src/lib/native-route.test.ts src/lib/AppearanceMenu.test.ts
+vpr.exe test src/lib/native-shell.test.ts src/lib/native-route.test.ts src/lib/AppearanceMenu.test.ts
 ```
 
 Expected: all tests PASS, including cleanup, stale-result, and fail-open cases.
@@ -627,7 +635,7 @@ Do not add this component to the shared `mounted` array because the test unmount
 - [ ] **Step 2: Run the wrapper test and verify RED**
 
 ```powershell
-vpr.exe test -- src/lib/StarMap.test.ts -t "suspends rendering with document visibility"
+vpr.exe test src/lib/StarMap.test.ts -t "suspends rendering with document visibility"
 ```
 
 Expected: FAIL because the wrapper does not call `suspend()` or `resume()` and has no visibility observer.
@@ -686,7 +694,7 @@ Add this newest bullet directly below `## Unreleased` in `CHANGELOG.md`:
 Run from `web`:
 
 ```powershell
-vpr.exe test -- src/lib/StarMap.test.ts -t "suspends rendering with document visibility"
+vpr.exe test src/lib/StarMap.test.ts -t "suspends rendering with document visibility"
 vpr.exe test
 vpr.exe check
 vpr.exe build
