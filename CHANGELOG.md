@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Made project changes immediate and responsive: first-time constellation
+  layouts now show cancellable elapsed-time progress off the UI thread, while
+  completed layouts are cached for instant return visits and failures restore
+  the last successfully charted project.
 - Reworked the star map around viewer-aware work priorities: current and owned
   work now remains prominent when zoomed out, team and closure states stay
   distinct, account changes cannot reuse stale ownership, and completed paths
