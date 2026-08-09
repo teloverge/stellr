@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StarMap } from './starmap'
 import type { Ticket } from './model'
+import type { SessionState } from './session'
 
 type Arc = { radius: number }
 type Gradient = { kind: 'radial-gradient'; stops: Array<{ at: number; color: string }> }
 type Fill = { style: string | Gradient; arc: Arc | undefined }
 type Stroke = { style: string | Gradient; lineWidth: number; arc: Arc | undefined }
+type ArcCenter = { x: number; y: number; radius: number }
 
 const RESOLVED: Ticket = {
   num: 1,
@@ -67,14 +69,38 @@ const READY_CHILD: Ticket = {
   parentIssue: 99,
   readyForAgent: true,
 }
+const MY_NEXT: Ticket = {
+  ...CLAIMED,
+  num: 10,
+  slug: '10',
+  title: 'My next work',
+  readyForAgent: true,
+  assignedToViewer: true,
+}
+const MY_FUTURE: Ticket = {
+  ...CLAIMED,
+  num: 11,
+  slug: '11',
+  title: 'My future work',
+  assignedToViewer: true,
+}
+const AVAILABLE_NEXT: Ticket = {
+  ...FRONTIER,
+  num: 12,
+  slug: '12',
+  title: 'Available next',
+  readyForAgent: true,
+}
 
 function recordingContext(): {
   ctx: Record<string, unknown>
   fills: Fill[]
   strokes: Stroke[]
+  arcs: ArcCenter[]
 } {
   const fills: Fill[] = []
   const strokes: Stroke[] = []
+  const arcs: ArcCenter[] = []
   let arc: Arc | undefined
   const ctx: Record<string, unknown> = {
     createRadialGradient: () => {
@@ -87,8 +113,9 @@ function recordingContext(): {
     beginPath: () => {
       arc = undefined
     },
-    arc: (_x: number, _y: number, radius: number) => {
+    arc: (x: number, y: number, radius: number) => {
       arc = { radius }
+      arcs.push({ x, y, radius })
     },
     fill: () => fills.push({ style: ctx.fillStyle as string | Gradient, arc }),
     stroke: () =>
@@ -116,7 +143,7 @@ function recordingContext(): {
   ]) {
     ctx[method] = () => {}
   }
-  return { ctx, fills, strokes }
+  return { ctx, fills, strokes, arcs }
 }
 
 describe('issue core visual grammar', () => {
@@ -142,7 +169,18 @@ describe('issue core visual grammar', () => {
     document.body.replaceChildren()
   })
 
-  function paint(ticket: Ticket, currentIssue: number | null = null): { fills: Fill[]; strokes: Stroke[] } {
+  function paint(
+    ticket: Ticket,
+    currentIssue: number | null = null,
+    session: SessionState | null = null,
+    options: { scale?: number; timeMs?: number; reducedMotion?: boolean } = {},
+  ): { fills: Fill[]; strokes: Stroke[]; arcs: ArcCenter[] } {
+    now.mockReturnValue(options.timeMs ?? 0)
+    vi.stubGlobal('matchMedia', () => ({
+      matches: options.reducedMotion ?? false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
     const recording = recordingContext()
     getContext.mockReturnValue(recording.ctx as never)
     const host = document.createElement('div')
@@ -151,7 +189,10 @@ describe('issue core visual grammar', () => {
     document.body.appendChild(host)
     const map = new StarMap()
     map.mount(host)
-    map.setModel([ticket], {}, currentIssue)
+    map.setModel([ticket], session ? { [ticket.num]: session } : {}, currentIssue)
+    if (options.scale !== undefined) {
+      map.restoreCamera({ x: 500, y: 350, s: options.scale })
+    }
     const frame = frames.pop()
     frames = []
     frame?.(0)
@@ -178,39 +219,109 @@ describe('issue core visual grammar', () => {
     expect(fills.some((fill) => fill.style === '#000')).toBe(false)
   })
 
-  it('paints every incomplete state with its unchanged glow, black disk, and status rim', () => {
+  it('paints My next work as a solid blue core without a black disk', () => {
+    const { fills, strokes } = paint(MY_NEXT)
+
+    expect(fills[1]).toEqual({ style: '#8ad8ff', arc: { radius: 11 } })
+    expect(fills.some((fill) => fill.style === '#000')).toBe(false)
+    expect(strokes.some((stroke) => stroke.style === 'rgba(138,216,255,0.95)')).toBe(false)
+  })
+
+  it('paints doing now and team work as distinct solid cores', () => {
+    const doing = paint(BLOCKED, BLOCKED.num, null, { reducedMotion: true })
+    expect(doing.fills[1]).toEqual({ style: '#ffd873', arc: { radius: 12 } })
+    expect(doing.fills.some((fill) => fill.style === '#000')).toBe(false)
+
+    const team = paint(CLAIMED)
+    expect(team.fills[1]).toEqual({ style: '#b9a7ee', arc: { radius: 9 } })
+    expect(team.fills.some((fill) => fill.style === '#000')).toBe(false)
+  })
+
+  it('uses the doing-now amber core size when a session needs attention', () => {
+    const attention = paint(CLAIMED, null, 'blocked')
+
+    expect(attention.fills[1]).toEqual({ style: '#ffd873', arc: { radius: 12 } })
+    expect(attention.fills.some((fill) => fill.style === '#000')).toBe(false)
+  })
+
+  it('keeps active priorities readable with screen-space radius floors', () => {
+    for (const expected of [
+      { ticket: BLOCKED, current: BLOCKED.num, radius: 50 },
+      { ticket: MY_NEXT, current: null, radius: 42.5 },
+      { ticket: MY_FUTURE, current: null, radius: 35 },
+      { ticket: AVAILABLE_NEXT, current: null, radius: 35 },
+      { ticket: CLAIMED, current: null, radius: 30 },
+      { ticket: OUT_OF_SCOPE, current: null, radius: 5.625 },
+    ]) {
+      const { fills } = paint(expected.ticket, expected.current, null, {
+        scale: 0.2,
+        reducedMotion: true,
+      })
+      expect(fills[1].arc?.radius).toBe(expected.radius)
+    }
+
+    const session = paint(CLAIMED, null, 'implementing', {
+      scale: 0.2,
+      reducedMotion: true,
+    })
+    expect(session.arcs).toContainEqual(expect.objectContaining({ radius: 60 }))
+  })
+
+  it('pulses only doing-now cores from 1.00 to 1.08 and freezes under reduced motion', () => {
+    const lowMs = ((Math.PI * 1.5) / 2.8) * 1000
+    const highMs = ((Math.PI * 0.5) / 2.8) * 1000
+
+    expect(paint(BLOCKED, BLOCKED.num, null, { timeMs: lowMs }).fills[1].arc?.radius).toBeCloseTo(12)
+    expect(paint(BLOCKED, BLOCKED.num, null, { timeMs: highMs }).fills[1].arc?.radius).toBeCloseTo(12.96)
+    expect(paint(MY_NEXT, null, null, { timeMs: highMs }).fills[1].arc?.radius).toBe(11)
+    expect(
+      paint(BLOCKED, BLOCKED.num, null, { timeMs: highMs, reducedMotion: true }).fills[1].arc?.radius,
+    ).toBe(12)
+  })
+
+  it('freezes the existing session proton under reduced motion', () => {
+    const moon = (timeMs: number, reducedMotion: boolean) =>
+      paint(CLAIMED, null, 'implementing', { timeMs, reducedMotion }).arcs.find(
+        (arc) => arc.radius === 2.7,
+      )
+
+    expect(moon(0, false)).not.toEqual(moon(1000, false))
+    expect(moon(0, true)).toEqual(moon(1000, true))
+  })
+
+  it('paints future, available, planning, and not-planned work as hollow priority cores', () => {
     for (const expected of [
       {
-        ticket: FRONTIER,
+        ticket: MY_FUTURE,
         glow: [
-          { at: 0, color: 'rgba(47,155,224,0.765)' },
-          { at: 0.4, color: 'rgba(47,155,224,0.198)' },
+          { at: 0, color: 'rgba(47,155,224,0.85)' },
+          { at: 0.4, color: 'rgba(47,155,224,0.22)' },
           { at: 1, color: 'rgba(47,155,224,0)' },
         ],
-        blackRadius: 10.125,
+        blackRadius: 10,
         rim: 'rgba(138,216,255,0.95)',
-        width: 3.24,
+        width: 3.2,
       },
       {
-        ticket: CLAIMED,
+        ticket: AVAILABLE_NEXT,
         glow: [
-          { at: 0, color: 'rgba(255,176,32,0.85)' },
-          { at: 0.4, color: 'rgba(255,176,32,0.22)' },
-          { at: 1, color: 'rgba(255,176,32,0)' },
+          { at: 0, color: 'rgba(59,159,104,0.85)' },
+          { at: 0.4, color: 'rgba(59,159,104,0.22)' },
+          { at: 1, color: 'rgba(59,159,104,0)' },
         ],
-        blackRadius: 9,
-        rim: 'rgba(255,216,115,0.95)',
-        width: 2.88,
+        blackRadius: 10,
+        rim: 'rgba(142,215,172,0.95)',
+        width: 3.2,
       },
       {
         ticket: BLOCKED,
         glow: [
-          { at: 0, color: 'rgba(154,111,111,0.85)' },
-          { at: 0.4, color: 'rgba(154,111,111,0.22)' },
-          { at: 1, color: 'rgba(154,111,111,0)' },
+          { at: 0, color: 'rgba(113,104,132,0.85)' },
+          { at: 0.4, color: 'rgba(113,104,132,0.22)' },
+          { at: 1, color: 'rgba(113,104,132,0)' },
         ],
         blackRadius: 5.625,
-        rim: 'rgba(226,195,195,0.95)',
+        rim: 'rgba(170,160,189,0.95)',
         width: 2.2,
       },
       {
@@ -242,15 +353,14 @@ describe('issue core visual grammar', () => {
     }
   })
 
-  it('keeps both CURRENT rings around an incomplete issue after its hollow core', () => {
-    const { fills, strokes } = paint(BLOCKED, BLOCKED.num)
+  it('keeps both CURRENT rings around the solid doing-now core', () => {
+    const { fills, strokes } = paint(BLOCKED, BLOCKED.num, null, { reducedMotion: true })
 
     expect(fills).toHaveLength(2)
-    expect(fills[1]).toEqual({ style: '#000', arc: { radius: 5.625 } })
+    expect(fills[1]).toEqual({ style: '#ffd873', arc: { radius: 12 } })
     expect(strokes.map((stroke) => ({ style: stroke.style, lineWidth: stroke.lineWidth, radius: stroke.arc?.radius }))).toEqual([
-      { style: 'rgba(226,195,195,0.95)', lineWidth: 2.2, radius: 4.525 },
-      { style: 'rgba(255,255,255,0.95)', lineWidth: 2, radius: 13.625 },
-      { style: 'rgba(255,255,255,0.55)', lineWidth: 1, radius: 18.625 },
+      { style: 'rgba(255,255,255,0.95)', lineWidth: 2, radius: 20 },
+      { style: 'rgba(255,255,255,0.55)', lineWidth: 1, radius: 25 },
     ])
   })
 
@@ -262,7 +372,7 @@ describe('issue core visual grammar', () => {
     expect(relationshipRims).toHaveLength(1)
     expect(relationshipRims[0].arc!.radius).toBeGreaterThan(blackCore.arc!.radius)
     expect(incomplete.strokes).toContainEqual({
-      style: 'rgba(226,195,195,0.95)',
+      style: 'rgba(170,160,189,0.95)',
       lineWidth: 2.2,
       arc: { radius: 4.525 },
     })
@@ -277,7 +387,7 @@ describe('issue core visual grammar', () => {
     const readyRelationshipRadius = ready.strokes[readyRelationshipIndex].arc!.radius
     const readyEmphasisIndexes = ready.strokes
       .map((stroke, index) =>
-        stroke.style === 'rgba(138,216,255,0.95)' &&
+        stroke.style === 'rgba(142,215,172,0.95)' &&
         (stroke.arc?.radius ?? 0) > readyRelationshipRadius
           ? index
           : -1,

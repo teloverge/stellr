@@ -3,6 +3,13 @@ import { flushSync, mount, unmount } from 'svelte'
 import App from './App.svelte'
 import type { Model, SpaceModel, Star } from './lib/model'
 import { StarMap as Renderer } from './lib/starmap/starmap'
+import { structureSignature, type LayoutNode } from './lib/starmap/layout'
+import type {
+  LayoutLoad,
+  LayoutOutcome,
+  LayoutPoints,
+  LayoutRequester,
+} from './lib/starmap/layout-loader'
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = []
@@ -41,6 +48,59 @@ class FakeResizeObserver {
       [{ contentRect: { width, height } } as ResizeObserverEntry],
       this as unknown as ResizeObserver,
     )
+  }
+}
+
+function layoutPoints(nodes: LayoutNode[]): LayoutPoints {
+  return Object.fromEntries(
+    nodes.map((node, index) => [node.num, { x: 100 + index * 50, y: 200 + index * 30 }]),
+  )
+}
+
+const immediateLayout: LayoutRequester = {
+  load(nodes): LayoutLoad {
+    return {
+      kind: 'cached',
+      signature: structureSignature(nodes),
+      points: layoutPoints(nodes),
+    }
+  },
+}
+
+interface ControlledLayoutRequest {
+  nodes: LayoutNode[]
+  cancelCalls: number
+  resolve(outcome: LayoutOutcome): void
+}
+
+class ControlledLayout implements LayoutRequester {
+  requests: ControlledLayoutRequest[] = []
+
+  load(nodes: LayoutNode[]): LayoutLoad {
+    let resolveOutcome!: (outcome: LayoutOutcome) => void
+    const request: ControlledLayoutRequest = {
+      nodes,
+      cancelCalls: 0,
+      resolve: (outcome) => resolveOutcome(outcome),
+    }
+    const result = new Promise<LayoutOutcome>((resolve) => {
+      resolveOutcome = resolve
+    })
+    this.requests.push(request)
+    return {
+      kind: 'pending',
+      signature: structureSignature(nodes),
+      result,
+      cancel: () => {
+        request.cancelCalls++
+        resolveOutcome({ kind: 'cancelled' })
+      },
+    }
+  }
+
+  ready(index: number): void {
+    const request = this.requests[index]
+    request.resolve({ kind: 'ready', points: layoutPoints(request.nodes) })
   }
 }
 
@@ -110,10 +170,12 @@ const lifecycleModel: Model = {
   spaces: [space('first', 11), space('middle', 22), space('last', 33)],
 }
 
-function mountApp(): { target: HTMLElement; socket: FakeWebSocket; component: object } {
+function mountApp(
+  layout: LayoutRequester = immediateLayout,
+): { target: HTMLElement; socket: FakeWebSocket; component: object } {
   const target = document.createElement('div')
   document.body.appendChild(target)
-  const component = mount(App, { target })
+  const component = mount(App, { target, props: { layout } })
   mounted.push(component)
   flushSync()
   return { target, socket: FakeWebSocket.instances[0], component }
@@ -131,6 +193,87 @@ async function settle(): Promise<void> {
 }
 
 describe('App issue routing', () => {
+  it('selects a requested project immediately while its layout is pending', async () => {
+    const layout = new ControlledLayout()
+    const { target, socket } = mountApp(layout)
+    socket.emitModel(model)
+    flushSync()
+    layout.ready(0)
+    await settle()
+
+    target.querySelector<HTMLButtonElement>('button[data-space-id="second"]')!.click()
+    flushSync()
+
+    expect(window.location.hash).toBe('#s=second')
+    expect(target.querySelector('[data-space-row="second"] [aria-current="true"]')).not.toBeNull()
+    expect(target.textContent).toContain('Charting second...')
+  })
+
+  it('restores the last successfully charted project when loading is canceled', async () => {
+    const layout = new ControlledLayout()
+    const { target, socket } = mountApp(layout)
+    socket.emitModel(model)
+    flushSync()
+    layout.ready(0)
+    await settle()
+
+    target.querySelector<HTMLButtonElement>('button[data-space-id="second"]')!.click()
+    flushSync()
+    target.querySelector<HTMLButtonElement>('button[aria-label="Cancel layout for second"]')!.click()
+    await settle()
+
+    expect(window.location.hash).toBe('#s=first')
+    expect(target.querySelector('[data-space-row="first"] [aria-current="true"]')).not.toBeNull()
+    expect(target.textContent).not.toContain('Layout canceled')
+  })
+
+  it('restores the last successfully charted project and reports a critical failure', async () => {
+    const layout = new ControlledLayout()
+    const { target, socket } = mountApp(layout)
+    socket.emitModel(model)
+    flushSync()
+    layout.ready(0)
+    await settle()
+
+    target.querySelector<HTMLButtonElement>('button[data-space-id="second"]')!.click()
+    flushSync()
+    layout.requests[1].resolve({ kind: 'failed', message: 'worker exploded' })
+    await settle()
+
+    expect(window.location.hash).toBe('#s=first')
+    expect(target.querySelector('[data-space-row="first"] [aria-current="true"]')).not.toBeNull()
+    expect(target.querySelector('[role="alert"]')?.textContent).toContain(
+      'Could not chart second: worker exploded',
+    )
+  })
+
+  it('keeps an initial canceled layout selected with Retry when nothing has committed', async () => {
+    const layout = new ControlledLayout()
+    const { target, socket } = mountApp(layout)
+    socket.emitModel(model)
+    flushSync()
+
+    target.querySelector<HTMLButtonElement>('button[aria-label="Cancel layout for first"]')!.click()
+    await settle()
+
+    expect(window.location.hash).toBe('#s=first')
+    expect(target.textContent).toContain('Layout canceled')
+    expect(target.textContent).toContain('Retry')
+  })
+
+  it('keeps an initial critical failure selected with Error and Retry', async () => {
+    const layout = new ControlledLayout()
+    const { target, socket } = mountApp(layout)
+    socket.emitModel(model)
+    flushSync()
+    layout.requests[0].resolve({ kind: 'failed', message: 'worker exploded' })
+    await settle()
+
+    expect(window.location.hash).toBe('#s=first')
+    expect(target.textContent).toContain('Could not chart first')
+    expect(target.textContent).toContain('Retry')
+  })
+
   it('distinguishes runtime loading from an authoritative empty model', () => {
     const { target, socket } = mountApp()
 

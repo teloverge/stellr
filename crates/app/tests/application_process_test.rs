@@ -33,6 +33,7 @@ async fn controlled_github() -> (String, tokio::task::JoinHandle<()>) {
             post(|| async {
                 Json(json!({
                     "data": {
+                        "viewer": { "login": "octocat" },
                         "repository": {
                             "issues": {
                                 "pageInfo": { "hasNextPage": false, "endCursor": null },

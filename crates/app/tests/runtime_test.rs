@@ -9,7 +9,7 @@ use std::{
 };
 
 use stellr_app::runtime::{RuntimeOptions, SessionAuth, start};
-use stellr_core::{Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{Provider, ProviderError, ProviderSnapshot, RepoRef};
 use stellr_server::spaces::{SpaceEntry, SpaceStore};
 use tempfile::TempDir;
 use tokio::{sync::Notify, time::timeout};
@@ -29,7 +29,7 @@ impl Drop for FetchDropSignal {
 
 #[async_trait::async_trait]
 impl Provider for PendingProvider {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         let _drop_signal = FetchDropSignal(self.fetch_dropped.clone());
         self.fetch_started.notify_one();
         pending().await

@@ -8,7 +8,9 @@ use std::{
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
-use stellr_core::{IssueState, Model, Provider, ProviderError, RawIssue, RepoRef, SpaceModel};
+use stellr_core::{
+    IssueState, Model, Provider, ProviderError, ProviderSnapshot, RawIssue, RepoRef, SpaceModel,
+};
 use stellr_github::cache::{Cache, Snapshot};
 use stellr_server::{
     poll::spawn_poller,
@@ -65,6 +67,7 @@ fn model_with_space(id: &str) -> Model {
             id: id.into(),
             repo: "owner/repo".into(),
             name: "repo".into(),
+            viewer_login: None,
             stars: vec![],
             synced_at: None,
             stale: false,
@@ -139,11 +142,11 @@ async fn embedded_ui_does_not_mask_unknown_api_paths() {
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
-struct StubProvider(Vec<RawIssue>);
+struct StubProvider(ProviderSnapshot);
 
 #[async_trait::async_trait]
 impl Provider for StubProvider {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         Ok(self.0.clone())
     }
 }
@@ -152,8 +155,21 @@ struct FailingProvider;
 
 #[async_trait::async_trait]
 impl Provider for FailingProvider {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         Err(ProviderError::Http("offline".into()))
+    }
+}
+
+struct UnconfirmedFailingProvider;
+
+#[async_trait::async_trait]
+impl Provider for UnconfirmedFailingProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        Err(ProviderError::Http("replacement offline".into()))
+    }
+
+    fn allows_cached_viewer_identity(&self) -> bool {
+        false
     }
 }
 
@@ -161,11 +177,11 @@ struct SequenceProvider(AtomicUsize);
 
 #[async_trait::async_trait]
 impl Provider for SequenceProvider {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
-            return Ok(vec![]);
+            return Ok(ProviderSnapshot::without_viewer(vec![]));
         }
-        Ok(vec![RawIssue {
+        Ok(ProviderSnapshot::without_viewer(vec![RawIssue {
             number: 9,
             parent_issue: None,
             title: "Arrived on the second tick".into(),
@@ -176,7 +192,7 @@ impl Provider for SequenceProvider {
             labels: vec![],
             blocked_by: vec![],
             url: "https://github.com/o/r/issues/9".into(),
-        }])
+        }]))
     }
 }
 
@@ -192,18 +208,21 @@ async fn add_repo_space_immediately_populates_the_model() {
     });
     let poller = spawn_poller(
         state.clone(),
-        Arc::new(StubProvider(vec![RawIssue {
-            number: 1,
-            parent_issue: None,
-            title: "Ready work".into(),
-            body: String::new(),
-            state: IssueState::Open,
-            assignees: vec![],
-            milestone: None,
-            labels: vec![],
-            blocked_by: vec![],
-            url: "https://github.com/o/r/issues/1".into(),
-        }])),
+        Arc::new(StubProvider(ProviderSnapshot::new(
+            Some("octocat".into()),
+            vec![RawIssue {
+                number: 1,
+                parent_issue: None,
+                title: "Ready work".into(),
+                body: String::new(),
+                state: IssueState::Open,
+                assignees: vec!["OctoCat".into()],
+                milestone: None,
+                labels: vec!["ready-for-agent".into()],
+                blocked_by: vec![],
+                url: "https://github.com/o/r/issues/1".into(),
+            }],
+        ))),
         Cache::new(directory.path().join("cache")),
         Duration::from_secs(60),
     );
@@ -250,7 +269,9 @@ async fn add_repo_space_immediately_populates_the_model() {
 
     assert_eq!(model.spaces[0].id, "o-r");
     assert_eq!(model.spaces[0].repo, "o/r");
+    assert_eq!(model.spaces[0].viewer_login.as_deref(), Some("octocat"));
     assert_eq!(model.spaces[0].stars[0].number, 1);
+    assert!(model.spaces[0].stars[0].ready_for_agent);
     poller.abort();
 }
 
@@ -266,6 +287,7 @@ async fn failed_sync_publishes_the_cached_model_as_stale_with_the_error() {
         .store(
             &repo,
             &Snapshot {
+                viewer_login: Some("octocat".into()),
                 issues: vec![RawIssue {
                     number: 7,
                     parent_issue: None,
@@ -321,12 +343,70 @@ async fn failed_sync_publishes_the_cached_model_as_stale_with_the_error() {
     .expect("failed sync should still publish the cached model");
 
     assert_eq!(model.spaces[0].stars[0].number, 7);
+    assert_eq!(model.spaces[0].viewer_login.as_deref(), Some("octocat"));
     assert_eq!(model.spaces[0].synced_at, Some(1_753_000_000));
     assert!(model.spaces[0].stale);
     assert_eq!(
         model.spaces[0].error.as_deref(),
         Some("HTTP request failed: offline")
     );
+    poller.abort();
+}
+
+#[tokio::test]
+async fn failed_unconfirmed_provider_keeps_cached_issues_but_suppresses_cached_viewer() {
+    let directory = tempfile::tempdir().unwrap();
+    let repo = RepoRef {
+        owner: "o".into(),
+        name: "r".into(),
+    };
+    let cache = Cache::new(directory.path().join("cache"));
+    cache
+        .store(
+            &repo,
+            &Snapshot {
+                viewer_login: Some("previous-account".into()),
+                issues: vec![RawIssue {
+                    number: 7,
+                    parent_issue: None,
+                    title: "Cached work".into(),
+                    body: String::new(),
+                    state: IssueState::Open,
+                    assignees: vec!["previous-account".into()],
+                    milestone: None,
+                    labels: vec!["ready-for-agent".into()],
+                    blocked_by: vec![],
+                    url: "https://github.com/o/r/issues/7".into(),
+                }],
+                synced_at: 1_753_000_000,
+            },
+        )
+        .unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces.add(SpaceEntry::new(repo, None)).unwrap();
+    let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+    });
+    let poller = spawn_poller(
+        state,
+        Arc::new(UnconfirmedFailingProvider),
+        cache,
+        Duration::from_secs(60),
+    );
+
+    tokio::time::timeout(Duration::from_secs(1), receiver.changed())
+        .await
+        .expect("the stale snapshot should publish")
+        .expect("the model hub should remain open");
+    let model = receiver.borrow_and_update().clone();
+
+    assert_eq!(model.spaces[0].viewer_login, None);
+    assert_eq!(model.spaces[0].stars[0].number, 7);
+    assert!(model.spaces[0].stale);
     poller.abort();
 }
 
@@ -354,7 +434,7 @@ async fn successful_sync_stays_fresh_when_the_cache_cannot_be_written() {
     });
     let poller = spawn_poller(
         state,
-        Arc::new(StubProvider(vec![])),
+        Arc::new(StubProvider(ProviderSnapshot::without_viewer(vec![]))),
         Cache::new(cache_root),
         Duration::from_secs(60),
     );

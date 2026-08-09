@@ -13,6 +13,8 @@ static NEXT_ARTIFACT_ID: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
+    #[serde(default)]
+    pub viewer_login: Option<String>,
     pub issues: Vec<RawIssue>,
     pub synced_at: i64,
 }
@@ -253,6 +255,7 @@ mod tests {
 
     fn snapshot(title: &str, synced_at: i64) -> Snapshot {
         Snapshot {
+            viewer_login: Some("octocat".into()),
             issues: vec![RawIssue {
                 number: 1,
                 parent_issue: None,
@@ -319,6 +322,7 @@ mod tests {
 
         let snapshot = cache.load(&repo).unwrap();
 
+        assert_eq!(snapshot.viewer_login, None);
         assert_eq!(snapshot.issues[0].parent_issue, None);
     }
 

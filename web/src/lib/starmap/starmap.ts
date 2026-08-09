@@ -18,8 +18,10 @@
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
 import { computeLayout, structureSignature, TAU } from './layout'
-import { STAR, LABEL, SESSION_HUE, visualState, hexA, type VisualState } from './theme'
+import type { LayoutPoints } from './layout-loader'
+import { STAR, LABEL, SESSION_HUE, hexA, type VisualState } from './theme'
 import { GRAMMAR, type SessionState } from './session'
+import { deriveWorkPriority } from './priority'
 import { analyzeFocus, type Focus } from './focus'
 import { edgeKey, isMiniWorkflowEdge, workflowEdges, type WorkflowEdge } from './workflow'
 import { writeMiniEdgeCurve, type MutableMiniCurve } from './workflow-geometry'
@@ -53,7 +55,6 @@ export type SelectHandler = (num: number | null) => void
 // StarMap.svelte through tokens.ts and handed in at the seam; the renderer
 // itself never reads CSS (ADR 0010).
 const DEFAULT_BG = '#05070d'
-const ISSUE_RADIUS_SCALE = 1.25
 const CONTEXT_ALPHA = 0.3
 const CONTEXT_EDGE_ALPHA = 0.45
 const SELECTED_EDGE_WIDTH_SCALE = 1.7
@@ -104,11 +105,15 @@ type Box = LabelBox
 // actionable states — rather than to whichever ticket happens to be numbered
 // lowest, which is what array order gave us.
 const LABEL_PRIORITY: Record<VisualState, number> = {
-  frontier: 0,
-  claimed: 1,
-  resolved: 2,
-  blocked: 3,
-  out_of_scope: 4,
+  attention: 0,
+  doing_now: 1,
+  my_next: 2,
+  my_future: 3,
+  available_next: 4,
+  team_work: 5,
+  planning: 6,
+  resolved: 7,
+  out_of_scope: 8,
 }
 
 // A star just off-screen can still own a label that reaches back on-screen, so
@@ -270,6 +275,8 @@ export class StarMap {
   // actually leaves free, in either docking.
   #insets = { top: 16, right: 16, bottom: 16, left: 16 }
   #clock = 0
+  #motionClock = 0
+  #reducedMotion = false
   #last = 0
   #raf = 0
   // The live WebKit pinch, if one is in flight — it also mutes the wheel path,
@@ -312,6 +319,18 @@ export class StarMap {
     this.#ctx = canvas.getContext('2d')
     this.#dpr = Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1)
 
+    const motionQuery = typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(prefers-reduced-motion: reduce)')
+      : null
+    if (motionQuery) {
+      this.#reducedMotion = motionQuery.matches
+      const onMotionPreference = (event: MediaQueryListEvent) => {
+        this.#reducedMotion = event.matches
+      }
+      motionQuery.addEventListener?.('change', onMotionPreference)
+      this.#detach.push(() => motionQuery.removeEventListener?.('change', onMotionPreference))
+    }
+
     this.#measure()
     if (typeof ResizeObserver !== 'undefined') {
       this.#ro = new ResizeObserver(() => this.#onResize())
@@ -339,6 +358,7 @@ export class StarMap {
     tickets: Ticket[],
     sessions: Record<number, SessionState> = {},
     currentIssue: number | null = null,
+    preparedLayout?: LayoutPoints,
   ): void {
     // Titles and statuses can both move under a push, and both feed the label
     // solve — retire the cached one either way.
@@ -357,8 +377,8 @@ export class StarMap {
         if (!n) continue
         n.title = t.title
         n.type = t.type
-        const vstate = visualState(t)
         const sstate = sessions[t.num] ?? null
+        const vstate = deriveWorkPriority(t, sstate, currentIssue)
         if (vstate !== n.vstate || sstate !== n.sstate) {
           n.flare = 1
           changed.push(`#${t.num < 10 ? '0' : ''}${t.num} → ${sstate ?? vstate.replace('_', ' ')}`)
@@ -382,14 +402,13 @@ export class StarMap {
     // memory is exactly what we want kept.
     this.#labelSide.clear()
     this.#sig = sig
-    const pts = computeLayout(
-      tickets.map(({ num, title, blockedBy, parentIssue }) => ({
-        num,
-        title,
-        blockedBy,
-        parentIssue,
-      })),
-    )
+    const layoutNodes = tickets.map(({ num, title, blockedBy, parentIssue }) => ({
+      num,
+      title,
+      blockedBy,
+      parentIssue,
+    }))
+    const pts = preparedLayout ?? computeLayout(layoutNodes)
     this.#nodes = tickets.map((t) => {
       const p = pts[t.num]
       return {
@@ -397,7 +416,7 @@ export class StarMap {
         title: t.title,
         type: t.type,
         parentIssue: t.parentIssue,
-        vstate: visualState(t),
+        vstate: deriveWorkPriority(t, sessions[t.num] ?? null, currentIssue),
         sstate: sessions[t.num] ?? null,
         x: p.x,
         y: p.y,
@@ -558,7 +577,8 @@ export class StarMap {
   }
 
   #radius(n: Node): number {
-    return STAR[n.vstate].r * ISSUE_RADIUS_SCALE
+    const style = STAR[n.vstate]
+    return Math.max(style.r, style.minScreen / this.#cam.s)
   }
 
   // Hit-test a screen point and, if it lands on a star, select and emit it — the
@@ -917,11 +937,12 @@ export class StarMap {
     if (dt < 0 || dt > 0.1) dt = 0.016
     this.#last = t
     this.#clock = t
+    this.#motionClock = this.#reducedMotion ? 0 : t
 
     for (const n of this.#nodes) {
       const ph = n.num * 1.7
-      n._x = n.x + Math.sin(this.#clock * 0.7 + ph) * 2.4
-      n._y = n.y + Math.cos(this.#clock * 0.55 + ph) * 2.4
+      n._x = this.#reducedMotion ? n.x : n.x + Math.sin(this.#motionClock * 0.7 + ph) * 2.4
+      n._y = this.#reducedMotion ? n.y : n.y + Math.cos(this.#motionClock * 0.55 + ph) * 2.4
       if (n.flare > 0) n.flare = Math.max(0, n.flare - dt / 1.1)
     }
     this.#easeCamera(dt)
@@ -964,7 +985,7 @@ export class StarMap {
     for (const n of this.#nodes) {
       g.save()
       if (focused && !this.#focus.emphasized.has(n.num)) g.globalAlpha = CONTEXT_ALPHA
-      this.#drawStar(g, n, this.#clock)
+      this.#drawStar(g, n, this.#motionClock)
       g.restore()
     }
     g.restore()
@@ -1026,11 +1047,11 @@ export class StarMap {
     g.moveTo(ax, ay)
     g.quadraticCurveTo(cx, cy, bx, by)
     g.lineCap = 'round'
-    const usesResolvedStyle = mini ? e.state !== 'incomplete' : e.satisfied
+    const usesResolvedStyle = e.state !== 'incomplete' || e.satisfied
     const strokeScale = selected ? SELECTED_EDGE_WIDTH_SCALE : 1
     if (usesResolvedStyle) {
-      g.strokeStyle = 'rgba(190,225,200,0.82)'
-      g.lineWidth = 3 * strokeScale
+      g.strokeStyle = 'rgba(150,178,160,0.36)'
+      g.lineWidth = 1.6 * strokeScale
       g.setLineDash([])
     } else if (mini) {
       g.strokeStyle = 'rgba(170,145,255,0.78)'
@@ -1043,21 +1064,20 @@ export class StarMap {
     }
     g.stroke()
     g.setLineDash([])
-    // A satisfied edge (blocker resolved) flows particles blocker→dependent, so
-    // the frontier visibly ignites as paths clear (starmap-design.md dec. 5).
-    if (mini ? e.state === 'traversed' : e.satisfied) {
-      for (let k = 0; k < 3; k++) {
-        const u = mod(this.#clock * 0.1 + k / 3 + (e.from * 0.13 + e.to * 0.07), 1),
+    // Historical paths stay quiet. Only a traversed edge directed into work the
+    // operator can act on now carries two small particles toward that endpoint.
+    const animatesIntoActiveWork =
+      e.state === 'traversed' &&
+      (b.vstate === 'doing_now' || b.vstate === 'my_next' || b.vstate === 'available_next')
+    if (animatesIntoActiveWork) {
+      for (let k = 0; k < 2; k++) {
+        const u = mod(this.#motionClock * 0.1 + k / 2 + (e.from * 0.13 + e.to * 0.07), 1),
           m = 1 - u
         const fx = m * m * ax + 2 * m * u * cx + u * u * bx,
           fy = m * m * ay + 2 * m * u * cy + u * u * by
-        g.fillStyle = 'rgba(190,225,200,' + (0.14 + 0.18 * Math.sin(u * Math.PI)) + ')'
+        g.fillStyle = 'rgba(190,218,198,' + (0.35 + 0.4 * Math.sin(u * Math.PI)) + ')'
         g.beginPath()
-        g.arc(fx, fy, 5, 0, TAU)
-        g.fill()
-        g.fillStyle = 'rgba(220,255,230,' + (0.45 + 0.5 * Math.sin(u * Math.PI)) + ')'
-        g.beginPath()
-        g.arc(fx, fy, 2.6, 0, TAU)
+        g.arc(fx, fy, 1.8, 0, TAU)
         g.fill()
       }
     }
@@ -1081,7 +1101,11 @@ export class StarMap {
     g.lineTo(tipx - ux * ah + px * aw, tipy - uy * ah + py * aw)
     g.lineTo(tipx - ux * ah - px * aw, tipy - uy * ah - py * aw)
     g.closePath()
-    g.fillStyle = usesResolvedStyle ? '#d9f3df' : mini ? '#c7b8ff' : '#c8d5e8'
+    g.fillStyle = usesResolvedStyle
+      ? 'rgba(190,218,198,0.52)'
+      : mini
+        ? '#c7b8ff'
+        : '#c8d5e8'
     g.fill()
   }
 
@@ -1090,11 +1114,11 @@ export class StarMap {
     const x = n._x,
       y = n._y,
       fl = n.flare || 0
-    const isF = n.vstate === 'frontier',
-      isC = n.vstate === 'claimed'
+    const cr = this.#radius(n)
     const beat = 0.5 + 0.5 * Math.sin(t * 2.8)
-    const pulse = isF ? 0.8 + 0.2 * beat : 1
-    const gr = (isF ? c.gr * (0.92 + 0.16 * beat) : c.gr) * (1 + fl * 0.5)
+    const corePulse = n.vstate === 'doing_now' && !this.#reducedMotion ? 1 + 0.08 * beat : 1
+    const pulse = 1
+    const gr = c.gr * (cr / c.r) * (1 + fl * 0.5)
 
     const grd = g.createRadialGradient(x, y, 0, x, y, gr)
     grd.addColorStop(0, hexA(c.glow, Math.min(1, 0.85 * pulse + fl * 0.5)))
@@ -1105,7 +1129,7 @@ export class StarMap {
     g.arc(x, y, gr, 0, TAU)
     g.fill()
 
-    const cr = this.#radius(n)
+    const paintedCoreRadius = cr * corePulse
     const hasSubissueRim = n.parentIssue !== null && n.vstate !== 'resolved' && n.vstate !== 'out_of_scope'
     if (hasSubissueRim) {
       g.strokeStyle = SUBISSUE_RIM
@@ -1114,7 +1138,12 @@ export class StarMap {
       g.arc(x, y, cr + 4, 0, TAU)
       g.stroke()
     }
-    if (n.vstate === 'resolved') {
+    if (c.solid && n.vstate !== 'resolved') {
+      g.fillStyle = c.core
+      g.beginPath()
+      g.arc(x, y, paintedCoreRadius, 0, TAU)
+      g.fill()
+    } else if (n.vstate === 'resolved') {
       const cg = g.createRadialGradient(x, y, 0, x, y, cr * 1.35)
       cg.addColorStop(0, hexA(c.core, 1))
       cg.addColorStop(0.6, hexA(c.core, 0.92))
@@ -1150,21 +1179,6 @@ export class StarMap {
       g.lineWidth = 1.5 + 2 * fl
       g.beginPath()
       g.arc(x, y, cr + (1 - fl) * 40, 0, TAU)
-      g.stroke()
-    }
-    // A live claim breathes with two soft rings. A session overlay speaks for
-    // the claim when there is one, so the vanilla claimed rings stand down rather
-    // than competing with the moon's orbit.
-    if (isC && !n.sstate) {
-      g.strokeStyle = hexA(c.core, 0.45 + 0.25 * beat)
-      g.lineWidth = 1.5
-      g.beginPath()
-      g.arc(x, y, cr + 5 + 1.2 * beat, 0, TAU)
-      g.stroke()
-      g.strokeStyle = hexA(c.core, 0.18 + 0.14 * beat)
-      g.lineWidth = 1
-      g.beginPath()
-      g.arc(x, y, cr + 11 + 1.8 * beat, 0, TAU)
       g.stroke()
     }
     if (n.sstate) this.#drawSession(g, n, x, y, cr, t)

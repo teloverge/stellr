@@ -12,6 +12,10 @@
   import { ThemeController } from './lib/theme.svelte'
   import { decideDock, type Dock } from './lib/starmap/dock'
   import {
+    browserLayoutLoader,
+    type LayoutRequester,
+  } from './lib/starmap/layout-loader'
+  import {
     beginDeviceAuthorization,
     cancelDeviceAuthorization,
     deviceAuthorizationStatus,
@@ -35,6 +39,8 @@
     space: Model['spaces'][number] | null
     star: Model['spaces'][number]['stars'][number] | null
   }
+
+  let { layout = browserLayoutLoader }: { layout?: LayoutRequester } = $props()
 
   function resolveRoute(
     modelSnapshot: Model | null,
@@ -76,6 +82,8 @@
   let pendingRemovals = $state.raw<Record<string, RemovalIntent>>({})
   let authStatus = $state<DeviceFlowStatus | null>(null)
   let nativeRouteNotice = $state<string | null>(null)
+  let layoutFailureNotice = $state<string | null>(null)
+  let committedSpaceId = $state<string | null>(null)
   let nativeRouteBusy = false
   let persistedRouteKey: string | null = null
   const nativeRoutePersistence = hasNativeRoutePersistence()
@@ -271,6 +279,28 @@
     if (control.model !== null) reconcileModel(control.model)
   }
 
+  function committedLayout(spaceId: string): void {
+    if (route.space !== spaceId) return
+    committedSpaceId = spaceId
+    layoutFailureNotice = null
+  }
+
+  function cancelledLayout(spaceId: string): void {
+    if (route.space !== spaceId) return
+    if (committedSpaceId !== null && committedSpaceId !== spaceId) {
+      route.go(committedSpaceId)
+    }
+  }
+
+  function failedLayout(spaceId: string, message: string): void {
+    if (route.space !== spaceId) return
+    const projectName = spaces.find((space) => space.id === spaceId)?.name ?? spaceId
+    layoutFailureNotice = `Could not chart ${projectName}: ${message}`
+    if (committedSpaceId !== null && committedSpaceId !== spaceId) {
+      route.go(committedSpaceId)
+    }
+  }
+
   onMount(() => {
     void theme.start()
     control.connect()
@@ -307,6 +337,12 @@
     <div class="route-notice" role="alert">
       <span>{nativeRouteNotice}</span>
       <button aria-label="Dismiss routing error" onclick={() => (nativeRouteNotice = null)}>×</button>
+    </div>
+  {/if}
+  {#if layoutFailureNotice !== null}
+    <div class="route-notice" role="alert">
+      <span>{layoutFailureNotice}</span>
+      <button aria-label="Dismiss layout error" onclick={() => (layoutFailureNotice = null)}>Ã—</button>
     </div>
   {/if}
   <div class="sidebar-region">
@@ -349,6 +385,10 @@
           {currentIssue}
           selectedIssue={activeStar?.number ?? null}
           select={(issueNumber) => route.go(activeSpace.id, issueNumber)}
+          {layout}
+          ready={committedLayout}
+          cancelled={cancelledLayout}
+          failed={failedLayout}
         />
       {:else}
         <StatePanel

@@ -9,6 +9,10 @@ async fn main() {
         owner: "teloverge".into(),
         name: "stellr".into(),
     };
-    let issues = provider.fetch(&repo).await.expect("GitHub fetch failed");
+    let issues = provider
+        .fetch(&repo)
+        .await
+        .expect("GitHub fetch failed")
+        .issues;
     println!("{}", issues.len());
 }

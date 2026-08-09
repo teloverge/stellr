@@ -7,7 +7,12 @@ export function workflowVisualState(
   edge: WorkflowEdge,
   tickets: Map<number, Ticket>,
 ): WorkflowVisualState {
-  if (tickets.get(edge.from)?.status === 'resolved' && tickets.get(edge.to)?.status === 'frontier') {
+  const destination = tickets.get(edge.to)
+  const destinationIsOpen =
+    destination !== undefined &&
+    destination.status !== 'resolved' &&
+    destination.status !== 'out_of_scope'
+  if (tickets.get(edge.from)?.status === 'resolved' && destinationIsOpen) {
     return 'traversed'
   }
   if (edge.child !== null && tickets.get(edge.child)?.status === 'resolved') return 'completed'

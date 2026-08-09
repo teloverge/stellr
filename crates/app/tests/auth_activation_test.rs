@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use stellr_app::{auth_activation::activate_provider_and_store, runtime::ProviderSlot};
-use stellr_core::{Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{Provider, ProviderError, ProviderSnapshot, RepoRef};
 use stellr_github::{
     credentials::{CredentialStore, CredentialStoreError},
     device_flow::AccessToken,
@@ -15,7 +15,7 @@ struct SignedOut;
 
 #[async_trait::async_trait]
 impl Provider for SignedOut {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         Err(ProviderError::Auth("sign-in required".into()))
     }
 }
@@ -24,8 +24,8 @@ struct Active;
 
 #[async_trait::async_trait]
 impl Provider for Active {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
-        Ok(vec![])
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        Ok(ProviderSnapshot::without_viewer(vec![]))
     }
 }
 
@@ -69,5 +69,5 @@ async fn storage_failure_warns_after_activating_the_provider_and_refreshing() {
         owner: "teloverge".into(),
         name: "stellr".into(),
     };
-    assert_eq!(slot.fetch(&repo).await.unwrap(), vec![]);
+    assert_eq!(slot.fetch(&repo).await.unwrap().issues, vec![]);
 }

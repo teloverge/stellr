@@ -169,6 +169,26 @@ describe('the island seam', () => {
     }
   })
 
+  it('applies prepared deterministic coordinates without recomputing', () => {
+    const recompute = vi.spyOn(layout, 'computeLayout')
+    const prepared = {
+      1: { x: 10, y: 20 },
+      2: { x: 30, y: 40 },
+      3: { x: 50, y: 60 },
+      4: { x: 70, y: 80 },
+      5: { x: 90, y: 100 },
+    }
+
+    sm.setModel(fixture(), {}, null, prepared)
+
+    expect(recompute).not.toHaveBeenCalled()
+    expect(sm.positions()).toEqual(prepared)
+
+    sm.setModel(fixture({ 3: 'claimed' }))
+    expect(recompute).not.toHaveBeenCalled()
+    expect(sm.positions()).toEqual(prepared)
+  })
+
   it('emits selection when a star is clicked, and deselection on empty space', () => {
     sm.setModel(fixture())
     const emitted: (number | null)[] = []
@@ -181,6 +201,27 @@ describe('the island seam', () => {
     // A click far from any star deselects.
     expect(sm.selectAtScreen(-9999, -9999)).toBe(null)
     expect(emitted.at(-1)).toBe(null)
+  })
+
+  it('uses the zoomed-out active radius floor in pointer hit testing', () => {
+    const ticket: Ticket = {
+      num: 1,
+      slug: '1',
+      title: 'Current work',
+      type: 'issue',
+      status: 'open',
+      blockedBy: [],
+      parentIssue: null,
+      frontier: false,
+    }
+    sm.setModel([ticket], {}, 1)
+    zoomOut(host)
+    const active = sm.screenOf(1)!
+    expect(sm.selectAtScreen(active.x + 19, active.y)).toBe(1)
+
+    sm.setModel([ticket])
+    const planning = sm.screenOf(1)!
+    expect(sm.selectAtScreen(planning.x + 19, planning.y)).toBe(null)
   })
 
   it('gives subissues a larger invisible target without changing top-level targets', () => {
@@ -922,7 +963,7 @@ describe('label placement', () => {
 
         const readyWorld = sm.positions()[30]
         const readyRing = arcs.find((arc) =>
-          Math.abs(arc.worldRadius - (8.1 * 1.25 + 8)) < 1e-6 &&
+          Math.abs(arc.worldRadius - 18) < 1e-6 &&
           Math.hypot(arc.worldX - readyWorld.x, arc.worldY - readyWorld.y) < 4,
         )
         expect(readyRing).toBeDefined()
