@@ -356,6 +356,27 @@ describe('StarMap wrapper', () => {
     expect(ready).toEqual(['teloverge-other'])
   })
 
+  it('keeps the same pending layout across equivalent model refreshes', () => {
+    const layout = new ControlledLayout()
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const initial = space(42)
+
+    const component = mount(StarMapTestHost, {
+      target,
+      props: { initialSpace: initial, layout },
+    })
+    mounted.push(component)
+    flushSync()
+
+    component.updateSpace({ ...initial, synced_at: 1_754_000_123 })
+    flushSync()
+
+    expect(layout.requests).toHaveLength(1)
+    expect(layout.requests[0].cancelCalls).toBe(0)
+    expect(target.textContent).toContain('0 seconds elapsed.')
+  })
+
   it('shows an error with Retry after layout failure and starts fresh work on retry', async () => {
     const layout = new ControlledLayout()
     const failures: Array<[string, string]> = []

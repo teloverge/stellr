@@ -45,6 +45,9 @@
   >(null)
   let elapsedSeconds = $state(0)
   let activeLoad: Extract<LayoutLoad, { kind: 'pending' }> | null = null
+  let activeSignature: string | null = null
+  let activeSpaceId: string | null = null
+  let activeModel: ReturnType<typeof toRendererModel> | null = null
   let activeGeneration = 0
   let timer: number | undefined
   let destroyed = false
@@ -67,6 +70,9 @@
   function retireActiveLoad(): void {
     const previous = activeLoad
     activeLoad = null
+    activeSignature = null
+    activeSpaceId = null
+    activeModel = null
     activeGeneration++
     stopTimer()
     previous?.cancel()
@@ -100,6 +106,9 @@
     }
 
     activeLoad = load
+    activeSignature = load.signature
+    activeSpaceId = spaceId
+    activeModel = model
     transition = { kind: 'loading', spaceId, projectName }
     elapsedSeconds = 0
     timer = window.setInterval(() => {
@@ -108,10 +117,15 @@
 
     void load.result.then((outcome) => {
       if (destroyed || generation !== activeGeneration || activeLoad !== load) return
+      const latestModel = activeModel
       activeLoad = null
+      activeSignature = null
+      activeSpaceId = null
+      activeModel = null
       stopTimer()
       if (outcome.kind === 'ready') {
-        applyModel(target, model, load.signature, outcome.points, spaceId)
+        if (latestModel === null) return
+        applyModel(target, latestModel, load.signature, outcome.points, spaceId)
       } else if (outcome.kind === 'cancelled') {
         transition = { kind: 'cancelled', spaceId, projectName }
       } else {
@@ -126,6 +140,9 @@
     const { spaceId, projectName } = transition
     const load = activeLoad
     activeLoad = null
+    activeSignature = null
+    activeSpaceId = null
+    activeModel = null
     activeGeneration++
     stopTimer()
     load.cancel()
@@ -149,6 +166,14 @@
     if (signature === untrack(() => appliedSignature)) {
       target.setModel(model, {}, currentIssue)
       if (untrack(() => transition) !== null) transition = null
+      return
+    }
+    if (
+      activeLoad !== null &&
+      activeSignature === signature &&
+      activeSpaceId === spaceId
+    ) {
+      activeModel = model
       return
     }
     beginLayout(target, model, spaceId, projectName)
