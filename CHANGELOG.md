@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Suspended star-map GPU rendering while the app is minimized or its browser
+  document is hidden, while retaining five-minute native background polling.
 - Made project changes immediate and responsive: first-time constellation
   layouts now show cancellable elapsed-time progress off the UI thread, while
   completed layouts are cached for instant return visits and failures restore
