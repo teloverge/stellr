@@ -270,8 +270,11 @@ export class StarMap {
   // actually leaves free, in either docking.
   #insets = { top: 16, right: 16, bottom: 16, left: 16 }
   #clock = 0
+  #pausedDuration = 0
+  #pauseStarted: number | null = null
   #last = 0
   #raf = 0
+  #suspended = false
   // The live WebKit pinch, if one is in flight — it also mutes the wheel path,
   // so a browser that reports a pinch both ways never zooms twice for one gesture.
   // Stamped, so a gesture that never reports its end (interrupted, or swallowed
@@ -320,7 +323,7 @@ export class StarMap {
     this.#bindPointer(canvas)
     this.#refit(true)
 
-    if (this.#ctx) {
+    if (this.#ctx && !this.#suspended) {
       this.#last = now()
       this.#raf = requestAnimationFrame(this.#render)
     }
@@ -514,6 +517,26 @@ export class StarMap {
     this.#bg = color || DEFAULT_BG
   }
 
+  suspend(): void {
+    if (this.#suspended) return
+    this.#suspended = true
+    if (this.#ctx) this.#pauseStarted = now()
+    if (this.#raf) cancelAnimationFrame(this.#raf)
+    this.#raf = 0
+  }
+
+  resume(): void {
+    if (!this.#suspended) return
+    this.#suspended = false
+    const t = now()
+    if (this.#pauseStarted !== null) {
+      this.#pausedDuration += Math.max(0, t - this.#pauseStarted)
+      this.#pauseStarted = null
+    }
+    this.#last = t
+    if (this.#ctx && !this.#raf) this.#raf = requestAnimationFrame(this.#render)
+  }
+
   destroy(): void {
     if (this.#raf) cancelAnimationFrame(this.#raf)
     this.#raf = 0
@@ -638,12 +661,12 @@ export class StarMap {
 
   #tick(msg: string): void {
     this.#tickerText = msg
-    this.#tickerAt = now()
+    this.#tickerAt = this.#clock
   }
 
   #tickerAlpha(): number {
     if (!this.#tickerText) return 0
-    const age = now() - this.#tickerAt
+    const age = this.#clock - this.#tickerAt
     if (age < TICKER_HOLD) return 1
     return clamp(1 - (age - TICKER_HOLD) / TICKER_FADE, 0, 1)
   }
@@ -772,7 +795,7 @@ export class StarMap {
     // The label cache is keyed on the camera pose, which the pin above already
     // moved — so the solve re-runs on its own, and #labelEpoch is left to mean
     // only what it says it means: the text or the colours moved.
-    this.#draw()
+    if (!this.#suspended) this.#draw()
   }
 
   // Fit the whole constellation into the viewport. `snap` sets the camera
@@ -910,13 +933,13 @@ export class StarMap {
   // paint it. The two halves are split because only this one may move the clock —
   // see #draw.
   #render = (): void => {
-    this.#raf = requestAnimationFrame(this.#render)
-    if (!this.#ctx) return
+    this.#raf = 0
+    if (this.#suspended || !this.#ctx) return
     const t = now()
     let dt = t - this.#last
     if (dt < 0 || dt > 0.1) dt = 0.016
     this.#last = t
-    this.#clock = t
+    this.#clock = t - this.#pausedDuration
 
     for (const n of this.#nodes) {
       const ph = n.num * 1.7
@@ -926,6 +949,7 @@ export class StarMap {
     }
     this.#easeCamera(dt)
     this.#draw()
+    if (!this.#suspended && this.#ctx) this.#raf = requestAnimationFrame(this.#render)
   }
 
   // Paint the state as it currently stands, advancing nothing. Holding no time
