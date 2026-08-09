@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use stellr_core::{Model, Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{Model, Provider, ProviderError, ProviderSnapshot, RepoRef};
 use stellr_github::cache::Cache;
 use stellr_server::{
     poll::{PollingControl, spawn_controlled_poller},
@@ -15,9 +15,9 @@ struct CountingProvider(Arc<AtomicUsize>);
 
 #[async_trait::async_trait]
 impl Provider for CountingProvider {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(vec![])
+        Ok(ProviderSnapshot::without_viewer(vec![]))
     }
 }
 

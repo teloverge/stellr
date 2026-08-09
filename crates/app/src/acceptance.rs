@@ -2,7 +2,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use stellr_core::{Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{Provider, ProviderError, ProviderSnapshot, RepoRef};
 use stellr_github::{
     credentials::{CredentialStore, CredentialStoreError},
     device_flow::{AccessToken, DeviceFlowClient, DeviceFlowController, DeviceFlowStatus},
@@ -26,7 +26,7 @@ struct SignedOut;
 
 #[async_trait::async_trait]
 impl Provider for SignedOut {
-    async fn fetch(&self, _repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         Err(ProviderError::Auth("GitHub sign-in required".into()))
     }
 }

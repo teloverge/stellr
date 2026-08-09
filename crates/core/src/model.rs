@@ -17,6 +17,10 @@ pub struct Star {
     pub parent_issue: Option<u64>,
     pub title: String,
     pub status: Status,
+    #[serde(default)]
+    pub ready_for_agent: bool,
+    #[serde(default)]
+    pub blocked: bool,
     pub blocked_by: Vec<u64>,
     pub milestone: Option<String>,
     pub labels: Vec<String>,
@@ -53,6 +57,8 @@ pub struct SpaceModel {
     pub id: String,
     pub repo: String,
     pub name: String,
+    #[serde(default)]
+    pub viewer_login: Option<String>,
     pub stars: Vec<Star>,
     pub synced_at: Option<i64>,
     pub stale: bool,
@@ -83,11 +89,14 @@ mod tests {
                 id: "abc".into(),
                 repo: "octocat/hello".into(),
                 name: "hello".into(),
+                viewer_login: Some("octocat".into()),
                 stars: vec![Star {
                     number: 7,
                     parent_issue: Some(16),
                     title: "Fix login".into(),
                     status: Status::Frontier,
+                    ready_for_agent: false,
+                    blocked: false,
                     blocked_by: vec![],
                     milestone: Some("v1".into()),
                     labels: vec!["research".into()],
@@ -105,6 +114,10 @@ mod tests {
         let round_tripped: Model = serde_json::from_str(&json).unwrap();
 
         assert_eq!(round_tripped, model);
+        assert_eq!(
+            round_tripped.spaces[0].viewer_login.as_deref(),
+            Some("octocat")
+        );
     }
 
     #[test]
@@ -135,6 +148,8 @@ mod tests {
 
         let model: Model = serde_json::from_str(old_model).unwrap();
 
+        assert_eq!(model.spaces[0].viewer_login, None);
         assert_eq!(model.spaces[0].stars[0].parent_issue, None);
+        assert!(!model.spaces[0].stars[0].blocked);
     }
 }

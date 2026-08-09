@@ -1,6 +1,16 @@
-use std::{io, net::SocketAddr, num::NonZeroU64, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    io,
+    net::SocketAddr,
+    num::NonZeroU64,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
-use stellr_core::{Model, Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{Model, Provider, ProviderError, ProviderSnapshot, RepoRef};
 use stellr_github::cache::Cache;
 use stellr_server::{
     poll::{PollingControl, spawn_controlled_poller},
@@ -17,25 +27,68 @@ use tokio::{
 #[derive(Clone)]
 pub struct ProviderSlot {
     current: Arc<RwLock<Arc<dyn Provider + Send + Sync>>>,
+    generation: Arc<AtomicU64>,
+    confirmed_generation: Arc<AtomicU64>,
+    publication: Arc<std::sync::Mutex<()>>,
 }
 
 impl ProviderSlot {
     pub fn new(provider: Arc<dyn Provider + Send + Sync>) -> Self {
         Self {
             current: Arc::new(RwLock::new(provider)),
+            generation: Arc::new(AtomicU64::new(0)),
+            confirmed_generation: Arc::new(AtomicU64::new(0)),
+            publication: Arc::new(std::sync::Mutex::new(())),
         }
     }
 
     pub async fn replace(&self, provider: Arc<dyn Provider + Send + Sync>) {
-        *self.current.write().await = provider;
+        let mut current = self.current.write().await;
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *current = provider;
+        self.generation.fetch_add(1, Ordering::AcqRel);
     }
 }
 
 #[async_trait::async_trait]
 impl Provider for ProviderSlot {
-    async fn fetch(&self, repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
-        let provider = self.current.read().await.clone();
-        provider.fetch(repo).await
+    async fn fetch(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        let (provider, generation) = {
+            let current = self.current.read().await;
+            (current.clone(), self.generation.load(Ordering::Acquire))
+        };
+        let result = provider.fetch(repo).await;
+        if self.generation.load(Ordering::Acquire) != generation {
+            return Err(ProviderError::Superseded);
+        }
+        if result.is_ok() {
+            self.confirmed_generation
+                .store(generation, Ordering::Release);
+        }
+        result.map(|snapshot| snapshot.with_publication_generation(generation))
+    }
+
+    fn allows_cached_viewer_identity(&self) -> bool {
+        self.confirmed_generation.load(Ordering::Acquire) == self.generation.load(Ordering::Acquire)
+    }
+
+    fn commit_if_current(&self, publication_generations: &[u64], commit: &mut dyn FnMut()) -> bool {
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let generation = self.generation.load(Ordering::Acquire);
+        if publication_generations
+            .iter()
+            .any(|candidate| *candidate != generation)
+        {
+            return false;
+        }
+        commit();
+        true
     }
 }
 

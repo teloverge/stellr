@@ -28,12 +28,20 @@ pub fn derive(issues: &[RawIssue]) -> Vec<Star> {
                 IssueState::Open if has_open_blocker => Status::Blocked,
                 IssueState::Open => Status::Frontier,
             };
+            let ready_for_agent = issue.state == IssueState::Open
+                && !has_open_blocker
+                && issue
+                    .labels
+                    .iter()
+                    .any(|label| label.eq_ignore_ascii_case("ready-for-agent"));
 
             Star {
                 number: issue.number,
                 parent_issue: issue.parent_issue.filter(|parent| *parent != issue.number),
                 title: issue.title.clone(),
                 status,
+                ready_for_agent,
+                blocked: has_open_blocker,
                 blocked_by,
                 milestone: issue.milestone.clone(),
                 labels: issue.labels.clone(),
@@ -99,6 +107,36 @@ mod tests {
         assert_eq!(status_of(&stars, 3), Status::Claimed);
         assert_eq!(status_of(&stars, 4), Status::Blocked);
         assert_eq!(status_of(&stars, 5), Status::Frontier);
+    }
+
+    #[test]
+    fn keeps_claimed_compatibility_while_exposing_agent_readiness() {
+        let mut ready_claimed = issue(1, IssueState::Open, &["octocat"], &[], None);
+        ready_claimed.labels = vec!["READY-FOR-AGENT".into()];
+        let mut blocked_claimed = issue(2, IssueState::Open, &["octocat"], &[3], None);
+        blocked_claimed.labels = vec!["ready-for-agent".into()];
+        let blocker = issue(3, IssueState::Open, &[], &[], None);
+
+        let stars = derive(&[ready_claimed, blocked_claimed, blocker]);
+
+        assert_eq!(status_of(&stars, 1), Status::Claimed);
+        assert!(
+            stars
+                .iter()
+                .find(|star| star.number == 1)
+                .unwrap()
+                .ready_for_agent
+        );
+        assert_eq!(status_of(&stars, 2), Status::Claimed);
+        assert!(
+            !stars
+                .iter()
+                .find(|star| star.number == 2)
+                .unwrap()
+                .ready_for_agent
+        );
+        assert!(!stars.iter().find(|star| star.number == 1).unwrap().blocked);
+        assert!(stars.iter().find(|star| star.number == 2).unwrap().blocked);
     }
 
     #[test]

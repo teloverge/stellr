@@ -1,7 +1,7 @@
 use octocrab::{FromResponse, Octocrab};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use stellr_core::{IssueState, Provider, ProviderError, RawIssue, RepoRef};
+use stellr_core::{IssueState, Provider, ProviderError, ProviderSnapshot, RawIssue, RepoRef};
 
 use crate::textref;
 
@@ -9,6 +9,7 @@ const DEFAULT_BASE_URI: &str = "https://api.github.com";
 
 const FETCH_ISSUES_QUERY: &str = r#"
 query FetchIssues($owner: String!, $name: String!, $cursor: String) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     issues(first: 100, after: $cursor, states: [OPEN, CLOSED]) {
       pageInfo {
@@ -135,9 +136,10 @@ impl GithubProvider {
 
 #[async_trait::async_trait]
 impl Provider for GithubProvider {
-    async fn fetch(&self, repo: &RepoRef) -> Result<Vec<RawIssue>, ProviderError> {
+    async fn fetch(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         let mut cursor = None;
         let mut nodes = Vec::new();
+        let mut viewer_login: Option<String> = None;
 
         loop {
             let request = GraphqlRequest {
@@ -154,13 +156,29 @@ impl Provider for GithubProvider {
             let response: GraphqlEnvelope = serde_json::from_value(response)
                 .map_err(|error| ProviderError::Parse(error.to_string()))?;
 
-            let connection = response
+            let data = response
                 .data
                 .ok_or_else(|| ProviderError::Parse("missing data.repository.issues".into()))
                 .and_then(|data| {
                     serde_json::from_value::<GraphqlData>(data)
                         .map_err(|error| ProviderError::Parse(error.to_string()))
-                })?
+                })?;
+
+            if data.viewer.login.trim().is_empty() {
+                return Err(ProviderError::Parse("viewer login is empty".into()));
+            }
+
+            match viewer_login.as_deref() {
+                Some(login) if login != data.viewer.login => {
+                    return Err(ProviderError::Parse(
+                        "viewer login changed during issue pagination".into(),
+                    ));
+                }
+                Some(_) => {}
+                None => viewer_login = Some(data.viewer.login.clone()),
+            }
+
+            let connection = data
                 .repository
                 .map(|repository| repository.issues)
                 .ok_or_else(|| ProviderError::Parse("missing data.repository.issues".into()))?;
@@ -176,7 +194,7 @@ impl Provider for GithubProvider {
 
         let mut issues = map_issues(nodes);
         issues.sort_by_key(|issue| issue.number);
-        Ok(issues)
+        Ok(ProviderSnapshot::new(viewer_login, issues))
     }
 }
 
@@ -256,7 +274,13 @@ struct GraphqlEnvelope {
 
 #[derive(Deserialize)]
 struct GraphqlData {
+    viewer: Viewer,
     repository: Option<Repository>,
+}
+
+#[derive(Deserialize)]
+struct Viewer {
+    login: String,
 }
 
 #[derive(Deserialize)]
