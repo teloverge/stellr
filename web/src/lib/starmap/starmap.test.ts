@@ -169,6 +169,26 @@ describe('the island seam', () => {
     }
   })
 
+  it('applies prepared deterministic coordinates without recomputing', () => {
+    const recompute = vi.spyOn(layout, 'computeLayout')
+    const prepared = {
+      1: { x: 10, y: 20 },
+      2: { x: 30, y: 40 },
+      3: { x: 50, y: 60 },
+      4: { x: 70, y: 80 },
+      5: { x: 90, y: 100 },
+    }
+
+    sm.setModel(fixture(), {}, null, prepared)
+
+    expect(recompute).not.toHaveBeenCalled()
+    expect(sm.positions()).toEqual(prepared)
+
+    sm.setModel(fixture({ 3: 'claimed' }))
+    expect(recompute).not.toHaveBeenCalled()
+    expect(sm.positions()).toEqual(prepared)
+  })
+
   it('emits selection when a star is clicked, and deselection on empty space', () => {
     sm.setModel(fixture())
     const emitted: (number | null)[] = []

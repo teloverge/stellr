@@ -18,6 +18,7 @@
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
 import { computeLayout, structureSignature, TAU } from './layout'
+import type { LayoutPoints } from './layout-loader'
 import { STAR, LABEL, SESSION_HUE, hexA, type VisualState } from './theme'
 import { GRAMMAR, type SessionState } from './session'
 import { deriveWorkPriority } from './priority'
@@ -357,6 +358,7 @@ export class StarMap {
     tickets: Ticket[],
     sessions: Record<number, SessionState> = {},
     currentIssue: number | null = null,
+    preparedLayout?: LayoutPoints,
   ): void {
     // Titles and statuses can both move under a push, and both feed the label
     // solve — retire the cached one either way.
@@ -400,14 +402,13 @@ export class StarMap {
     // memory is exactly what we want kept.
     this.#labelSide.clear()
     this.#sig = sig
-    const pts = computeLayout(
-      tickets.map(({ num, title, blockedBy, parentIssue }) => ({
-        num,
-        title,
-        blockedBy,
-        parentIssue,
-      })),
-    )
+    const layoutNodes = tickets.map(({ num, title, blockedBy, parentIssue }) => ({
+      num,
+      title,
+      blockedBy,
+      parentIssue,
+    }))
+    const pts = preparedLayout ?? computeLayout(layoutNodes)
     this.#nodes = tickets.map((t) => {
       const p = pts[t.num]
       return {
