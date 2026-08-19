@@ -28,6 +28,7 @@ afterEach(async () => {
   document.documentElement.style.removeProperty('--map-background')
   vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 function pointsFor(nodes: LayoutNode[]): LayoutPoints {
@@ -142,6 +143,37 @@ describe('StarMap wrapper', () => {
     flushSync()
 
     expect(setBackground).toHaveBeenCalledWith('rgb(12, 34, 56)')
+  })
+
+  it('forwards reduced-motion changes to one renderer and removes its listener', async () => {
+    let change: ((event: MediaQueryListEvent) => void) | undefined
+    const removeEventListener = vi.fn()
+    vi.stubGlobal('matchMedia', vi.fn(() => ({
+      matches: true,
+      media: '(prefers-reduced-motion: reduce)',
+      onchange: null,
+      addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+        change = listener
+      },
+      removeEventListener,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })))
+    const setReducedMotion = vi.spyOn(Renderer.prototype, 'setReducedMotion')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+
+    const component = mount(StarMap, { target, props: { space: space(42) } })
+    mounted.push(component)
+    flushSync()
+    change?.({ matches: false } as MediaQueryListEvent)
+
+    expect(setReducedMotion.mock.calls).toEqual([[true], [false]])
+    expect(new Set(setReducedMotion.mock.instances).size).toBe(1)
+    await unmount(component)
+    mounted.splice(mounted.indexOf(component), 1)
+    expect(removeEventListener).toHaveBeenCalledWith('change', change)
   })
 
   it('feeds reactive space prop updates to the renderer', () => {

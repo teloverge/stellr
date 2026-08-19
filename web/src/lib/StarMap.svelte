@@ -219,6 +219,19 @@
     const activeRenderer = new Renderer()
     renderer = activeRenderer
     activeRenderer.suspend()
+    const motionQuery =
+      typeof matchMedia === 'function'
+        ? matchMedia('(prefers-reduced-motion: reduce)')
+        : null
+    const updateReducedMotion = (event: MediaQueryListEvent) => {
+      activeRenderer.setReducedMotion(event.matches)
+    }
+    activeRenderer.setReducedMotion(motionQuery?.matches ?? false)
+    if (motionQuery?.addEventListener) {
+      motionQuery.addEventListener('change', updateReducedMotion)
+    } else {
+      motionQuery?.addListener?.(updateReducedMotion)
+    }
     const background = getComputedStyle(host).getPropertyValue('--map-background').trim()
     activeRenderer.setBackground(background)
     activeRenderer.mount(host)
@@ -236,6 +249,11 @@
     })
 
     return () => {
+      if (motionQuery?.removeEventListener) {
+        motionQuery.removeEventListener('change', updateReducedMotion)
+      } else {
+        motionQuery?.removeListener?.(updateReducedMotion)
+      }
       disposed = true
       destroyed = true
       stopObserving?.()

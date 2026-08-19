@@ -314,16 +314,13 @@ fn map_snapshot(
         blocked_by.dedup();
 
         inversions.extend(refs.blocks.into_iter().map(|target| (node.number, target)));
-        let parent_issue = node
-            .parent
-            .map(|parent| parent.number)
-            .or_else(|| {
-                if refs.parents.len() == 1 {
-                    Some(refs.parents[0])
-                } else {
-                    None
-                }
-            });
+        let parent_issue = node.parent.map(|parent| parent.number).or_else(|| {
+            if refs.parents.len() == 1 {
+                Some(refs.parents[0])
+            } else {
+                None
+            }
+        });
         history.push(IssueSyncMetadata {
             issue_id: node.id.clone(),
             number: node.number,

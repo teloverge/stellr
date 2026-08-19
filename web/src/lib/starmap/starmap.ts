@@ -19,9 +19,15 @@
 
 import { computeLayout, structureSignature, TAU } from './layout'
 import type { LayoutPoints } from './layout-loader'
-import { STAR, LABEL, SESSION_HUE, hexA, type VisualState } from './theme'
+import {
+  SESSION_HUE,
+  visualState,
+  priorityLabelColor,
+  priorityStarStyle,
+  hexA,
+  type VisualState,
+} from './theme'
 import { GRAMMAR, type SessionState } from './session'
-import { deriveWorkPriority } from './priority'
 import { analyzeFocus, type Focus } from './focus'
 import { edgeKey, isMiniWorkflowEdge, workflowEdges, type WorkflowEdge } from './workflow'
 import { writeMiniEdgeCurve, type MutableMiniCurve } from './workflow-geometry'
@@ -46,6 +52,7 @@ import {
 import { validOrbitNodeNumbers } from './parent-topology'
 import type { Ticket } from './model'
 import { historyEventSummary, type HistoryEvent } from '../history'
+import { ticketWorkPriority, type WorkPriority } from './work-priority'
 
 export { clipTitle } from './label-geometry'
 
@@ -58,9 +65,8 @@ export type SelectHandler = (num: number | null) => void
 const DEFAULT_BG = '#05070d'
 const CONTEXT_ALPHA = 0.3
 const CONTEXT_EDGE_ALPHA = 0.45
+const ISSUE_RADIUS_SCALE = 1.25
 const SELECTED_EDGE_WIDTH_SCALE = 1.7
-const SELECTED_EDGE_ARROW_SCALE = 1.25
-const SUBISSUE_RIM = 'rgba(170,145,255,0.82)'
 const HIT_DISTANCE_EPSILON = 1e-9
 
 interface RenderEdge extends WorkflowEdge {
@@ -74,10 +80,12 @@ interface Node {
   num: number
   title: string
   type: string
+  status: Ticket['status']
   parentIssue: number | null
   visible: boolean
   milestone: string | null
   vstate: VisualState
+  priority: WorkPriority
   // The session overlay riding this star, or null when no session speaks for it
   // (ticket 13). Strictly additive: it never touches layout or the base star.
   sstate: SessionState | null
@@ -105,21 +113,9 @@ interface LabelDraw {
 type Box = LabelBox
 
 // Who gets first pick of the good slots. A contested slot should go to the star
-// the operator is most likely to be reading — the selected one, then the bright
-// actionable states — rather than to whichever ticket happens to be numbered
-// lowest, which is what array order gave us.
-const LABEL_PRIORITY: Record<VisualState, number> = {
-  attention: 0,
-  doing_now: 1,
-  my_next: 2,
-  my_future: 3,
-  available_next: 4,
-  team_work: 5,
-  planning: 6,
-  resolved: 7,
-  out_of_scope: 8,
-}
-
+// the operator is most likely to be reading — selected, distinct CURRENT, then
+// the approved workflow priority — rather than to whichever ticket happens to
+// be numbered lowest, which is what array order gave us.
 // A star just off-screen can still own a label that reaches back on-screen, so
 // the viewport cull keeps a generous skirt around the canvas.
 const CULL_MARGIN = 140
@@ -336,18 +332,6 @@ export class StarMap {
     this.#ctx = canvas.getContext('2d')
     this.#dpr = Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1)
 
-    const motionQuery = typeof window !== 'undefined' && window.matchMedia
-      ? window.matchMedia('(prefers-reduced-motion: reduce)')
-      : null
-    if (motionQuery) {
-      this.#reducedMotion = motionQuery.matches
-      const onMotionPreference = (event: MediaQueryListEvent) => {
-        this.#reducedMotion = event.matches
-      }
-      motionQuery.addEventListener?.('change', onMotionPreference)
-      this.#detach.push(() => motionQuery.removeEventListener?.('change', onMotionPreference))
-    }
-
     this.#measure()
     if (typeof ResizeObserver !== 'undefined') {
       this.#ro = new ResizeObserver(() => this.#onResize())
@@ -397,15 +381,18 @@ export class StarMap {
         if (!n) continue
         n.title = t.title
         n.type = t.type
+        n.status = t.status
         n.visible = t.visible !== false
         n.milestone = t.milestone ?? null
+        const vstate = visualState(t)
+        const priority = ticketWorkPriority(t)
         const sstate = sessions[t.num] ?? null
-        const vstate = deriveWorkPriority(t, sstate, currentIssue)
-        if (vstate !== n.vstate || sstate !== n.sstate) {
+        if (vstate !== n.vstate || priority !== n.priority || sstate !== n.sstate) {
           n.flare = 1
           changed.push(`#${t.num < 10 ? '0' : ''}${t.num} → ${sstate ?? vstate.replace('_', ' ')}`)
         }
         n.vstate = vstate
+        n.priority = priority
         n.sstate = sstate
       }
       if (changed.length) this.#tick(changed.join('   ·   '))
@@ -437,10 +424,12 @@ export class StarMap {
         num: t.num,
         title: t.title,
         type: t.type,
+        status: t.status,
         parentIssue: t.parentIssue,
         visible: t.visible !== false,
         milestone: t.milestone ?? null,
-        vstate: deriveWorkPriority(t, sessions[t.num] ?? null, currentIssue),
+        vstate: visualState(t),
+        priority: ticketWorkPriority(t),
         sstate: sessions[t.num] ?? null,
         x: p.x,
         y: p.y,
@@ -466,17 +455,21 @@ export class StarMap {
           byNum.get(edge.from)?.visible !== false && byNum.get(edge.to)?.visible !== false,
       )
       .map((edge) => ({
-      ...edge,
-      state: workflowVisualState(edge, byNum),
-      satisfied: this.#resolved.has(edge.from),
-      reverseExists: reverseEdges.has(edgeKey(edge.from, edge.to)),
-      historical,
+        ...edge,
+        state: workflowVisualState(edge, byNum),
+        satisfied: this.#resolved.has(edge.from),
+        reverseExists: reverseEdges.has(edgeKey(edge.from, edge.to)),
+        historical,
       }))
   }
 
   // --- seam: emit selection -------------------------------------------------
   onSelect(cb: SelectHandler): void {
     this.#onSelect = cb
+  }
+
+  setReducedMotion(reduced: boolean): void {
+    this.#reducedMotion = reduced
   }
 
   // Programmatic selection (a deep-link naming a star, or ticket 07's pane): the
@@ -665,8 +658,7 @@ export class StarMap {
   }
 
   #radius(n: Node): number {
-    const style = STAR[n.vstate]
-    return Math.max(style.r, style.minScreen / this.#cam.s)
+    return priorityStarStyle(n.vstate, n.priority).r * ISSUE_RADIUS_SCALE
   }
 
   // Hit-test a screen point and, if it lands on a star, select and emit it — the
@@ -682,7 +674,8 @@ export class StarMap {
       if (!n.visible) continue
       const px = n._x * this.#cam.s + this.#cam.x
       const py = n._y * this.#cam.s + this.#cam.y
-      const baseRadius = Math.max(14, this.#radius(n) * this.#cam.s + 10)
+      const minimumHitRadius = this.#focus.current === n.num ? 20 : 14
+      const baseRadius = Math.max(minimumHitRadius, this.#radius(n) * this.#cam.s + 10)
       const hasValidParent = this.#validOrbitNodes.has(n.num)
       const radius = hasValidParent ? Math.max(28, baseRadius + 8) : baseRadius
       const distance = Math.hypot(sx - px, sy - py)
@@ -1181,15 +1174,15 @@ export class StarMap {
     g.moveTo(ax, ay)
     g.quadraticCurveTo(cx, cy, bx, by)
     g.lineCap = 'round'
-    const usesResolvedStyle = e.state !== 'incomplete' || e.satisfied
+    const usesResolvedStyle = mini ? e.state !== 'incomplete' : e.satisfied
     const strokeScale = selected ? SELECTED_EDGE_WIDTH_SCALE : 1
     if (e.historical) {
       g.strokeStyle = 'rgba(174,192,218,0.32)'
       g.lineWidth = 1.5 * strokeScale
       g.setLineDash([4, 8])
     } else if (usesResolvedStyle) {
-      g.strokeStyle = 'rgba(150,178,160,0.36)'
-      g.lineWidth = 1.6 * strokeScale
+      g.strokeStyle = 'rgba(190,225,200,0.82)'
+      g.lineWidth = 3 * strokeScale
       g.setLineDash([])
     } else if (mini) {
       g.strokeStyle = 'rgba(170,145,255,0.78)'
@@ -1202,21 +1195,27 @@ export class StarMap {
     }
     g.stroke()
     g.setLineDash([])
-    // Historical paths stay quiet. Only a traversed edge directed into work the
-    // operator can act on now carries two small particles toward that endpoint.
+    // Historical paths stay quiet. In the live map, a satisfied edge flows
+    // blocker→dependent so the frontier visibly ignites as paths clear.
     const animatesIntoActiveWork =
       !e.historical &&
-      e.state === 'traversed' &&
-      (b.vstate === 'doing_now' || b.vstate === 'my_next' || b.vstate === 'available_next')
+      (mini ? e.state === 'traversed' : e.satisfied) &&
+      child?.status !== 'resolved' &&
+      child?.status !== 'out_of_scope' &&
+      b.status !== 'blocked'
     if (animatesIntoActiveWork) {
-      for (let k = 0; k < 2; k++) {
-        const u = mod(this.#motionClock * 0.1 + k / 2 + (e.from * 0.13 + e.to * 0.07), 1),
+      for (let k = 0; k < 3; k++) {
+        const u = mod(this.#motionClock * 0.1 + k / 3 + (e.from * 0.13 + e.to * 0.07), 1),
           m = 1 - u
         const fx = m * m * ax + 2 * m * u * cx + u * u * bx,
           fy = m * m * ay + 2 * m * u * cy + u * u * by
-        g.fillStyle = 'rgba(190,218,198,' + (0.35 + 0.4 * Math.sin(u * Math.PI)) + ')'
+        g.fillStyle = 'rgba(190,225,200,' + (0.14 + 0.18 * Math.sin(u * Math.PI)) + ')'
         g.beginPath()
-        g.arc(fx, fy, 1.8, 0, TAU)
+        g.arc(fx, fy, 5, 0, TAU)
+        g.fill()
+        g.fillStyle = 'rgba(220,255,230,' + (0.45 + 0.5 * Math.sin(u * Math.PI)) + ')'
+        g.beginPath()
+        g.arc(fx, fy, 2.6, 0, TAU)
         g.fill()
       }
     }
@@ -1228,9 +1227,8 @@ export class StarMap {
       al = Math.hypot(tangentX, tangentY) || 1,
       ux = tangentX / al,
       uy = tangentY / al
-    const arrowScale = selected ? SELECTED_EDGE_ARROW_SCALE : 1
-    const ah = 12 * arrowScale,
-      aw = 6.5 * arrowScale,
+    const ah = 8,
+      aw = 4,
       px = -uy,
       py = ux,
       tipx = midx + ux * ah * 0.5,
@@ -1243,7 +1241,7 @@ export class StarMap {
     g.fillStyle = e.historical
       ? 'rgba(174,192,218,0.5)'
       : usesResolvedStyle
-        ? 'rgba(190,218,198,0.52)'
+        ? '#d9f3df'
         : mini
           ? '#c7b8ff'
           : '#c8d5e8'
@@ -1251,15 +1249,14 @@ export class StarMap {
   }
 
   #drawStar(g: CanvasRenderingContext2D, n: Node, t: number): void {
-    const c = STAR[n.vstate]
+    const c = priorityStarStyle(n.vstate, n.priority)
     const x = n._x,
       y = n._y,
-      fl = n.flare || 0
-    const cr = this.#radius(n)
-    const beat = 0.5 + 0.5 * Math.sin(t * 2.8)
-    const corePulse = n.vstate === 'doing_now' && !this.#reducedMotion ? 1 + 0.08 * beat : 1
-    const pulse = 1
-    const gr = c.gr * (cr / c.r) * (1 + fl * 0.5)
+      fl = this.#reducedMotion ? (n.flare > 0 ? 1 : 0) : n.flare || 0
+    const isF = n.priority === 'ready' || n.priority === 'frontier'
+    const beat = this.#reducedMotion ? 0.5 : 0.5 + 0.5 * Math.sin(t * 2.8)
+    const pulse = isF ? 0.8 + 0.2 * beat : 1
+    const gr = (isF ? c.gr * (0.92 + 0.16 * beat) : c.gr) * (1 + fl * 0.5)
 
     const grd = g.createRadialGradient(x, y, 0, x, y, gr)
     grd.addColorStop(0, hexA(c.glow, Math.min(1, 0.85 * pulse + fl * 0.5)))
@@ -1270,76 +1267,79 @@ export class StarMap {
     g.arc(x, y, gr, 0, TAU)
     g.fill()
 
-    const paintedCoreRadius = cr * corePulse
-    const hasSubissueRim = n.parentIssue !== null && n.vstate !== 'resolved' && n.vstate !== 'out_of_scope'
-    if (hasSubissueRim) {
-      g.strokeStyle = SUBISSUE_RIM
+    const cr = this.#radius(n)
+    const shadowY = y + cr * 0.72
+    const shadowRadius = cr * 1.08
+    const shadow = g.createRadialGradient(x, shadowY, 0, x, shadowY, shadowRadius)
+    shadow.addColorStop(0, 'rgba(0,0,0,0.26)')
+    shadow.addColorStop(1, 'rgba(0,0,0,0)')
+    g.fillStyle = shadow
+    g.beginPath()
+    g.arc(x, shadowY, shadowRadius, 0, TAU)
+    g.fill()
+
+    const body = g.createRadialGradient(
+      x - cr * 0.32,
+      y - cr * 0.34,
+      0,
+      x,
+      y,
+      cr * 1.12,
+    )
+    body.addColorStop(0, hexA(c.core, 1))
+    body.addColorStop(0.48, hexA(c.core, 0.98))
+    body.addColorStop(0.82, hexA(c.glow, 0.92))
+    body.addColorStop(1, hexA(c.glow, 0.62))
+    g.fillStyle = body
+    g.beginPath()
+    g.arc(x, y, cr, 0, TAU)
+    g.fill()
+
+    const specularX = x - cr * 0.32
+    const specularY = y - cr * 0.34
+    const specularRadius = cr * 0.28
+    const specular = g.createRadialGradient(
+      specularX,
+      specularY,
+      0,
+      specularX,
+      specularY,
+      specularRadius,
+    )
+    specular.addColorStop(0, 'rgba(255,255,255,0.46)')
+    specular.addColorStop(1, 'rgba(255,255,255,0)')
+    g.fillStyle = specular
+    g.beginPath()
+    g.arc(specularX, specularY, specularRadius, 0, TAU)
+    g.fill()
+
+    const boundaryWidth = Math.max(1, cr * 0.14)
+    g.strokeStyle = hexA(c.core, 0.72)
+    g.lineWidth = boundaryWidth
+    g.beginPath()
+    g.arc(x, y, cr - boundaryWidth / 2, 0, TAU)
+    g.stroke()
+
+    const hasStatusRing = n.priority === 'in_progress' || n.priority === 'ready'
+    if (n.priority === 'in_progress') {
+      g.strokeStyle = hexA(c.core, 0.45 + 0.25 * beat)
       g.lineWidth = 1.5
       g.beginPath()
-      g.arc(x, y, cr + 4, 0, TAU)
+      g.arc(x, y, cr + 7 + beat, 0, TAU)
       g.stroke()
-    }
-    if (c.solid && n.vstate !== 'resolved') {
-      g.fillStyle = c.core
+    } else if (n.priority === 'ready') {
+      g.strokeStyle = hexA(c.core, 0.82)
+      g.lineWidth = 1.5
       g.beginPath()
-      g.arc(x, y, paintedCoreRadius, 0, TAU)
-      g.fill()
-    } else if (n.vstate === 'resolved') {
-      const cg = g.createRadialGradient(x, y, 0, x, y, cr * 1.35)
-      cg.addColorStop(0, hexA(c.core, 1))
-      cg.addColorStop(0.6, hexA(c.core, 0.92))
-      cg.addColorStop(0.82, hexA(c.core, 0.45))
-      cg.addColorStop(1, hexA(c.core, 0))
-      g.fillStyle = cg
-      g.beginPath()
-      g.arc(x, y, cr * 1.35, 0, TAU)
-      g.fill()
-    } else {
-      g.fillStyle = '#000'
-      g.beginPath()
-      g.arc(x, y, cr, 0, TAU)
-      g.fill()
-      const lineWidth = Math.max(2.2, cr * 0.32)
-      g.strokeStyle = hexA(c.core, 0.95)
-      g.lineWidth = lineWidth
-      g.beginPath()
-      g.arc(x, y, cr - lineWidth / 2, 0, TAU)
-      g.stroke()
-    }
-
-    if (hasSubissueRim && this.#focus.readySet.has(n.num) && this.#focus.current !== n.num) {
-      g.strokeStyle = hexA(c.core, 0.95)
-      g.lineWidth = 2
-      g.beginPath()
-      g.arc(x, y, cr + 8, 0, TAU)
-      g.stroke()
-    }
-
-    if (fl > 0) {
-      g.strokeStyle = hexA(c.core, fl * 0.7)
-      g.lineWidth = 1.5 + 2 * fl
-      g.beginPath()
-      g.arc(x, y, cr + (1 - fl) * 40, 0, TAU)
+      g.arc(x, y, cr + 9, 0, TAU)
       g.stroke()
     }
     if (n.sstate) this.#drawSession(g, n, x, y, cr, t)
-    if (this.#focus.current === n.num) {
-      g.strokeStyle = 'rgba(255,255,255,0.95)'
-      g.lineWidth = 2
-      g.beginPath()
-      g.arc(x, y, cr + 8, 0, TAU)
-      g.stroke()
-      g.strokeStyle = 'rgba(255,255,255,0.55)'
-      g.lineWidth = 1
-      g.beginPath()
-      g.arc(x, y, cr + 13, 0, TAU)
-      g.stroke()
-    }
     if (this.#selected === n.num) {
       g.strokeStyle = 'rgba(255,255,255,0.85)'
       g.lineWidth = 1.5
       g.beginPath()
-      g.arc(x, y, cr + (this.#focus.current === n.num ? 18 : 13), 0, TAU)
+      g.arc(x, y, cr + (hasStatusRing ? 13 : 7), 0, TAU)
       g.stroke()
     }
   }
@@ -1526,13 +1526,9 @@ export class StarMap {
       const core = this.#radius(n)
       let r = core + 2
       if (n.sstate) r = core + 15
-      if (
-        n.parentIssue !== null &&
-        this.#focus.readySet.has(n.num) &&
-        this.#focus.current !== n.num
-      ) r = Math.max(r, core + 9)
-      if (this.#focus.current === n.num) r = Math.max(r, core + 14)
-      if (this.#selected === n.num) r = Math.max(r, core + 19)
+      const hasStatusRing = n.priority === 'in_progress' || n.priority === 'ready'
+      if (hasStatusRing) r = Math.max(r, core + 10)
+      if (this.#selected === n.num) r = Math.max(r, core + (hasStatusRing ? 15 : 9))
       vis.push({ n, sx, sy, rad: r * s })
     }
 
@@ -1546,11 +1542,15 @@ export class StarMap {
 
     const order = [...vis].sort((a, b) => {
       const priority = (n: Node) => {
-        if (this.#focus.current === n.num) return 0
-        if (this.#focus.readySet.has(n.num)) return 1
-        if (this.#selected === n.num) return 2
-        if (this.#focus.pathNodes.has(n.num)) return 3
-        return 4 + LABEL_PRIORITY[n.vstate]
+        if (this.#selected === n.num) return 0
+        if (this.#focus.current === n.num) return 1
+        switch (n.priority) {
+          case 'in_progress': return 2
+          case 'ready': return 3
+          case 'frontier': return 4
+          case 'blocked': return 5
+          case 'terminal': return n.vstate === 'resolved' ? 6 : 7
+        }
       }
       const pa = priority(a.n)
       const pb = priority(b.n)
@@ -1607,7 +1607,7 @@ export class StarMap {
             y: geometry.y,
             align: geometry.align,
             fontSize: labelFontSize,
-            fill: LABEL[v.n.vstate],
+            fill: priorityLabelColor(v.n.vstate, v.n.priority),
             alpha:
               this.#focus.emphasized.size === 0 || this.#focus.emphasized.has(v.n.num)
                 ? 1
@@ -1656,7 +1656,7 @@ export class StarMap {
           y: c.y,
           align: 'center',
           fontSize: labelFontSize,
-          fill: LABEL[v.n.vstate],
+          fill: priorityLabelColor(v.n.vstate, v.n.priority),
           alpha:
             this.#focus.emphasized.size === 0 || this.#focus.emphasized.has(v.n.num)
               ? 1

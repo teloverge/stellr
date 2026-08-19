@@ -37,6 +37,9 @@
   activated it across CI, bundle, and release workflows.
 - Made newly added repositories appear in the sidebar without restarting
   Stellr or performing another space action.
+- Clarified active-work priority with dimensional issue nodes, a maximum of two
+  status/selection rings, compact arrows, and literal `in-progress` label
+  support ahead of `ready-for-agent` and blocked work.
 - Emphasized the incoming and outgoing edges directly connected to a selected
   node while preserving dependency direction, state styling, and motion.
 - Replaced compact subissue arcs with adaptive, label-aware concentric orbits,
