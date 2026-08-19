@@ -3,7 +3,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 use axum::{
     Json, Router,
     extract::{
-        Path, Request, State,
+        Path, Query, Request, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, HeaderValue, StatusCode, header},
@@ -12,7 +12,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
-use stellr_core::Model;
+use stellr_core::{HistoryEvent, HistoryImportState, HistorySummary, Model};
 use subtle::ConstantTimeEq;
 
 use crate::{
@@ -29,6 +29,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/spaces", post(add_space))
         .route("/api/spaces/{id}", delete(remove_space))
         .route("/api/spaces/{id}/refresh", post(refresh_space))
+        .route("/api/spaces/{id}/history", get(history))
         .route("/ws/control", get(control_ws))
         .layer(middleware::from_fn_with_state(state.clone(), auth));
 
@@ -36,6 +37,60 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(protected)
         .fallback(crate::embed::static_handler)
         .with_state(state)
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct HistoryQuery {
+    after: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct HistoryResponse {
+    summary: HistorySummary,
+    events: Vec<HistoryEvent>,
+}
+
+async fn history(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(query): Query<HistoryQuery>,
+) -> Response {
+    let known = state
+        .spaces
+        .lock()
+        .await
+        .entries()
+        .iter()
+        .any(|entry| entry.id == id);
+    if !known {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let summary = match state.history.summary(&id) {
+        Ok(summary) => summary.unwrap_or_default(),
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("could not read history summary: {error}"),
+            )
+                .into_response();
+        }
+    };
+    let events =
+        if summary.state == HistoryImportState::Complete || summary.verified_through.is_some() {
+            match state.history.events_after(&id, query.after.unwrap_or(0)) {
+                Ok(events) => events,
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("could not read history events: {error}"),
+                    )
+                        .into_response();
+                }
+            }
+        } else {
+            Vec::new()
+        };
+    Json(HistoryResponse { summary, events }).into_response()
 }
 
 async fn remove_space(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
@@ -58,6 +113,13 @@ async fn remove_space(State(state): State<Arc<AppState>>, Path(id): Path<String>
             .into_response();
     }
     drop(spaces);
+    if let Err(error) = state.history.remove_repository(&id) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("space was removed, but its history could not be deleted: {error}"),
+        )
+            .into_response();
+    }
     state.refresh.notify_one();
     StatusCode::NO_CONTENT.into_response()
 }
@@ -126,6 +188,9 @@ async fn refresh_space(State(state): State<Arc<AppState>>, Path(id): Path<String
         .any(|entry| entry.id == id)
     {
         return StatusCode::NOT_FOUND;
+    }
+    if state.history.retry_repository(&id).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
     state.refresh.notify_one();
     StatusCode::OK

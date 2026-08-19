@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Kept the authenticated Tailnet browser session stable across launcher-driven
+  rebuilds and restarts so existing browser tabs can reconnect, and replaced
+  endless retries for invalid sessions with an explicit expiration message;
+  rebuilt executable inodes are now recognized when replacing the old server.
+- Added an npm-accessible Tailnet launcher that safely replaces the prior
+  instance and binds the optimized web server to the current Tailscale IPv4
+  address with session authentication enabled, while retaining the latest
+  authenticated URL in an owner-only local file.
+- Added Linux shell, Windows PowerShell, and Windows Command Prompt helpers for
+  retrieving that authenticated URL from the `amd-halo` Tailnet host over SSH.
+- Added a Debian/Ubuntu dependency installer for optional native desktop and
+  package builds using Tauri, WebKitGTK, D-Bus, and app indicators.
+- Updated the locked DOMPurify and Nano ID dependencies to versions that pass
+  the npm security audit.
+- Added `.nvmrc`, npm package metadata, and strict engine checks requiring
+  Node.js 24 with npm 12.0.2 before installing the web workspace.
+- Made the browser-hosted server the default Linux development build, with
+  Tauri and OS credential storage isolated behind an explicit desktop feature.
 - Suspended star-map GPU rendering while the app is minimized or its browser
   document is hidden, while retaining five-minute native background polling.
 - Made project changes immediate and responsive: first-time constellation
@@ -19,6 +37,9 @@
   activated it across CI, bundle, and release workflows.
 - Made newly added repositories appear in the sidebar without restarting
   Stellr or performing another space action.
+- Clarified active-work priority with dimensional issue nodes, a maximum of two
+  status/selection rings, compact arrows, and literal `in-progress` label
+  support ahead of `ready-for-agent` and blocked work.
 - Emphasized the incoming and outgoing edges directly connected to a selected
   node while preserving dependency direction, state styling, and motion.
 - Replaced compact subissue arcs with adaptive, label-aware concentric orbits,
@@ -33,6 +54,25 @@
 - Split the Windows desktop and CLI entry points so installed shortcuts and
   protocol launches open without a terminal while `stellr serve` retains
   native PowerShell and Command Prompt behavior.
+- Hardened temporal playback with provider-backed verification cutoffs,
+  cutoff-safe cursors, native offline restarts, durable import resume, migration
+  rollback, space-scoped deletion, bounded rate-limit retry, neutral historical
+  workflow styling, accessible status text, focus, and narrow layouts.
+- Added delta-only background history synchronization using ordinary snapshot
+  metadata, resumable per-issue cursors, catch-up verification, rate-limit reset
+  evidence, idempotent client merging, and a pinned-past New activity action.
+- Added fixed-duration full-history playback with proportional clustered event
+  ticks, accessible play/pause and speed controls, slow-frame-safe event
+  feedback, and reduced-motion captions that preserve map position and selection.
+- Added exact milestone assignment, movement, and removal replay with minimal
+  GitHub event payloads and temporal milestone hulls that reshape around fixed
+  star coordinates without moving the constellation or camera.
+- Added resumable, one-issue-at-a-time close/reopen history import with
+  transactional page checkpoints, stable lifecycle replay, and schema migration
+  from creation-only ledgers without repository-wide history refetches.
+- Added a durable local SQLite issue-creation ledger, authenticated history
+  deltas, and a bottom timeline that scrubs historical issue visibility without
+  moving the constellation or querying GitHub during scrubbing.
 - Fixed installed desktop startup so a no-argument launch opens the existing
   empty repository-selection shell instead of treating the installation
   directory as a Git repository.

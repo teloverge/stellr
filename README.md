@@ -7,81 +7,121 @@ relationships become edges, milestones become clusters, and completed work
 becomes resolved stars. The native shell and the browser-hosted serve mode use
 the same Rust application runtime.
 
-**Status: M2 native shell available.** Windows 11, macOS, and Linux desktop
-packages are built on native CI runners. The approved product design remains in
-[`docs/specs/2026-07-29-stellr-port-design.md`](docs/specs/2026-07-29-stellr-port-design.md).
+**Status: M2 browser server and optional native shell available.** The headless
+server is the primary Linux development target; native desktop packages remain
+available through explicit platform builds. The approved product design remains
+in [`docs/specs/2026-07-29-stellr-port-design.md`](docs/specs/2026-07-29-stellr-port-design.md).
 
 ## Build from source
 
-Install stable Rust, Node.js 24 with npm, and GitHub CLI. From the repository
-root in PowerShell:
+Linux is the primary local development environment. The default build is a
+headless Rust server that embeds the web UI and does not link Tauri, GTK, or
+WebKitGTK. Install stable Rust, Node.js 24 with npm 12.0.2, and GitHub CLI. The
+repository includes `.nvmrc`; with nvm, install the pinned Node major before
+running npm commands:
 
-```powershell
-npm.cmd --prefix web ci
-npm.cmd --prefix web run build
-cargo.exe build -p stellr-app
+```bash
+nvm install
+nvm use
+npm install --global npm@12.0.2
 ```
 
-## Desktop mode
+The web workspace also declares strict Node/npm engines, so `npm ci` fails
+early if the required versions are not active. From the repository root:
 
-A bare launch opens the native desktop shell and restores the last valid route:
-
-```powershell
-cargo.exe run -p stellr-app
+```bash
+npm --prefix web ci
+npm --prefix web run build
+cargo build -p stellr-app --bin stellr
 ```
 
-Open a repository, issue URL, local checkout, or Stellr protocol target
-explicitly:
+The same commands work in other POSIX shells; use `npm`, `cargo`, and `bash`
+directly rather than Windows-specific `.cmd` or `.exe` command names.
 
-```powershell
-cargo.exe run -p stellr-app -- open teloverge/stellr
-cargo.exe run -p stellr-app -- open https://github.com/teloverge/stellr/issues/70
-cargo.exe run -p stellr-app -- open D:\dev\stellr
+Run the local validation suite with:
+
+```bash
+npm --prefix web run check
+npm --prefix web test
+npm --prefix web run build
+npm --prefix web audit
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo build --workspace --locked
 ```
 
-Packaged installations use the same commands through the `stellr` executable.
-Only one desktop process runs at a time; later invocations forward their target
-to the existing window, restore it if minimized, focus it, and exit.
+If the web audit reports fixable vulnerabilities, apply lockfile updates from
+the repository root with `npm --prefix web audit fix`; the root project has no
+Node lockfile, so running plain `npm audit fix` there will fail.
 
-## Credential precedence
+## Linux server and web UI
 
-GitHub provider credentials resolve in this order:
+Authenticate with `gh auth login` or set `GITHUB_TOKEN`, then start the server:
+
+```bash
+cargo run -p stellr-app --bin stellr -- serve
+cargo run -p stellr-app --bin stellr -- serve --addr 127.0.0.1:0 --issue 70
+```
+
+Open the printed `stellr cockpit` URL in a browser. The executable serves the
+embedded Svelte application, REST API, and control WebSocket from one process.
+Protected routes require the generated session token by default. `--no-token`
+is an explicit local-development option; do not expose that listener to
+another host.
+
+To bind the optimized server only to this machine's current Tailscale IPv4
+address, run:
+
+```bash
+npm --prefix web run serve:tailnet
+```
+
+This launcher keeps session-token authentication enabled. Override its default
+port with `STELLR_PORT=9000 npm --prefix web run serve:tailnet`. Starting it
+again gracefully replaces this repository's existing Stellr server on the same
+Tailnet address and port, while reusing its existing protected session so open
+browser tabs can reconnect after a rebuild. The latest complete authenticated URL is also saved
+with owner-only permissions in `target/stellr-tailnet-url.txt`, so it can be
+retrieved from another computer over SSH and pasted directly into a browser.
+Cross-platform retrieval helpers default to the Tailnet host `amd-halo`:
+
+```bash
+bash scripts/get-stellr-tailnet-url.sh
+```
+
+Windows Command Prompt and PowerShell users can run
+`scripts\get-stellr-tailnet-url.cmd` or
+`powershell -File scripts\get-stellr-tailnet-url.ps1`. Set
+`STELLR_SSH_USER` to override the default SSH user `pfdev`, or pass another
+hostname as the first argument. The client must be authorized to SSH to that
+account on `amd-halo` (using an SSH key, password, or Tailscale SSH policy).
+
+The default headless build resolves GitHub credentials in this order:
 
 1. a nonblank `GITHUB_TOKEN` environment variable;
-2. the token returned by `gh auth token`;
-3. the operating-system credential store entry for service `stellr.github` and
-   account `default`;
-4. an unauthenticated desktop state that offers device authorization.
+2. the token returned by `gh auth token`.
 
 The provider credential is separate from the random per-run browser session
-token printed by serve mode. Neither token is exposed to the webview URL.
+token printed by serve mode.
 
-## Device authorization
+## Optional desktop mode
 
-When desktop mode cannot resolve a credential, it still opens the native shell
-and presents **Connect GitHub**. Start authorization, open the supplied GitHub
-verification URL in the system browser, and enter the one-time code. Stellr
-requests the approved `repo` scope, activates synchronization immediately, and
-stores the resulting credential in the operating-system credential store. If
-storage fails, the current run remains connected and the shell reports that the
-next launch will require sign-in again.
+Native desktop development is an explicit feature and is not required for the
+Linux server. On Debian or Ubuntu, install its Tauri dependencies and run it
+with:
 
-Serve mode does not start device authorization because it has no trusted native
-interaction surface; configure one of the first three credential sources before
-starting it.
-
-## Serve mode
-
-Serve the same embedded application over loopback for a browser or IDE pane:
-
-```powershell
-cargo.exe run -p stellr-app -- serve
-cargo.exe run -p stellr-app -- serve --addr 127.0.0.1:0 --issue 70
+```bash
+bash scripts/install-linux-dependencies.sh
+cargo run -p stellr-app --features desktop --bin stellr-desktop
+cargo run -p stellr-app --features desktop --bin stellr-desktop -- \
+  open teloverge/stellr
 ```
 
-Open the printed `stellr cockpit` URL. Protected API and control-WebSocket
-routes require the generated session token by default. `--no-token` is an
-explicit local-development option; do not expose that listener to another host.
+Desktop mode additionally enables OS credential persistence, device
+authorization, deep links, single-instance routing, and the native tray. Run a
+Secret Service provider such as GNOME Keyring when testing credential storage
+on Linux.
 
 ## Deep links and single-instance routing
 

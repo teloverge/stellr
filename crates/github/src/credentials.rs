@@ -5,6 +5,7 @@ pub const DEFAULT_ACCOUNT: &str = "default";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CredentialStoreError {
+    #[cfg(feature = "os-credentials")]
     #[error("operating-system credential store failed: {0}")]
     Keyring(#[from] keyring::Error),
     #[error("operating-system credential store failed: {0}")]
@@ -16,12 +17,14 @@ pub trait CredentialStore: Send + Sync {
     fn store(&self, credential: &str) -> Result<(), CredentialStoreError>;
 }
 
+#[cfg(feature = "os-credentials")]
 #[derive(Debug, Clone)]
 pub struct OsCredentialStore {
     service: &'static str,
     account: &'static str,
 }
 
+#[cfg(feature = "os-credentials")]
 impl Default for OsCredentialStore {
     fn default() -> Self {
         Self {
@@ -31,6 +34,7 @@ impl Default for OsCredentialStore {
     }
 }
 
+#[cfg(feature = "os-credentials")]
 impl OsCredentialStore {
     pub fn service(&self) -> &str {
         self.service
@@ -45,6 +49,7 @@ impl OsCredentialStore {
     }
 }
 
+#[cfg(feature = "os-credentials")]
 impl CredentialStore for OsCredentialStore {
     fn load(&self) -> Result<Option<String>, CredentialStoreError> {
         match self.entry()?.get_password() {

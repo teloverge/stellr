@@ -13,6 +13,20 @@ path = "src/main.rs"
 [[bin]]
 name = "stellr-desktop"
 path = "src/desktop_main.rs"
+required-features = ["desktop"]
+
+[features]
+default = []
+desktop = [
+    "dep:tauri",
+    "dep:tauri-build",
+    "dep:tauri-plugin-deep-link",
+    "dep:tauri-plugin-dialog",
+    "dep:tauri-plugin-opener",
+    "dep:tauri-plugin-single-instance",
+    "dep:tauri-plugin-window-state",
+    "stellr-github/os-credentials",
+]
 
 [dependencies]
 async-trait.workspace = true
@@ -23,13 +37,14 @@ serde.workspace = true
 serde_json.workspace = true
 stellr-core = { path = "../core" }
 stellr-github = { path = "../github" }
+stellr-history = { path = "../history" }
 stellr-server = { path = "../server" }
-tauri.workspace = true
-tauri-plugin-deep-link.workspace = true
-tauri-plugin-dialog.workspace = true
-tauri-plugin-single-instance.workspace = true
-tauri-plugin-window-state.workspace = true
-tauri-plugin-opener.workspace = true
+tauri = { workspace = true, optional = true, features = ["test"] }
+tauri-plugin-deep-link = { workspace = true, optional = true }
+tauri-plugin-dialog = { workspace = true, optional = true }
+tauri-plugin-single-instance = { workspace = true, optional = true }
+tauri-plugin-window-state = { workspace = true, optional = true }
+tauri-plugin-opener = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 url.workspace = true
@@ -37,9 +52,8 @@ url.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 reqwest = "0.12"
-tauri = { workspace = true, features = ["test"] }
 tempfile = "3"
 tokio.workspace = true
 
 [build-dependencies]
-tauri-build.workspace = true
+tauri-build = { workspace = true, optional = true }

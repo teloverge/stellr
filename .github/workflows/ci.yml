@@ -25,7 +25,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential curl file libayatana-appindicator3-dev librsvg2-dev \
+            build-essential curl file libayatana-appindicator3-dev libdbus-1-dev librsvg2-dev \
             libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf wget
       - run: npm --prefix web ci
       - run: npm --prefix web run build
@@ -33,6 +33,9 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build --workspace
+      - name: Validate the optional native desktop feature
+        run: cargo test -p stellr-app --all-targets --features desktop
+      - run: cargo build -p stellr-app --features desktop
 
   web:
     runs-on: ubuntu-latest

@@ -1,6 +1,8 @@
 use thiserror::Error;
 
-use crate::credentials::{CredentialStore, CredentialStoreError, OsCredentialStore};
+use crate::credentials::CredentialStoreError;
+#[cfg(feature = "os-credentials")]
+use crate::credentials::{CredentialStore, OsCredentialStore};
 
 #[derive(Debug, Error)]
 pub enum AuthError {
@@ -10,7 +12,10 @@ pub enum AuthError {
 
 pub fn resolve_token() -> Result<String, AuthError> {
     let env = std::env::var("GITHUB_TOKEN").ok();
-    let store = OsCredentialStore::default();
+    #[cfg(feature = "os-credentials")]
+    let stored_token = || OsCredentialStore::default().load();
+    #[cfg(not(feature = "os-credentials"))]
+    let stored_token = || Ok(None);
     resolve_with(
         env,
         || {
@@ -21,7 +26,8 @@ pub fn resolve_token() -> Result<String, AuthError> {
                 .filter(|output| output.status.success())
                 .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
         },
-        || store.load(),
+        stored_token,
+        cfg!(feature = "os-credentials"),
     )
 }
 
@@ -29,6 +35,7 @@ fn resolve_with(
     env: Option<String>,
     gh_token: impl FnOnce() -> Option<String>,
     stored_token: impl FnOnce() -> Result<Option<String>, CredentialStoreError>,
+    credential_store_enabled: bool,
 ) -> Result<String, AuthError> {
     if let Some(token) = env.filter(|token| !token.trim().is_empty()) {
         return Ok(token);
@@ -39,6 +46,11 @@ fn resolve_with(
         .filter(|token| !token.is_empty())
     {
         return Ok(token);
+    }
+    if !credential_store_enabled {
+        return Err(AuthError::NotFound(
+            "neither GITHUB_TOKEN nor `gh auth token` yielded one".into(),
+        ));
     }
     match stored_token() {
         Ok(Some(token)) if !token.trim().is_empty() => return Ok(token),
@@ -67,6 +79,7 @@ mod tests {
                 Some("tok_env".into()),
                 || Some("tok_gh".into()),
                 || Ok(Some("tok_store".into())),
+                true,
             )
             .unwrap(),
             "tok_env"
@@ -84,6 +97,7 @@ mod tests {
                 Some("tok_gh".into())
             },
             || panic!("credential store must not be read"),
+            true,
         )
         .unwrap();
 
@@ -98,6 +112,7 @@ mod tests {
                 None,
                 || Some("tok_gh\n".into()),
                 || Ok(Some("tok_store".into())),
+                true,
             )
             .unwrap(),
             "tok_gh"
@@ -107,17 +122,32 @@ mod tests {
     #[test]
     fn falls_back_to_the_operating_system_store_after_github_cli() {
         assert_eq!(
-            resolve_with(None, || None, || Ok(Some("tok_store".into()))).unwrap(),
+            resolve_with(None, || None, || Ok(Some("tok_store".into())), true).unwrap(),
             "tok_store"
         );
     }
 
     #[test]
     fn empty_everything_is_a_helpful_error() {
-        let err = resolve_with(Some("".into()), || None, || Ok(None)).unwrap_err();
+        let err = resolve_with(Some("".into()), || None, || Ok(None), true).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("gh auth login"));
         assert!(message.contains("GITHUB_TOKEN"));
         assert!(message.contains("operating-system credential store"));
+    }
+
+    #[test]
+    fn headless_auth_does_not_read_or_advertise_an_os_store() {
+        let err = resolve_with(
+            None,
+            || None,
+            || panic!("credential store must not be read"),
+            false,
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("GITHUB_TOKEN"));
+        assert!(message.contains("gh auth login"));
+        assert!(!message.contains("operating-system credential store"));
     }
 }

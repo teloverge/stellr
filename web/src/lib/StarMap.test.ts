@@ -7,6 +7,7 @@ import { flushSync, mount, unmount } from 'svelte'
 import StarMap from './StarMap.svelte'
 import StarMapTestHost from './StarMap.test-host.svelte'
 import type { SpaceModel } from './model'
+import { projectTemporalSpace, type HistoryEvent } from './history'
 import { StarMap as Renderer } from './starmap/starmap'
 import { structureSignature, type LayoutNode } from './starmap/layout'
 import type {
@@ -27,6 +28,7 @@ afterEach(async () => {
   document.documentElement.style.removeProperty('--map-background')
   vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 function pointsFor(nodes: LayoutNode[]): LayoutPoints {
@@ -143,6 +145,37 @@ describe('StarMap wrapper', () => {
     expect(setBackground).toHaveBeenCalledWith('rgb(12, 34, 56)')
   })
 
+  it('forwards reduced-motion changes to one renderer and removes its listener', async () => {
+    let change: ((event: MediaQueryListEvent) => void) | undefined
+    const removeEventListener = vi.fn()
+    vi.stubGlobal('matchMedia', vi.fn(() => ({
+      matches: true,
+      media: '(prefers-reduced-motion: reduce)',
+      onchange: null,
+      addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+        change = listener
+      },
+      removeEventListener,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })))
+    const setReducedMotion = vi.spyOn(Renderer.prototype, 'setReducedMotion')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+
+    const component = mount(StarMap, { target, props: { space: space(42) } })
+    mounted.push(component)
+    flushSync()
+    change?.({ matches: false } as MediaQueryListEvent)
+
+    expect(setReducedMotion.mock.calls).toEqual([[true], [false]])
+    expect(new Set(setReducedMotion.mock.instances).size).toBe(1)
+    await unmount(component)
+    mounted.splice(mounted.indexOf(component), 1)
+    expect(removeEventListener).toHaveBeenCalledWith('change', change)
+  })
+
   it('feeds reactive space prop updates to the renderer', () => {
     const setModel = vi.spyOn(Renderer.prototype, 'setModel')
     const target = document.createElement('div')
@@ -166,6 +199,36 @@ describe('StarMap wrapper', () => {
     )
   })
 
+  it('updates milestone overlay state without routing a new selection', () => {
+    const setModel = vi.spyOn(Renderer.prototype, 'setModel')
+    const select = vi.spyOn(Renderer.prototype, 'select')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const initial = space(42)
+    initial.stars[0].milestone = 'Alpha'
+
+    const component = mount(StarMapTestHost, {
+      target,
+      props: { initialSpace: initial, initialSelectedIssue: 42, layout: immediateLayout },
+    })
+    mounted.push(component)
+    flushSync()
+
+    select.mockClear()
+    component.updateSpace({
+      ...initial,
+      stars: [{ ...initial.stars[0], milestone: 'Beta <script>alert(1)</script>' }],
+    })
+    flushSync()
+
+    expect(setModel).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ num: 42, milestone: 'Beta <script>alert(1)</script>' })],
+      {},
+      null,
+    )
+    expect(select).not.toHaveBeenCalled()
+  })
+
   it('passes the current conversation issue to the renderer', () => {
     const setModel = vi.spyOn(Renderer.prototype, 'setModel')
     const target = document.createElement('div')
@@ -184,6 +247,71 @@ describe('StarMap wrapper', () => {
       14,
       expect.objectContaining({ 42: expect.any(Object) }),
     )
+  })
+
+  it('labels current dependencies and suppresses live focus in historical mode', () => {
+    const setModel = vi.spyOn(Renderer.prototype, 'setModel')
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const input = space(42)
+    const historical = projectTemporalSpace(
+      input,
+      [
+        {
+          sequence: 1,
+          repository_id: 'R_repo',
+          issue_id: 'I_42',
+          issue_number: 42,
+          provider_event_id: 'I_42:issue_created',
+          occurred_at: 100,
+          kind: 'issue_created',
+          milestone: null,
+        },
+      ],
+      100,
+    )
+
+    const component = mount(StarMap, {
+      target,
+      props: { space: historical, currentIssue: 14, layout: immediateLayout },
+    })
+    mounted.push(component)
+    flushSync()
+
+    expect(target.textContent).toContain('Current dependencies')
+    expect(setModel).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ num: 42, historical: true, frontier: false })],
+      {},
+      14,
+      expect.objectContaining({ 42: expect.any(Object) }),
+    )
+  })
+
+  it('forwards reached history events with the reduced-motion preference', () => {
+    const replayHistory = vi.spyOn(Renderer.prototype, 'replayHistory')
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const replayEvents: HistoryEvent[] = [
+      {
+        sequence: 1,
+        repository_id: 'R_repo',
+        issue_id: 'I_42',
+        issue_number: 42,
+        provider_event_id: 'E_reopen',
+        occurred_at: 100,
+        kind: 'issue_reopened',
+      },
+    ]
+
+    const component = mount(StarMap, {
+      target,
+      props: { space: space(42), replayEvents },
+    })
+    mounted.push(component)
+    flushSync()
+
+    expect(replayHistory).toHaveBeenCalledWith(replayEvents, true)
   })
 
   it('does not echo a routed selection back through the user-selection callback', () => {

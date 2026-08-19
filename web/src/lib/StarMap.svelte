@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte'
   import LayoutTransition from './LayoutTransition.svelte'
+  import type { HistoryEvent, TemporalSpace } from './history'
   import type { SpaceModel } from './model'
   import { observeWindowSuspension } from './native-shell'
   import { toRendererModel } from './starmap/adapt'
@@ -16,16 +17,20 @@
     space,
     currentIssue = null,
     selectedIssue = null,
+    bottomInset = 16,
+    replayEvents = [],
     select,
     layout = browserLayoutLoader,
     ready,
     cancelled,
     failed,
   }: {
-    space: SpaceModel
+    space: SpaceModel | TemporalSpace
     currentIssue?: number | null
     selectedIssue?: number | null
     select?: (issueNumber: number) => void
+    bottomInset?: number
+    replayEvents?: HistoryEvent[]
     layout?: LayoutRequester
     ready?: (spaceId: string) => void
     cancelled?: (spaceId: string) => void
@@ -181,6 +186,17 @@
   })
 
   $effect(() => {
+    renderer?.setInsets({ bottom: bottomInset })
+  })
+
+  $effect(() => {
+    if (replayEvents.length === 0) return
+    const reducedMotion =
+      typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+    renderer?.replayHistory(replayEvents, reducedMotion)
+  })
+
+  $effect(() => {
     if (renderer === undefined) return
 
     const rendererChanged = synchronizedRenderer !== renderer
@@ -203,6 +219,19 @@
     const activeRenderer = new Renderer()
     renderer = activeRenderer
     activeRenderer.suspend()
+    const motionQuery =
+      typeof matchMedia === 'function'
+        ? matchMedia('(prefers-reduced-motion: reduce)')
+        : null
+    const updateReducedMotion = (event: MediaQueryListEvent) => {
+      activeRenderer.setReducedMotion(event.matches)
+    }
+    activeRenderer.setReducedMotion(motionQuery?.matches ?? false)
+    if (motionQuery?.addEventListener) {
+      motionQuery.addEventListener('change', updateReducedMotion)
+    } else {
+      motionQuery?.addListener?.(updateReducedMotion)
+    }
     const background = getComputedStyle(host).getPropertyValue('--map-background').trim()
     activeRenderer.setBackground(background)
     activeRenderer.mount(host)
@@ -220,6 +249,11 @@
     })
 
     return () => {
+      if (motionQuery?.removeEventListener) {
+        motionQuery.removeEventListener('change', updateReducedMotion)
+      } else {
+        motionQuery?.removeListener?.(updateReducedMotion)
+      }
       disposed = true
       destroyed = true
       stopObserving?.()
@@ -248,6 +282,9 @@
     />
   </div>
 {/if}
+{#if 'temporal_active' in space && space.temporal_active}
+  <div class="dependency-legend">Current dependencies</div>
+{/if}
 
 <style>
   .star-map {
@@ -268,5 +305,18 @@
     z-index: 2;
     display: grid;
     background: var(--map-background);
+  }
+
+  .dependency-legend {
+    position: absolute;
+    top: 0.75rem;
+    left: 0.75rem;
+    padding: 0.3rem 0.5rem;
+    border: 1px dashed var(--border);
+    border-radius: 0.45rem;
+    color: var(--muted-foreground);
+    background: color-mix(in oklch, var(--surface-raised) 84%, transparent);
+    font-size: 0.75rem;
+    pointer-events: none;
   }
 </style>

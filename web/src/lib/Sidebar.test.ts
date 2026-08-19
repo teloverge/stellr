@@ -3,6 +3,7 @@ import { flushSync, mount, unmount } from 'svelte'
 import Sidebar from './Sidebar.svelte'
 import type { addSpace, refreshSpace, removeSpace } from './api'
 import type { chooseRepositoryDirectory } from './native-shell'
+import type { ConnectionStatus } from './control.svelte'
 import type { SpaceModel } from './model'
 
 const mounted: object[] = []
@@ -32,7 +33,7 @@ function render(
   spaces: SpaceModel[],
   overrides: {
     activeSpaceId?: string | null
-    connectionStatus?: 'connecting' | 'open' | 'closed'
+    connectionStatus?: ConnectionStatus
     select?: (id: string) => void
     added?: (id: string) => void
     removed?: (id: string) => void
@@ -123,6 +124,12 @@ describe('Sidebar display', () => {
       .querySelector<HTMLButtonElement>('button[data-space-id="cached-space"]')!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(selected).toEqual(['cached-space'])
+  })
+
+  it('labels an unauthorized connection as an expired session', () => {
+    const target = render([], { connectionStatus: 'unauthorized' })
+
+    expect(target.textContent).toContain('Session expired')
   })
 })
 

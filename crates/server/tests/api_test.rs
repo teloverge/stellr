@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -9,9 +9,12 @@ use std::{
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use stellr_core::{
-    IssueState, Model, Provider, ProviderError, ProviderSnapshot, RawIssue, RepoRef, SpaceModel,
+    HistoryEvent, HistoryEventKind, HistoryImportState, HistoryPage, HistoryPageRequest,
+    IssueState, IssueSyncMetadata, Model, Provider, ProviderError, ProviderSnapshot, RawIssue,
+    RepoRef, SpaceModel,
 };
 use stellr_github::cache::{Cache, Snapshot};
+use stellr_history::{HistoryStore, PageCheckpoint, RepositorySeed};
 use stellr_server::{
     poll::spawn_poller,
     spaces::{SpaceEntry, SpaceStore},
@@ -54,6 +57,7 @@ fn state_with_hub(hub: tokio::sync::watch::Sender<Model>, token: Option<&str>) -
         token: token.map(str::to_owned),
         spaces: tokio::sync::Mutex::new(SpaceStore::load(std::path::PathBuf::new())),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history: HistoryStore::open_in_memory().unwrap(),
     })
 }
 
@@ -72,6 +76,7 @@ fn model_with_space(id: &str) -> Model {
             synced_at: None,
             stale: false,
             error: None,
+            history: Default::default(),
         }],
     }
 }
@@ -151,6 +156,687 @@ impl Provider for StubProvider {
     }
 }
 
+struct DeltaSnapshotProvider {
+    snapshots: AtomicUsize,
+    history_requests: Mutex<Vec<HistoryPageRequest>>,
+}
+
+impl DeltaSnapshotProvider {
+    fn new() -> Self {
+        Self {
+            snapshots: AtomicUsize::new(0),
+            history_requests: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for DeltaSnapshotProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        let snapshot = self.snapshots.fetch_add(1, Ordering::SeqCst);
+        let updated_at = if snapshot >= 3 { 500 } else { 400 };
+        Ok(ProviderSnapshot::with_history(
+            None,
+            Some("R_repo".into()),
+            Some(500),
+            vec![RawIssue {
+                number: 83,
+                parent_issue: None,
+                title: "Delta history".into(),
+                body: String::new(),
+                state: IssueState::Open,
+                assignees: vec![],
+                milestone: None,
+                labels: vec![],
+                blocked_by: vec![],
+                url: "https://github.com/o/r/issues/83".into(),
+            }],
+            vec![IssueSyncMetadata {
+                issue_id: "I_83".into(),
+                number: 83,
+                created_at: 100,
+                updated_at,
+                milestone: None,
+            }],
+        ))
+    }
+
+    async fn fetch_history_page(
+        &self,
+        _repo: &RepoRef,
+        request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        self.history_requests.lock().unwrap().push(request.clone());
+        let events = if request.cursor.as_deref() == Some("CUR_END") {
+            vec![
+                HistoryEvent {
+                    sequence: 0,
+                    repository_id: "R_repo".into(),
+                    issue_id: "I_83".into(),
+                    issue_number: 83,
+                    provider_event_id: "E_close".into(),
+                    occurred_at: request.cutoff,
+                    kind: HistoryEventKind::IssueClosed,
+                },
+                HistoryEvent {
+                    sequence: 0,
+                    repository_id: "R_repo".into(),
+                    issue_id: "I_83".into(),
+                    issue_number: 83,
+                    provider_event_id: "E_reopen".into(),
+                    occurred_at: request.cutoff,
+                    kind: HistoryEventKind::IssueReopened,
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(HistoryPage {
+            events,
+            next_cursor: None,
+            resume_cursor: Some(if request.cursor.is_some() {
+                "CUR_NEW".into()
+            } else {
+                "CUR_END".into()
+            }),
+            complete: true,
+        })
+    }
+}
+
+#[tokio::test]
+async fn history_endpoint_is_authenticated_scoped_and_sequence_incremental() {
+    let state = state(Some("session-token"));
+    state
+        .spaces
+        .lock()
+        .await
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    state
+        .history
+        .initialize_repository(&RepositorySeed {
+            space_id: "o-r".into(),
+            provider_repository_id: "R_repo".into(),
+            verified_through: 500,
+            timeline_required: false,
+            issues: vec![
+                IssueSyncMetadata {
+                    issue_id: "I_2".into(),
+                    number: 2,
+                    created_at: 200,
+                    updated_at: 300,
+                    milestone: None,
+                },
+                IssueSyncMetadata {
+                    issue_id: "I_1".into(),
+                    number: 1,
+                    created_at: 100,
+                    updated_at: 300,
+                    milestone: None,
+                },
+            ],
+        })
+        .unwrap();
+    let base = serve(state).await;
+    let client = reqwest::Client::new();
+
+    let unauthorized = client
+        .get(format!("{base}/api/spaces/o-r/history"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), reqwest::StatusCode::UNAUTHORIZED);
+
+    let full = client
+        .get(format!("{base}/api/spaces/o-r/history"))
+        .bearer_auth("session-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(full.status(), reqwest::StatusCode::OK);
+    let full: serde_json::Value = full.json().await.unwrap();
+    assert_eq!(full["summary"]["state"], "complete");
+    assert_eq!(full["events"].as_array().unwrap().len(), 2);
+    assert_eq!(full["events"][0]["issue_number"], 1);
+    assert_eq!(full["events"][1]["issue_number"], 2);
+    assert!(full.get("database_path").is_none());
+    assert!(full.get("provider_response").is_none());
+
+    let first_sequence = full["events"][0]["sequence"].as_u64().unwrap();
+    let delta: serde_json::Value = client
+        .get(format!(
+            "{base}/api/spaces/o-r/history?after={first_sequence}"
+        ))
+        .bearer_auth("session-token")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(delta["events"].as_array().unwrap().len(), 1);
+    assert_eq!(delta["events"][0]["issue_number"], 2);
+
+    let unknown = client
+        .get(format!("{base}/api/spaces/unknown/history"))
+        .bearer_auth("session-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn history_endpoint_serves_new_deltas_while_catch_up_verification_is_building() {
+    let state = state(None);
+    state
+        .spaces
+        .lock()
+        .await
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let metadata = |updated_at| IssueSyncMetadata {
+        issue_id: "I_1".into(),
+        number: 1,
+        created_at: 100,
+        updated_at,
+        milestone: None,
+    };
+    let seed = |verified_through, updated_at| RepositorySeed {
+        space_id: "o-r".into(),
+        provider_repository_id: "R_repo".into(),
+        verified_through,
+        timeline_required: true,
+        issues: vec![metadata(updated_at)],
+    };
+    state
+        .history
+        .initialize_repository(&seed(500, 400))
+        .unwrap();
+    state
+        .history
+        .checkpoint_page(&PageCheckpoint {
+            space_id: "o-r".into(),
+            issue_id: "I_1".into(),
+            events: vec![],
+            next_cursor: None,
+            resume_cursor: Some("CUR_END".into()),
+            complete: true,
+        })
+        .unwrap();
+    state
+        .history
+        .initialize_repository(&seed(500, 400))
+        .unwrap();
+    let first_sequence = state.history.summary("o-r").unwrap().unwrap().revision;
+
+    state
+        .history
+        .initialize_repository(&seed(700, 500))
+        .unwrap();
+    state
+        .history
+        .checkpoint_page(&PageCheckpoint {
+            space_id: "o-r".into(),
+            issue_id: "I_1".into(),
+            events: vec![HistoryEvent {
+                sequence: 0,
+                repository_id: "R_repo".into(),
+                issue_id: "I_1".into(),
+                issue_number: 1,
+                provider_event_id: "E_close".into(),
+                occurred_at: 600,
+                kind: HistoryEventKind::IssueClosed,
+            }],
+            next_cursor: None,
+            resume_cursor: Some("CUR_NEW".into()),
+            complete: true,
+        })
+        .unwrap();
+
+    let base = serve(state).await;
+    let delta: serde_json::Value = reqwest::get(format!(
+        "{base}/api/spaces/o-r/history?after={first_sequence}"
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+
+    assert_eq!(delta["summary"]["state"], "building");
+    assert_eq!(delta["summary"]["verified_through"], 500);
+    assert_eq!(delta["events"].as_array().unwrap().len(), 1);
+    assert_eq!(delta["events"][0]["provider_event_id"], "E_close");
+}
+
+struct HistorySnapshotProvider;
+
+#[async_trait::async_trait]
+impl Provider for HistorySnapshotProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        Ok(ProviderSnapshot::with_history(
+            None,
+            Some("R_repo".into()),
+            Some(500),
+            vec![RawIssue {
+                number: 78,
+                parent_issue: None,
+                title: "History".into(),
+                body: String::new(),
+                state: IssueState::Open,
+                assignees: vec![],
+                milestone: None,
+                labels: vec![],
+                blocked_by: vec![],
+                url: "https://github.com/o/r/issues/78".into(),
+            }],
+            vec![IssueSyncMetadata {
+                issue_id: "I_78".into(),
+                number: 78,
+                created_at: 100,
+                updated_at: 200,
+                milestone: None,
+            }],
+        ))
+    }
+
+    async fn fetch_history_page(
+        &self,
+        _repo: &RepoRef,
+        request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        Ok(HistoryPage {
+            events: vec![],
+            next_cursor: None,
+            resume_cursor: request.cursor.clone(),
+            complete: true,
+        })
+    }
+}
+
+struct LifecycleSnapshotProvider(AtomicUsize);
+
+struct RateLimitedSnapshotProvider;
+
+#[async_trait::async_trait]
+impl Provider for RateLimitedSnapshotProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        Ok(ProviderSnapshot::with_history(
+            None,
+            Some("R_repo".into()),
+            Some(500),
+            vec![RawIssue {
+                number: 83,
+                parent_issue: None,
+                title: "Rate limited history".into(),
+                body: String::new(),
+                state: IssueState::Open,
+                assignees: vec![],
+                milestone: None,
+                labels: vec![],
+                blocked_by: vec![],
+                url: "https://github.com/o/r/issues/83".into(),
+            }],
+            vec![IssueSyncMetadata {
+                issue_id: "I_83".into(),
+                number: 83,
+                created_at: 100,
+                updated_at: 400,
+                milestone: None,
+            }],
+        ))
+    }
+
+    async fn fetch_history_page(
+        &self,
+        _repo: &RepoRef,
+        _request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        Err(ProviderError::RateLimited {
+            reset_epoch: Some(2_000_000_000),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for LifecycleSnapshotProvider {
+    async fn fetch(&self, _repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        Ok(ProviderSnapshot::with_history(
+            None,
+            Some("R_repo".into()),
+            Some(500),
+            vec![RawIssue {
+                number: 79,
+                parent_issue: None,
+                title: "Lifecycle".into(),
+                body: String::new(),
+                state: IssueState::Open,
+                assignees: vec![],
+                milestone: None,
+                labels: vec![],
+                blocked_by: vec![],
+                url: "https://github.com/o/r/issues/79".into(),
+            }],
+            vec![IssueSyncMetadata {
+                issue_id: "I_79".into(),
+                number: 79,
+                created_at: 100,
+                updated_at: 400,
+                milestone: None,
+            }],
+        ))
+    }
+
+    async fn fetch_history_page(
+        &self,
+        _repo: &RepoRef,
+        request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        assert_eq!(request.issue_id, "I_79");
+        assert_eq!(request.issue_number, 79);
+        assert_eq!(request.cursor, None);
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(HistoryPage {
+            events: vec![
+                HistoryEvent {
+                    sequence: 0,
+                    repository_id: "R_repo".into(),
+                    issue_id: "I_79".into(),
+                    issue_number: 79,
+                    provider_event_id: "E_close".into(),
+                    occurred_at: 200,
+                    kind: HistoryEventKind::IssueClosed,
+                },
+                HistoryEvent {
+                    sequence: 0,
+                    repository_id: "R_repo".into(),
+                    issue_id: "I_79".into(),
+                    issue_number: 79,
+                    provider_event_id: "E_reopen".into(),
+                    occurred_at: 300,
+                    kind: HistoryEventKind::IssueReopened,
+                },
+            ],
+            next_cursor: None,
+            resume_cursor: Some("CUR_END".into()),
+            complete: true,
+        })
+    }
+}
+
+#[tokio::test]
+async fn successful_current_sync_seeds_creation_history_and_publishes_its_summary() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open(directory.path().join("history.sqlite3")).unwrap();
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+        history: history.clone(),
+    });
+
+    let poller = spawn_poller(
+        state,
+        Arc::new(HistorySnapshotProvider),
+        Cache::new(directory.path().join("cache")),
+        Duration::from_secs(60),
+    );
+    let model = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            receiver
+                .changed()
+                .await
+                .expect("the model hub should stay open");
+            let model = receiver.borrow().clone();
+            if model.spaces[0].history.state == HistoryImportState::Complete {
+                break model;
+            }
+        }
+    })
+    .await
+    .expect("the startup import and catch-up verification should publish");
+    assert_eq!(model.spaces[0].stars[0].number, 78);
+    assert_eq!(model.spaces[0].history.state, HistoryImportState::Complete);
+    assert_eq!(model.spaces[0].history.completed_issues, 1);
+    assert_eq!(history.events_after("o-r", 0).unwrap().len(), 1);
+
+    poller.abort();
+}
+
+#[tokio::test]
+async fn lifecycle_import_publishes_building_then_complete_without_blocking_current_stars() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open(directory.path().join("history.sqlite3")).unwrap();
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+        history: history.clone(),
+    });
+    let provider = Arc::new(LifecycleSnapshotProvider(AtomicUsize::new(0)));
+
+    let poller = spawn_poller(
+        state,
+        provider.clone(),
+        Cache::new(directory.path().join("cache")),
+        Duration::from_secs(60),
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            receiver.changed().await.unwrap();
+            let model = receiver.borrow().clone();
+            assert_eq!(model.spaces[0].stars[0].number, 79);
+            if model.spaces[0].history.state == HistoryImportState::Complete {
+                break;
+            }
+            assert_eq!(model.spaces[0].history.state, HistoryImportState::Building);
+        }
+    })
+    .await
+    .expect("the lifecycle import should complete");
+
+    assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        history
+            .events_after("o-r", 0)
+            .unwrap()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            HistoryEventKind::IssueCreated { milestone: None },
+            HistoryEventKind::IssueClosed,
+            HistoryEventKind::IssueReopened,
+        ]
+    );
+
+    poller.abort();
+}
+
+#[tokio::test]
+async fn history_rate_limit_publishes_reset_evidence_without_discarding_pending_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let (hub, mut receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open(directory.path().join("history.sqlite3")).unwrap();
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+        history: history.clone(),
+    });
+    let poller = spawn_poller(
+        state,
+        Arc::new(RateLimitedSnapshotProvider),
+        Cache::new(directory.path().join("cache")),
+        Duration::from_secs(60),
+    );
+
+    let summary = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            receiver.changed().await.unwrap();
+            let summary = receiver.borrow().spaces[0].history.clone();
+            if summary.state == HistoryImportState::RateLimited {
+                break summary;
+            }
+        }
+    })
+    .await
+    .expect("rate limit evidence should be published");
+
+    assert_eq!(summary.resume_at, Some(2_000_000_000));
+    assert_eq!(
+        summary.diagnostic.as_deref(),
+        Some("GitHub rate limit exceeded")
+    );
+    assert!(history.pending_issue("o-r").unwrap().is_some());
+    poller.abort();
+}
+
+#[tokio::test]
+async fn unchanged_polls_make_zero_history_requests_and_changed_issues_resume_from_cursor() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut spaces = SpaceStore::load(directory.path().join("spaces.toml"));
+    spaces
+        .add(SpaceEntry::new(
+            RepoRef {
+                owner: "o".into(),
+                name: "r".into(),
+            },
+            None,
+        ))
+        .unwrap();
+    let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open(directory.path().join("history.sqlite3")).unwrap();
+    let state = Arc::new(AppState {
+        hub,
+        token: None,
+        spaces: tokio::sync::Mutex::new(spaces),
+        refresh: Arc::new(tokio::sync::Notify::new()),
+        history: history.clone(),
+    });
+    let provider = Arc::new(DeltaSnapshotProvider::new());
+    let poller = spawn_poller(
+        state.clone(),
+        provider.clone(),
+        Cache::new(directory.path().join("cache")),
+        Duration::from_secs(60),
+    );
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if provider.snapshots.load(Ordering::SeqCst) >= 2
+                && history
+                    .summary("o-r")
+                    .unwrap()
+                    .is_some_and(|summary| summary.state == HistoryImportState::Complete)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("initial import should receive catch-up verification");
+    assert_eq!(provider.history_requests.lock().unwrap().len(), 1);
+
+    state.refresh.notify_one();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while provider.snapshots.load(Ordering::SeqCst) < 3 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("unchanged current snapshot should complete");
+    assert_eq!(provider.history_requests.lock().unwrap().len(), 1);
+
+    state.refresh.notify_one();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if provider.snapshots.load(Ordering::SeqCst) >= 5
+                && provider.history_requests.lock().unwrap().len() == 2
+                && history
+                    .summary("o-r")
+                    .unwrap()
+                    .is_some_and(|summary| summary.state == HistoryImportState::Complete)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("changed issue should import once and receive catch-up verification");
+
+    let requests = provider.history_requests.lock().unwrap();
+    assert_eq!(requests[0].cursor, None);
+    assert_eq!(requests[1].cursor.as_deref(), Some("CUR_END"));
+    drop(requests);
+    assert_eq!(
+        history
+            .events_after("o-r", 0)
+            .unwrap()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            HistoryEventKind::IssueCreated { milestone: None },
+            HistoryEventKind::IssueClosed,
+            HistoryEventKind::IssueReopened,
+        ]
+    );
+
+    poller.abort();
+}
+
 struct FailingProvider;
 
 #[async_trait::async_trait]
@@ -205,6 +891,7 @@ async fn add_repo_space_immediately_populates_the_model() {
         token: None,
         spaces: tokio::sync::Mutex::new(SpaceStore::load(directory.path().join("spaces.toml"))),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history: HistoryStore::open_in_memory().unwrap(),
     });
     let poller = spawn_poller(
         state.clone(),
@@ -308,11 +995,28 @@ async fn failed_sync_publishes_the_cached_model_as_stale_with_the_error() {
     spaces.add(SpaceEntry::new(repo, None)).unwrap();
     spaces.save().unwrap();
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open_in_memory().unwrap();
+    history
+        .initialize_repository(&RepositorySeed {
+            space_id: "o-r".into(),
+            provider_repository_id: "R_repo".into(),
+            verified_through: 1_753_000_000,
+            timeline_required: false,
+            issues: vec![IssueSyncMetadata {
+                issue_id: "I_7".into(),
+                number: 7,
+                created_at: 1_752_000_000,
+                updated_at: 1_752_000_000,
+                milestone: None,
+            }],
+        })
+        .unwrap();
     let state = Arc::new(AppState {
         hub,
         token: None,
         spaces: tokio::sync::Mutex::new(spaces),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history: history.clone(),
     });
     let poller = spawn_poller(
         state.clone(),
@@ -350,6 +1054,15 @@ async fn failed_sync_publishes_the_cached_model_as_stale_with_the_error() {
         model.spaces[0].error.as_deref(),
         Some("HTTP request failed: offline")
     );
+    assert_eq!(model.spaces[0].history.state, HistoryImportState::Complete);
+    assert_eq!(history.events_after("o-r", 0).unwrap().len(), 1);
+    let replay = reqwest::get(format!("{base}/api/spaces/o-r/history"))
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), reqwest::StatusCode::OK);
+    let replay: serde_json::Value = replay.json().await.unwrap();
+    assert_eq!(replay["summary"]["state"], "complete");
+    assert_eq!(replay["events"].as_array().unwrap().len(), 1);
     poller.abort();
 }
 
@@ -390,6 +1103,7 @@ async fn failed_unconfirmed_provider_keeps_cached_issues_but_suppresses_cached_v
         token: None,
         spaces: tokio::sync::Mutex::new(spaces),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history: HistoryStore::open_in_memory().unwrap(),
     });
     let poller = spawn_poller(
         state,
@@ -431,6 +1145,7 @@ async fn successful_sync_stays_fresh_when_the_cache_cannot_be_written() {
         token: None,
         spaces: tokio::sync::Mutex::new(spaces),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history: HistoryStore::open_in_memory().unwrap(),
     });
     let poller = spawn_poller(
         state,
@@ -455,11 +1170,13 @@ async fn delete_space_removes_the_persisted_entry() {
     let directory = tempfile::tempdir().unwrap();
     let file = directory.path().join("spaces.toml");
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
+    let history = HistoryStore::open_in_memory().unwrap();
     let state = Arc::new(AppState {
         hub,
         token: None,
         spaces: tokio::sync::Mutex::new(SpaceStore::load(file.clone())),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history: history.clone(),
     });
     let base = serve(state).await;
     let client = reqwest::Client::new();
@@ -473,6 +1190,21 @@ async fn delete_space_removes_the_persisted_entry() {
             .status(),
         reqwest::StatusCode::OK
     );
+    history
+        .initialize_repository(&RepositorySeed {
+            space_id: "o-r".into(),
+            provider_repository_id: "R_repo".into(),
+            verified_through: 500,
+            timeline_required: false,
+            issues: vec![IssueSyncMetadata {
+                issue_id: "I_1".into(),
+                number: 1,
+                created_at: 100,
+                updated_at: 200,
+                milestone: None,
+            }],
+        })
+        .unwrap();
 
     let deleted = client
         .delete(format!("{base}/api/spaces/o-r"))
@@ -482,6 +1214,7 @@ async fn delete_space_removes_the_persisted_entry() {
 
     assert_eq!(deleted.status(), reqwest::StatusCode::NO_CONTENT);
     assert!(SpaceStore::load(file).entries().is_empty());
+    assert!(history.summary("o-r").unwrap().is_none());
 }
 
 #[tokio::test]
@@ -517,6 +1250,7 @@ async fn add_path_space_detects_and_persists_the_github_origin() {
         token: None,
         spaces: tokio::sync::Mutex::new(SpaceStore::load(file.clone())),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history: HistoryStore::open_in_memory().unwrap(),
     });
     let base = serve(state).await;
 
@@ -560,6 +1294,7 @@ async fn poller_repeats_on_the_configured_interval() {
         token: None,
         spaces: tokio::sync::Mutex::new(spaces),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history: HistoryStore::open_in_memory().unwrap(),
     });
     let poller = spawn_poller(
         state.clone(),

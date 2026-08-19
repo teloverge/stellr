@@ -27,7 +27,7 @@ fi
 npm --prefix "$repo/web" run build
 (
   cd "$repo/crates/app"
-  "$cli" build --bundles dmg --target universal-apple-darwin
+  "$cli" build --features desktop --bundles dmg --target universal-apple-darwin
 )
 
 bundle_root="$repo/target/universal-apple-darwin/release/bundle"

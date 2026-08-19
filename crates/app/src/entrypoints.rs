@@ -1,17 +1,21 @@
-use std::{ffi::OsString, io::Write, path::PathBuf, sync::Arc, time::Duration};
+#[cfg(feature = "desktop")]
+use std::{ffi::OsString, path::PathBuf};
+use std::{io::Write, sync::Arc, time::Duration};
 
 use clap::Parser;
 use stellr_github::{auth::resolve_token, cache::Cache, sync::GithubProvider};
 use stellr_server::spaces::SpaceStore;
 
+#[cfg(feature = "desktop")]
+use crate::desktop::{self, DesktopLaunch};
 use crate::{
     cli::{Cli, Command, ServeArgs},
-    desktop::{self, DesktopLaunch},
     runtime::{RuntimeOptions, SessionAuth, start},
 };
 
 pub type DynError = Box<dyn std::error::Error + Send + Sync>;
 
+#[cfg(feature = "desktop")]
 fn effective_launch_dir(
     current: PathBuf,
     appimage: Option<OsString>,
@@ -27,6 +31,7 @@ fn effective_launch_dir(
     current
 }
 
+#[cfg(feature = "desktop")]
 fn launch_current_dir() -> std::io::Result<PathBuf> {
     Ok(effective_launch_dir(
         std::env::current_dir()?,
@@ -35,6 +40,7 @@ fn launch_current_dir() -> std::io::Result<PathBuf> {
     ))
 }
 
+#[cfg(feature = "desktop")]
 fn desktop_launch_from_cli(cli: Cli, cwd: PathBuf) -> Result<DesktopLaunch, DynError> {
     match cli.command {
         Some(Command::Open(args)) => Ok(DesktopLaunch {
@@ -49,10 +55,10 @@ fn desktop_launch_from_cli(cli: Cli, cwd: PathBuf) -> Result<DesktopLaunch, DynE
         }),
         Some(Command::Serve(_)) => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "serve is available through stellr.exe",
+            "serve is available through the stellr CLI executable",
         )
         .into()),
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, feature = "desktop"))]
         Some(Command::Acceptance(_)) => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "acceptance is available through stellr.exe",
@@ -61,6 +67,7 @@ fn desktop_launch_from_cli(cli: Cli, cwd: PathBuf) -> Result<DesktopLaunch, DynE
     }
 }
 
+#[cfg(feature = "desktop")]
 pub fn desktop_launch_from<I, T>(args: I, cwd: PathBuf) -> Result<DesktopLaunch, DynError>
 where
     I: IntoIterator<Item = T>,
@@ -69,6 +76,7 @@ where
     desktop_launch_from_cli(Cli::try_parse_from(args)?, cwd)
 }
 
+#[cfg(feature = "desktop")]
 pub fn run_desktop() -> Result<(), DynError> {
     let launch = desktop_launch_from(std::env::args_os(), launch_current_dir()?)?;
     desktop::run(launch).map_err(Into::into)
@@ -77,7 +85,7 @@ pub fn run_desktop() -> Result<(), DynError> {
 pub fn run_cli() -> Result<(), DynError> {
     let cli = Cli::parse();
     match cli {
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, feature = "desktop"))]
         Cli {
             command: Some(Command::Acceptance(args)),
             ..
@@ -92,24 +100,47 @@ pub fn run_cli() -> Result<(), DynError> {
             .enable_all()
             .build()?
             .block_on(serve(args)),
+        #[cfg(feature = "desktop")]
         desktop_cli => {
             let launch = desktop_launch_from_cli(desktop_cli, launch_current_dir()?)?;
             desktop::run(launch).map_err(Into::into)
         }
+        #[cfg(not(feature = "desktop"))]
+        Cli { command: None } => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the headless build requires the `serve` command",
+        )
+        .into()),
     }
 }
 
 async fn serve(args: ServeArgs) -> Result<(), DynError> {
     let provider_token = resolve_token()?;
     let provider = Arc::new(GithubProvider::new(provider_token)?);
+    let session_auth = if args.no_token {
+        SessionAuth::Disabled
+    } else if let Some(token) = std::env::var_os("STELLR_SESSION_TOKEN") {
+        let token = token.into_string().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "STELLR_SESSION_TOKEN must be valid UTF-8",
+            )
+        })?;
+        if token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "STELLR_SESSION_TOKEN must be exactly 32 hexadecimal characters",
+            )
+            .into());
+        }
+        SessionAuth::Fixed(token.to_ascii_lowercase())
+    } else {
+        SessionAuth::Required
+    };
     let runtime = start(
         RuntimeOptions {
             address: args.addr,
-            session_auth: if args.no_token {
-                SessionAuth::Disabled
-            } else {
-                SessionAuth::Required
-            },
+            session_auth,
             issue: args.issue,
             spaces_file: SpaceStore::default_file(),
             cache_root: Cache::default_root(),
@@ -127,13 +158,17 @@ async fn serve(args: ServeArgs) -> Result<(), DynError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, path::PathBuf};
+    use std::num::NonZeroU64;
+    #[cfg(feature = "desktop")]
+    use std::path::PathBuf;
 
     use clap::Parser;
 
+    #[cfg(feature = "desktop")]
     use super::{desktop_launch_from, effective_launch_dir};
     use crate::cli::{Cli, Command};
 
+    #[cfg(feature = "desktop")]
     #[test]
     fn desktop_entry_accepts_bare_open_and_protocol_launches() {
         let cwd = PathBuf::from(r"D:\Apps\Stellr");
@@ -158,6 +193,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "desktop")]
     #[test]
     fn desktop_entry_rejects_console_only_serve() {
         let error = desktop_launch_from(
@@ -167,9 +203,10 @@ mod tests {
         .err()
         .expect("the desktop entry must reject console-only serve");
 
-        assert!(error.to_string().contains("stellr.exe"));
+        assert!(error.to_string().contains("stellr CLI"));
     }
 
+    #[cfg(feature = "desktop")]
     #[test]
     fn bare_launch_selects_desktop_mode_without_a_repository_target() {
         let launch =
@@ -217,6 +254,7 @@ mod tests {
         assert!(Cli::try_parse_from(["stellr", "serve", "--issue", "0"]).is_err());
     }
 
+    #[cfg(feature = "desktop")]
     #[test]
     fn open_accepts_one_path_url_slug_or_stellr_target() {
         for target in [
@@ -235,6 +273,7 @@ mod tests {
         assert!(Cli::try_parse_from(["stellr", "open", "one", "two"]).is_err());
     }
 
+    #[cfg(feature = "desktop")]
     #[test]
     fn a_registered_stellr_protocol_link_is_accepted_as_the_hidden_root_target() {
         let link = "stellr://space?repo=teloverge%2Fstellr&issue=62";
@@ -249,6 +288,7 @@ mod tests {
         assert!(Cli::try_parse_from(["stellr", "not-a-command"]).is_err());
     }
 
+    #[cfg(feature = "desktop")]
     #[test]
     fn appimage_launch_uses_the_callers_original_working_directory() {
         let mounted = std::env::temp_dir().join("mounted-appimage").join("usr");
@@ -264,6 +304,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "desktop")]
     #[test]
     fn unpackaged_launch_ignores_an_unpaired_original_working_directory() {
         let current = std::env::temp_dir().join("stellr-repository");
@@ -275,6 +316,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "desktop")]
     #[test]
     fn appimage_launch_rejects_a_relative_original_working_directory() {
         let mounted = std::env::temp_dir().join("mounted-appimage").join("usr");

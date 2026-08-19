@@ -1,5 +1,7 @@
 // Derived from chartr (https://github.com/rengwu/chartr), MIT, Copyright (c) 2026 John Goh.
 
+import type { WorkPriority } from './work-priority'
+
 export type TicketStatus =
   | 'open'
   | 'blocked'
@@ -20,6 +22,11 @@ export interface Ticket {
   readyForAgent?: boolean
   assignedToViewer?: boolean
   blocked?: boolean
+  visible?: boolean
+  focusStatus?: TicketStatus
+  milestone?: string | null
+  historical?: boolean
+  workPriority?: WorkPriority
 }
 
 export interface Map {

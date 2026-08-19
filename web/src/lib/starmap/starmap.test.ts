@@ -13,6 +13,7 @@ import * as layout from './layout'
 import { computeLayout, structureSignature } from './layout'
 import { GRAMMAR, nonColorSignature, type SessionState } from './session'
 import type { Ticket } from './model'
+import type { HistoryEvent } from '../history'
 
 // A small implementation fixture — a real-shaped graph with a fan-out and a
 // join, so layout has edges to relax and ranks to bias.
@@ -597,6 +598,152 @@ describe('the session overlay on the seam', () => {
   })
 })
 
+describe('temporal visibility on the renderer seam', () => {
+  it('enters and leaves neutral historical focus without refitting the camera', () => {
+    const { sm } = mounted()
+    const live = fixture().map((ticket) => ({
+      ...ticket,
+      readyForAgent: ticket.num === 2,
+      focusStatus: ticket.num === 2 ? ('frontier' as const) : ticket.status,
+      historical: false,
+    }))
+    sm.setModel(live, {}, 1)
+    const camera = sm.camera()
+
+    sm.setModel(
+      live.map((ticket) => ({
+        ...ticket,
+        status: 'open',
+        readyForAgent: false,
+        focusStatus: 'open',
+        historical: true,
+      })),
+      {},
+      1,
+    )
+    expect(sm.camera()).toEqual(camera)
+
+    sm.setModel(live, {}, 1)
+    expect(sm.camera()).toEqual(camera)
+  })
+
+  it('hides future stars without moving the constellation or camera', () => {
+    const { sm } = mounted()
+    const current = fixture().map((ticket) => ({
+      ...ticket,
+      visible: true,
+      focusStatus: ticket.status,
+    }))
+    sm.setModel(current, {}, 1)
+    const positions = sm.positions()
+    const camera = sm.camera()
+
+    sm.setModel(
+      current.map((ticket) => ({
+        ...ticket,
+        status: 'open',
+        visible: ticket.num !== 2,
+      })),
+      {},
+      1,
+    )
+
+    expect(sm.positions()).toEqual(positions)
+    expect(sm.camera()).toEqual(camera)
+    expect(sm.screenOf(1)).not.toBeNull()
+    expect(sm.screenOf(2)).toBeNull()
+  })
+
+  it('reshapes milestone membership without moving stars or the camera', () => {
+    const { sm } = mounted()
+    const initial = fixture().map((ticket) => ({
+      ...ticket,
+      milestone: ticket.num <= 2 ? 'Alpha' : null,
+    }))
+    sm.setModel(initial)
+    const positions = sm.positions()
+    const camera = sm.camera()
+
+    sm.setModel(
+      initial.map((ticket) =>
+        ticket.num === 2
+          ? { ...ticket, milestone: 'Beta' }
+          : ticket.num === 3
+            ? { ...ticket, milestone: 'Alpha' }
+            : ticket,
+      ),
+    )
+
+    expect(sm.milestoneMemberships()).toEqual({ Alpha: [1, 3], Beta: [2] })
+    expect(sm.positions()).toEqual(positions)
+    expect(sm.camera()).toEqual(camera)
+  })
+
+  it('pulses crossed history with bounded captions without moving or selecting', () => {
+    const { sm } = mounted()
+    sm.setModel(fixture())
+    const positions = sm.positions()
+    const camera = sm.camera()
+    const selections: (number | null)[] = []
+    sm.onSelect((number) => selections.push(number))
+    const crossed: HistoryEvent[] = [
+      {
+        sequence: 1,
+        repository_id: 'R_repo',
+        issue_id: 'I_1',
+        issue_number: 1,
+        provider_event_id: 'E_created',
+        occurred_at: 100,
+        kind: 'issue_created',
+        milestone: null,
+      },
+      {
+        sequence: 2,
+        repository_id: 'R_repo',
+        issue_id: 'I_2',
+        issue_number: 2,
+        provider_event_id: 'E_milestone',
+        occurred_at: 101,
+        kind: 'milestone_changed',
+        from: null,
+        to: { id: null, title: 'M2' },
+      },
+    ]
+
+    sm.replayHistory(crossed, false)
+
+    expect(sm.pulsing()).toEqual([1, 2])
+    expect(sm.ticker()).toContain('#01 created')
+    expect(sm.ticker()).toContain('#02 moved to M2')
+    expect(sm.positions()).toEqual(positions)
+    expect(sm.camera()).toEqual(camera)
+    expect(selections).toEqual([])
+  })
+
+  it('keeps playback captions but omits pulses under reduced motion', () => {
+    const { sm } = mounted()
+    sm.setModel(fixture())
+
+    sm.replayHistory(
+      [
+        {
+          sequence: 1,
+          repository_id: 'R_repo',
+          issue_id: 'I_1',
+          issue_number: 1,
+          provider_event_id: 'E_reopen',
+          occurred_at: 100,
+          kind: 'issue_reopened',
+        },
+      ],
+      true,
+    )
+
+    expect(sm.pulsing()).toEqual([])
+    expect(sm.ticker()).toContain('#01 reopened')
+  })
+})
+
 // One frame against a recording stub context. The canvas *feel* can only be
 // judged by eye (starmap-design.md, Open risk), but the draw path for every
 // session state should at least run, and the one thing the overlay writes as
@@ -708,6 +855,22 @@ describe('painting the overlay', () => {
     expect(texts.some((text) => text.startsWith('CURRENT / READY · 08'))).toBe(true)
   })
 
+  it('draws milestone titles as canvas text without interpreting markup', () => {
+    const { sm } = mounted()
+    const title = 'Launch <script>alert(1)</script>'
+    sm.setModel(
+      fixture().map((ticket) => ({
+        ...ticket,
+        milestone: ticket.num === 1 ? title : null,
+      })),
+    )
+
+    frame()
+
+    expect(texts).toContain(title)
+    expect(document.querySelector('script')).toBeNull()
+  })
+
   it('draws every session state without falling over', () => {
     const { sm } = mounted()
     for (const b of SESSION_LIFECYCLE) {
@@ -788,7 +951,14 @@ describe('label placement', () => {
   // Like stubContext, but recording where each string landed and how it was
   // aligned, so the drawn boxes can be reconstructed.
   function recordingContext() {
-    const drawn: { text: string; x: number; y: number; align: string; font: string }[] = []
+    const drawn: {
+      text: string
+      x: number
+      y: number
+      align: string
+      font: string
+      fill: string
+    }[] = []
     const arcs: {
       x: number
       y: number
@@ -837,6 +1007,7 @@ describe('label placement', () => {
           y,
           align: this.textAlign as string,
           font: this.font as string,
+          fill: this.fillStyle as string,
         })
       },
     }
@@ -854,7 +1025,12 @@ describe('label placement', () => {
     globalThis.requestAnimationFrame = realRaf
   })
 
-  function place(tickets: Ticket[], sessions: Record<number, SessionState> = {}) {
+  function place(
+    tickets: Ticket[],
+    sessions: Record<number, SessionState> = {},
+    currentIssue: number | null = null,
+    selectedIssue: number | null = null,
+  ) {
     const { ctx, drawn } = recordingContext()
     let frames: FrameRequestCallback[] = []
     HTMLCanvasElement.prototype.getContext = (() => ctx) as never
@@ -865,7 +1041,8 @@ describe('label placement', () => {
     globalThis.cancelAnimationFrame = (() => {}) as never
 
     const { sm } = mounted()
-    sm.setModel(tickets, sessions)
+    sm.setModel(tickets, sessions, currentIssue)
+    if (selectedIssue !== null) sm.select(selectedIssue)
     const cb = frames.pop()
     frames = []
     cb?.(0)
@@ -886,6 +1063,24 @@ describe('label placement', () => {
     })
     return { sm, labels, boxes }
   }
+
+  it('gives label slots and colours to selected, current, then workflow priority', () => {
+    const tickets: Ticket[] = [
+      { num: 5, slug: '5', title: 'Selected blocked', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: false, workPriority: 'blocked' },
+      { num: 6, slug: '6', title: 'Current blocked', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: false, workPriority: 'blocked' },
+      { num: 40, slug: '40', title: 'In progress', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: false, workPriority: 'in_progress' },
+      { num: 30, slug: '30', title: 'Ready', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true, readyForAgent: true, workPriority: 'ready' },
+      { num: 20, slug: '20', title: 'Frontier', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: true, workPriority: 'frontier' },
+      { num: 10, slug: '10', title: 'Blocked', type: 'task', status: 'open', blockedBy: [], parentIssue: null, frontier: false, workPriority: 'blocked' },
+    ]
+
+    const { labels } = place(tickets, {}, 6, 5)
+    const issueNumber = (text: string) => Number(text.match(/\b(\d+)\b/)?.[1])
+
+    expect(labels.map((label) => issueNumber(label.text))).toEqual([5, 6, 40, 30, 20, 10])
+    expect(labels.find((label) => issueNumber(label.text) === 40)?.fill).toBe('#ffe6a0')
+    expect(labels.find((label) => issueNumber(label.text) === 30)?.fill).toBe('#b3e5ff')
+  })
 
   const overlaps = (a: { x0: number; y0: number; x1: number; y1: number },
                     b: { x0: number; y0: number; x1: number; y1: number }) =>

@@ -4,9 +4,6 @@
 )]
 
 fn main() {
-    #[cfg(not(all(target_os = "windows", not(debug_assertions))))]
-    let result = stellr_app::entrypoints::run_cli();
-    #[cfg(all(target_os = "windows", not(debug_assertions)))]
     let result = stellr_app::entrypoints::run_desktop();
 
     if let Err(_error) = result {

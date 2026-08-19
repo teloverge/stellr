@@ -8,8 +8,8 @@
     hasNativeShell,
     type ThemePreference,
   } from './native-shell'
+  import type { ConnectionStatus } from './control.svelte'
 
-  type Status = 'connecting' | 'open' | 'closed'
   type RowAction = 'refresh' | 'remove'
 
   interface RowMutation {
@@ -21,7 +21,7 @@
   interface SidebarProps {
     spaces: SpaceModel[]
     activeSpaceId: string | null
-    connectionStatus: Status
+    connectionStatus: ConnectionStatus
     select: (id: string) => void
     added: (id: string) => void
     removed: (id: string) => void
@@ -92,7 +92,8 @@
     return `Synced ${days} ${days === 1 ? 'day' : 'days'} ago`
   }
 
-  function connectionLabel(status: Status): string {
+  function connectionLabel(status: ConnectionStatus): string {
+    if (status === 'unauthorized') return 'Session expired'
     return status[0].toUpperCase() + status.slice(1)
   }
 

@@ -1,5 +1,5 @@
 use std::num::NonZeroU64;
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "desktop"))]
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand};
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
+    #[cfg(feature = "desktop")]
     #[arg(
         value_name = "STELLR_LINK",
         hide = true,
@@ -17,6 +18,7 @@ pub struct Cli {
     pub protocol_target: Option<String>,
 }
 
+#[cfg(feature = "desktop")]
 fn parse_protocol_target(value: &str) -> Result<String, String> {
     if value.starts_with("stellr://") {
         Ok(value.to_owned())
@@ -27,14 +29,15 @@ fn parse_protocol_target(value: &str) -> Result<String, String> {
 
 #[derive(Subcommand)]
 pub enum Command {
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "desktop"))]
     #[command(hide = true)]
     Acceptance(AcceptanceArgs),
     Serve(ServeArgs),
+    #[cfg(feature = "desktop")]
     Open(OpenArgs),
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "desktop"))]
 #[derive(Args)]
 pub struct AcceptanceArgs {
     #[arg(long)]
@@ -43,6 +46,7 @@ pub struct AcceptanceArgs {
     pub profile: PathBuf,
 }
 
+#[cfg(feature = "desktop")]
 #[derive(Args)]
 pub struct OpenArgs {
     pub target: String,

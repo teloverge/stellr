@@ -1,3 +1,5 @@
+#![cfg(feature = "os-credentials")]
+
 use stellr_github::credentials::{DEFAULT_ACCOUNT, OsCredentialStore, SERVICE_NAME};
 
 #[test]

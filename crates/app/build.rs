@@ -1,4 +1,10 @@
 fn main() {
+    #[cfg(feature = "desktop")]
+    build_desktop();
+}
+
+#[cfg(feature = "desktop")]
+fn build_desktop() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "begin_device_authorization",

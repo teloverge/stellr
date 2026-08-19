@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SpaceModel, Status } from '../model'
+import { projectTemporalSpace, type HistoryEvent } from '../history'
 import { edgesOf } from './layout'
 import { toRendererModel } from './adapt'
 
@@ -35,6 +36,11 @@ describe('toRendererModel', () => {
   it('maps every issue status and directs blocker edges toward the blocked issue', () => {
     const input = space()
     input.stars[0].parent_issue = 16
+    input.stars[0].labels = ['IN-PROGRESS']
+    input.stars[1].labels = ['in-progress']
+    input.stars[1].assignees = ['ada']
+    input.stars[3].labels = ['ready-for-agent']
+    input.stars[4].labels = ['ready-for-agent']
 
     const model = toRendererModel(input)
 
@@ -49,6 +55,20 @@ describe('toRendererModel', () => {
     })
     expect(model[1].parentIssue).toBeNull()
     expect(edgesOf(model)).toContainEqual({ from: 1, to: 5 })
+    expect(model.map((ticket) => ticket.workPriority)).toEqual([
+      'in_progress',
+      'terminal',
+      'in_progress',
+      'terminal',
+      'blocked',
+    ])
+    expect(model.map((ticket) => ticket.readyForAgent)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+    ])
   })
 
   it('marks only an unblocked ready-for-agent issue as actionable', () => {
@@ -65,6 +85,13 @@ describe('toRendererModel', () => {
       false,
       false,
       false,
+    ])
+    expect(model.map((ticket) => ticket.workPriority)).toEqual([
+      'ready',
+      'frontier',
+      'in_progress',
+      'terminal',
+      'blocked',
     ])
   })
 
@@ -99,5 +126,40 @@ describe('toRendererModel', () => {
       assignedToViewer: false,
       readyForAgent: true,
     })
+  })
+
+  it('passes temporal milestone membership to the renderer', () => {
+    const input = space()
+    input.stars[0].milestone = 'Launch <script>alert(1)</script>'
+
+    const model = toRendererModel(input)
+
+    expect(model[0].milestone).toBe('Launch <script>alert(1)</script>')
+  })
+
+  it('removes live workflow emphasis while preserving current dependency context', () => {
+    const input = space()
+    input.stars[0].labels = ['ready-for-agent']
+    const events: HistoryEvent[] = input.stars.map((star, index) => ({
+      sequence: index + 1,
+      repository_id: 'R_repo',
+      issue_id: `I_${star.number}`,
+      issue_number: star.number,
+      provider_event_id: `I_${star.number}:issue_created`,
+      occurred_at: 100,
+      kind: 'issue_created',
+      milestone: null,
+    }))
+
+    const model = toRendererModel(projectTemporalSpace(input, events, 100))
+
+    expect(model[0]).toMatchObject({
+      status: 'open',
+      frontier: false,
+      readyForAgent: false,
+      focusStatus: 'open',
+      historical: true,
+    })
+    expect(edgesOf(model)).toContainEqual({ from: 1, to: 5 })
   })
 })

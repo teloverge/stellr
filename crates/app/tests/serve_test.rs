@@ -7,9 +7,13 @@ use tokio::{
     time::{Duration, timeout},
 };
 
-async fn launch(arguments: &[&str]) -> (Child, String, TempDir) {
+async fn launch_with_session_token(
+    arguments: &[&str],
+    session_token: Option<&str>,
+) -> (Child, String, TempDir) {
     let profile = tempfile::tempdir().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_stellr"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_stellr"));
+    command
         .args(arguments)
         .env("APPDATA", profile.path().join("roaming"))
         .env("LOCALAPPDATA", profile.path().join("local"))
@@ -19,9 +23,11 @@ async fn launch(arguments: &[&str]) -> (Child, String, TempDir) {
         .env("GITHUB_TOKEN", "test-provider-token")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+        .kill_on_drop(true);
+    if let Some(session_token) = session_token {
+        command.env("STELLR_SESSION_TOKEN", session_token);
+    }
+    let mut child = command.spawn().unwrap();
     let stdout = child.stdout.take().unwrap();
     let line = timeout(
         Duration::from_secs(10),
@@ -32,6 +38,10 @@ async fn launch(arguments: &[&str]) -> (Child, String, TempDir) {
     .unwrap()
     .expect("stellr should print one line before serving");
     (child, line, profile)
+}
+
+async fn launch(arguments: &[&str]) -> (Child, String, TempDir) {
+    launch_with_session_token(arguments, None).await
 }
 
 #[tokio::test]
@@ -113,5 +123,22 @@ async fn serve_generates_a_session_token_and_gates_protected_routes_by_default()
         reqwest::StatusCode::OK
     );
 
+    child.kill().await.unwrap();
+}
+
+#[tokio::test]
+async fn serve_reuses_a_configured_session_token() {
+    let expected = "0123456789abcdef0123456789abcdef";
+    let (mut child, line, _profile) =
+        launch_with_session_token(&["serve", "--addr", "127.0.0.1:0"], Some(expected)).await;
+    let url = line
+        .strip_prefix("stellr cockpit: ")
+        .expect("the startup line should use the documented prefix");
+    let token = reqwest::Url::parse(url)
+        .unwrap()
+        .query_pairs()
+        .find_map(|(name, value)| (name == "token").then(|| value.into_owned()));
+
+    assert_eq!(token.as_deref(), Some(expected));
     child.kill().await.unwrap();
 }
