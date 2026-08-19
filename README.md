@@ -60,8 +60,8 @@ Node lockfile, so running plain `npm audit fix` there will fail.
 Authenticate with `gh auth login` or set `GITHUB_TOKEN`, then start the server:
 
 ```bash
-cargo run -p stellr-app -- serve
-cargo run -p stellr-app -- serve --addr 127.0.0.1:0 --issue 70
+cargo run -p stellr-app --bin stellr -- serve
+cargo run -p stellr-app --bin stellr -- serve --addr 127.0.0.1:0 --issue 70
 ```
 
 Open the printed `stellr cockpit` URL in a browser. The executable serves the

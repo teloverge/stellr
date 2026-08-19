@@ -1,7 +1,7 @@
 [package]
 name = "stellr-app"
 version = "0.1.0"
-default-run = "stellr"
+default-run = "stellr-desktop"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
