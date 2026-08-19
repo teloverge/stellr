@@ -1,6 +1,11 @@
 import type { Model } from './model'
 
-type ConnectionStatus = 'connecting' | 'open' | 'closed'
+export type ConnectionStatus = 'connecting' | 'open' | 'closed' | 'unauthorized'
+type SessionProbe = () => Promise<Response>
+
+function probeSession(): Promise<Response> {
+  return fetch('/api/model', { credentials: 'same-origin' })
+}
 
 export function pageIssue(): number | null {
   const raw = new URL(window.location.href).searchParams.get('issue')
@@ -49,8 +54,14 @@ export class Control {
   #token: string | null
   #url: string | null = null
 
-  constructor(token: string | null = takePageToken()) {
+  #sessionProbe: SessionProbe
+
+  constructor(
+    token: string | null = takePageToken(),
+    sessionProbe: SessionProbe = probeSession,
+  ) {
     this.#token = token
+    this.#sessionProbe = sessionProbe
   }
 
   connect(url?: string): void {
@@ -124,6 +135,31 @@ export class Control {
           this.#open(url)
         }
       }, 500)
+      void this.#detectExpiredSession(url)
     }
+  }
+
+  async #detectExpiredSession(url: string): Promise<void> {
+    let response: Response
+    try {
+      response = await this.#sessionProbe()
+    } catch {
+      return
+    }
+    if (response.status !== 401 || this.#url !== url) {
+      return
+    }
+
+    this.#url = null
+    this.#clearReconnect()
+    const socket = this.#socket
+    this.#socket = null
+    if (socket !== null) {
+      socket.onopen = null
+      socket.onmessage = null
+      socket.onclose = null
+      socket.close()
+    }
+    this.status = 'unauthorized'
   }
 }

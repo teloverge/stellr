@@ -156,6 +156,21 @@ describe('Control', () => {
     expect(control.status).toBe('closed')
   })
 
+  it('stops reconnecting when the server rejects the browser session', async () => {
+    const probe = vi.fn().mockResolvedValue(new Response(null, { status: 401 }))
+    const control = new Control(null, probe)
+    control.connect('ws://socket.example/ws/control')
+
+    FakeWebSocket.instances[0].emitClose()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(probe).toHaveBeenCalledOnce()
+    expect(control.status).toBe('unauthorized')
+    vi.advanceTimersByTime(500)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+
   it('cancels pending reconnect work when destroyed', () => {
     const control = new Control()
     control.connect('ws://socket.example/ws/control')

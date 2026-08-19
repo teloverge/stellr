@@ -25,7 +25,7 @@ if ($Channel -eq 'Release' -and [string]::IsNullOrWhiteSpace($CertificateThumbpr
 & npm --prefix (Join-Path $repo 'web') run build
 if ($LASTEXITCODE -ne 0) { throw "Frontend build failed with exit code $LASTEXITCODE." }
 
-$tauriArguments = @('build', '--bundles', 'nsis')
+$tauriArguments = @('build', '--features', 'desktop', '--bundles', 'nsis')
 $temporaryBundleConfig = $null
 $hostTuple = (& rustc --print host-tuple).Trim()
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($hostTuple)) {

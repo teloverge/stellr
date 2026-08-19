@@ -373,7 +373,13 @@
       />
     {/if}
     <section class="map-region" aria-label="Issue map">
-      {#if modelLoading}
+      {#if control.status === 'unauthorized'}
+        <StatePanel
+          kind="empty"
+          title="Session expired"
+          description="Reopen Stellr using the latest authenticated URL from the server launcher."
+        />
+      {:else if modelLoading}
         <StatePanel
           kind="loading"
           title="Opening observatory"

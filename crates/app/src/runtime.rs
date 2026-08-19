@@ -92,9 +92,10 @@ impl Provider for ProviderSlot {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionAuth {
     Required,
+    Fixed(String),
     Disabled,
 }
 
@@ -217,6 +218,7 @@ pub async fn start_with_polling(
     let address = listener.local_addr().map_err(RuntimeError::LocalAddress)?;
     let session_token = match options.session_auth {
         SessionAuth::Required => Some(session_token().map_err(RuntimeError::SessionToken)?),
+        SessionAuth::Fixed(token) => Some(token),
         SessionAuth::Disabled => None,
     };
     let spaces = SpaceStore::load(options.spaces_file);

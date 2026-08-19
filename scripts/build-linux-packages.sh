@@ -27,7 +27,7 @@ fi
 npm --prefix "$repo/web" run build
 (
   cd "$repo/crates/app"
-  "$cli" build --bundles appimage,deb
+  "$cli" build --features desktop --bundles appimage,deb
 )
 
 appimage="$(find "$repo/target/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"

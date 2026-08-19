@@ -32,9 +32,9 @@ jobs:
         shell: powershell
         run: Get-ChildItem scripts\tests -Filter *.tests.ps1 | ForEach-Object { & $_.FullName }
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo build --workspace
+      - run: cargo clippy --workspace --all-targets --features stellr-app/desktop -- -D warnings
+      - run: cargo test --workspace --features stellr-app/desktop
+      - run: cargo build --workspace --features stellr-app/desktop
       - name: Require the tag to match the application version
         shell: powershell
         run: |
@@ -168,7 +168,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential curl file libayatana-appindicator3-dev librsvg2-dev \
+            build-essential curl file libayatana-appindicator3-dev libdbus-1-dev librsvg2-dev \
             libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf wget
       - run: npm --prefix web ci
       - name: Build Linux release packages

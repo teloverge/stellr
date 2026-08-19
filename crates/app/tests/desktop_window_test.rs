@@ -1,3 +1,5 @@
+#![cfg(feature = "desktop")]
+
 use stellr_app::desktop::create_main_window;
 
 #[test]

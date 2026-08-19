@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Kept the authenticated Tailnet browser session stable across launcher-driven
+  rebuilds and restarts so existing browser tabs can reconnect, and replaced
+  endless retries for invalid sessions with an explicit expiration message;
+  rebuilt executable inodes are now recognized when replacing the old server.
+- Added an npm-accessible Tailnet launcher that safely replaces the prior
+  instance and binds the optimized web server to the current Tailscale IPv4
+  address with session authentication enabled, while retaining the latest
+  authenticated URL in an owner-only local file.
+- Added Linux shell, Windows PowerShell, and Windows Command Prompt helpers for
+  retrieving that authenticated URL from the `amd-halo` Tailnet host over SSH.
+- Added a Debian/Ubuntu dependency installer for optional native desktop and
+  package builds using Tauri, WebKitGTK, D-Bus, and app indicators.
+- Updated the locked DOMPurify and Nano ID dependencies to versions that pass
+  the npm security audit.
+- Added `.nvmrc`, npm package metadata, and strict engine checks requiring
+  Node.js 24 with npm 12.0.2 before installing the web workspace.
+- Made the browser-hosted server the default Linux development build, with
+  Tauri and OS credential storage isolated behind an explicit desktop feature.
 - Suspended star-map GPU rendering while the app is minimized or its browser
   document is hidden, while retaining five-minute native background polling.
 - Made project changes immediate and responsive: first-time constellation

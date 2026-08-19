@@ -1,3 +1,5 @@
+#![cfg(feature = "desktop")]
+
 use std::process::Stdio;
 
 use axum::{Json, Router, routing::post};

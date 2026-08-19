@@ -1,3 +1,5 @@
+#![cfg(feature = "desktop")]
+
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},

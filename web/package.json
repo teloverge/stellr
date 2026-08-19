@@ -3,10 +3,16 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "npm@12.0.2",
+  "engines": {
+    "node": ">=24 <25",
+    "npm": "12.0.2"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "serve:tailnet": "bash ../scripts/serve-tailnet.sh",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run"
   },
@@ -31,10 +37,15 @@
     "phosphor-svelte": "^3.1.0"
   },
   "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=24 <25",
+      "onFail": "error"
+    },
     "packageManager": {
       "name": "npm",
       "version": "12.0.2",
-      "onFail": "download"
+      "onFail": "error"
     }
   }
 }

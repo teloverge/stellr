@@ -1,3 +1,5 @@
+#![cfg(feature = "desktop")]
+
 use std::{path::Path, process::Command, sync::Arc};
 
 use stellr_app::desktop::{DesktopRuntimeOptions, start_runtime, start_runtime_with_entry};
