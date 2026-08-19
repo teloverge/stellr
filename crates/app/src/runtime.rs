@@ -10,8 +10,11 @@ use std::{
     time::Duration,
 };
 
-use stellr_core::{Model, Provider, ProviderError, ProviderSnapshot, RepoRef};
+use stellr_core::{
+    HistoryPage, HistoryPageRequest, Model, Provider, ProviderError, ProviderSnapshot, RepoRef,
+};
 use stellr_github::cache::Cache;
+use stellr_history::HistoryStore;
 use stellr_server::{
     poll::{PollingControl, spawn_controlled_poller},
     routes::router,
@@ -89,6 +92,19 @@ impl Provider for ProviderSlot {
         }
         commit();
         true
+    }
+
+    async fn fetch_snapshot(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        self.fetch(repo).await
+    }
+
+    async fn fetch_history_page(
+        &self,
+        repo: &RepoRef,
+        request: &HistoryPageRequest,
+    ) -> Result<HistoryPage, ProviderError> {
+        let provider = self.current.read().await.clone();
+        provider.fetch_history_page(repo, request).await
     }
 }
 
@@ -197,6 +213,8 @@ pub enum RuntimeError {
     Server(#[source] io::Error),
     #[error("application poller task failed: {0}")]
     PollerTask(#[source] tokio::task::JoinError),
+    #[error("could not open temporal history: {0}")]
+    History(#[from] stellr_history::StoreError),
 }
 
 pub async fn start(
@@ -222,12 +240,14 @@ pub async fn start_with_polling(
         SessionAuth::Disabled => None,
     };
     let spaces = SpaceStore::load(options.spaces_file);
+    let history = HistoryStore::open(options.cache_root.join("history.sqlite3"))?;
     let (hub, _receiver) = tokio::sync::watch::channel(Model { spaces: vec![] });
     let state = Arc::new(AppState {
         hub,
         token: session_token.clone(),
         spaces: tokio::sync::Mutex::new(spaces),
         refresh: Arc::new(tokio::sync::Notify::new()),
+        history,
     });
     let poller = spawn_controlled_poller(
         state.clone(),

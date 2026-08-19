@@ -11,7 +11,8 @@ export interface Focus {
 }
 
 function isClosed(ticket: Ticket): boolean {
-  return ticket.status === 'resolved' || ticket.status === 'out_of_scope'
+  const status = ticket.focusStatus ?? ticket.status
+  return status === 'resolved' || status === 'out_of_scope'
 }
 
 interface Route {
@@ -56,7 +57,8 @@ function route(
       const miniOnly = step.miniOnly && miniEdge
       if (step.throughClosed && !miniEdge) continue
       if (!goal && isClosed(ticket)) {
-        if (!allowResolvedMiniRoute || ticket.status !== 'resolved' || !miniOnly) continue
+        const status = ticket.focusStatus ?? ticket.status
+        if (!allowResolvedMiniRoute || status !== 'resolved' || !miniOnly) continue
       }
       const throughClosed = step.throughClosed || (!goal && isClosed(ticket))
       const visit = `${edge.to}|${miniOnly}|${throughClosed}`

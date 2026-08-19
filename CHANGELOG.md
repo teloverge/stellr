@@ -51,6 +51,25 @@
 - Split the Windows desktop and CLI entry points so installed shortcuts and
   protocol launches open without a terminal while `stellr serve` retains
   native PowerShell and Command Prompt behavior.
+- Hardened temporal playback with provider-backed verification cutoffs,
+  cutoff-safe cursors, native offline restarts, durable import resume, migration
+  rollback, space-scoped deletion, bounded rate-limit retry, neutral historical
+  workflow styling, accessible status text, focus, and narrow layouts.
+- Added delta-only background history synchronization using ordinary snapshot
+  metadata, resumable per-issue cursors, catch-up verification, rate-limit reset
+  evidence, idempotent client merging, and a pinned-past New activity action.
+- Added fixed-duration full-history playback with proportional clustered event
+  ticks, accessible play/pause and speed controls, slow-frame-safe event
+  feedback, and reduced-motion captions that preserve map position and selection.
+- Added exact milestone assignment, movement, and removal replay with minimal
+  GitHub event payloads and temporal milestone hulls that reshape around fixed
+  star coordinates without moving the constellation or camera.
+- Added resumable, one-issue-at-a-time close/reopen history import with
+  transactional page checkpoints, stable lifecycle replay, and schema migration
+  from creation-only ledgers without repository-wide history refetches.
+- Added a durable local SQLite issue-creation ledger, authenticated history
+  deltas, and a bottom timeline that scrubs historical issue visibility without
+  moving the constellation or querying GitHub during scrubbing.
 - Fixed installed desktop startup so a no-argument launch opens the existing
   empty repository-selection shell instead of treating the installation
   directory as a Git repository.

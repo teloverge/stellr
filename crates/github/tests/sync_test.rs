@@ -31,6 +31,7 @@ fn page_for_viewer(
                 "login": viewer_login
             },
             "repository": {
+                "id": "R_repo",
                 "issues": {
                     "pageInfo": {
                         "hasNextPage": has_next_page,
@@ -172,6 +173,70 @@ async fn fetch_rejects_a_viewer_change_during_pagination() {
 }
 
 #[tokio::test]
+async fn snapshot_piggybacks_stable_history_metadata_on_the_issue_query() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("date", "Tue, 04 Aug 2026 13:30:00 GMT")
+                .set_body_json(json!({
+                    "data": {
+                        "viewer": { "login": "octocat" },
+                        "repository": {
+                            "id": "R_repo",
+                            "issues": {
+                                "pageInfo": { "hasNextPage": false, "endCursor": null },
+                                "nodes": [{
+                                    "id": "I_78",
+                                    "number": 78,
+                                    "createdAt": "2026-08-04T12:00:00Z",
+                                    "updatedAt": "2026-08-04T13:00:00Z",
+                                    "title": "History",
+                                    "body": "",
+                                    "url": "https://example.test/o/r/issues/78",
+                                    "state": "OPEN",
+                                    "stateReason": null,
+                                    "assignees": { "nodes": [] },
+                                    "milestone": { "id": "M_1", "title": "M1" },
+                                    "labels": { "nodes": [] },
+                                    "blockedBy": { "nodes": [] },
+                                    "parent": null
+                                }]
+                            }
+                        }
+                    }
+                })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let result = provider.fetch_snapshot(&repo()).await;
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1, "provider result: {result:?}");
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let query = body["query"].as_str().unwrap();
+
+    assert!(query.contains("repository(owner: $owner, name: $name) {\n    id"));
+    assert!(query.contains("nodes {\n        id\n        number"));
+    assert!(query.contains("createdAt"));
+    assert!(query.contains("updatedAt"));
+    let snapshot = result.unwrap();
+    assert_eq!(snapshot.viewer_login.as_deref(), Some("octocat"));
+    assert_eq!(snapshot.repository_id.as_deref(), Some("R_repo"));
+    assert_eq!(snapshot.history_cutoff, Some(1_785_850_200));
+    assert_eq!(snapshot.issues.len(), 1);
+    assert_eq!(snapshot.history.len(), 1);
+    assert_eq!(snapshot.history[0].issue_id, "I_78");
+    assert_eq!(snapshot.history[0].number, 78);
+    assert_eq!(snapshot.history[0].created_at, 1_785_844_800);
+    assert_eq!(snapshot.history[0].updated_at, 1_785_848_400);
+    assert_eq!(snapshot.history[0].milestone, None);
+}
+
+#[tokio::test]
 async fn fetch_maps_a_rejected_token_to_auth() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -217,6 +282,31 @@ async fn fetch_maps_rate_limit_exhaustion_with_its_reset_time() {
 }
 
 #[tokio::test]
+async fn fetch_maps_secondary_rate_limit_retry_after_without_budget_headers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("date", "Tue, 04 Aug 2026 13:30:00 GMT")
+                .insert_header("retry-after", "120")
+                .set_body_json(json!({ "message": "slow down" })),
+        )
+        .mount(&server)
+        .await;
+
+    let provider = GithubProvider::with_base_uri("tok".into(), &server.uri()).unwrap();
+    let error = provider.fetch(&repo()).await.unwrap_err();
+
+    assert!(matches!(
+        error,
+        ProviderError::RateLimited {
+            reset_epoch: Some(1_785_850_320)
+        }
+    ));
+}
+
+#[tokio::test]
 async fn fetch_maps_http_429_rate_limit_exhaustion() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -256,7 +346,10 @@ fn node(
     parent: Option<u64>,
 ) -> Value {
     json!({
+        "id": format!("I_{number}"),
         "number": number,
+        "createdAt": "2026-08-04T12:00:00Z",
+        "updatedAt": "2026-08-04T13:00:00Z",
         "title": title,
         "body": body,
         "url": url,
@@ -268,7 +361,7 @@ fn node(
                 .map(|login| json!({ "login": login }))
                 .collect::<Vec<_>>()
         },
-        "milestone": milestone.map(|title| json!({ "title": title })),
+        "milestone": milestone.map(|title| json!({ "id": format!("M_{title}"), "title": title })),
         "labels": {
             "nodes": labels
                 .iter()

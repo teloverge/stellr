@@ -15,6 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 stellr-core = { path = "../core" }
 stellr-github = { path = "../github" }
+stellr-history = { path = "../history" }
 thiserror.workspace = true
 tokio.workspace = true
 subtle = "2"

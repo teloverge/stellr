@@ -1,7 +1,12 @@
+use std::collections::HashMap;
+
+use chrono::{DateTime, Utc};
 use octocrab::{FromResponse, Octocrab};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use stellr_core::{IssueState, Provider, ProviderError, ProviderSnapshot, RawIssue, RepoRef};
+use stellr_core::{
+    IssueState, IssueSyncMetadata, Provider, ProviderError, ProviderSnapshot, RawIssue, RepoRef,
+};
 
 use crate::textref;
 
@@ -11,13 +16,17 @@ const FETCH_ISSUES_QUERY: &str = r#"
 query FetchIssues($owner: String!, $name: String!, $cursor: String) {
   viewer { login }
   repository(owner: $owner, name: $name) {
+    id
     issues(first: 100, after: $cursor, states: [OPEN, CLOSED]) {
       pageInfo {
         hasNextPage
         endCursor
       }
       nodes {
+        id
         number
+        createdAt
+        updatedAt
         title
         body
         url
@@ -69,6 +78,13 @@ impl GithubGraphqlClient {
         &self,
         request: &T,
     ) -> Result<Value, ProviderError> {
+        Ok(self.post_value_with_timestamp(request).await?.value)
+    }
+
+    async fn post_value_with_timestamp<T: Serialize + ?Sized>(
+        &self,
+        request: &T,
+    ) -> Result<GraphqlResponse, ProviderError> {
         let response = self
             .client
             ._post("/graphql", Some(request))
@@ -78,17 +94,28 @@ impl GithubGraphqlClient {
             return Err(ProviderError::Auth("token rejected".into()));
         }
         let status = response.status().as_u16();
+        let server_timestamp = response
+            .headers()
+            .get("date")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| DateTime::parse_from_rfc2822(value).ok())
+            .map(|value| value.timestamp());
         let rate_limit_exhausted = response
             .headers()
             .get("x-ratelimit-remaining")
             .and_then(|value| value.to_str().ok())
             == Some("0");
-        if matches!(status, 403 | 429) && rate_limit_exhausted {
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok());
+        if status == 429 || (status == 403 && (rate_limit_exhausted || retry_after.is_some())) {
             let reset_epoch = response
                 .headers()
                 .get("x-ratelimit-reset")
                 .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse().ok());
+                .and_then(|value| value.parse().ok())
+                .or_else(|| retry_after.and_then(|value| retry_epoch(value, server_timestamp)));
             return Err(ProviderError::RateLimited { reset_epoch });
         }
         let response = octocrab::map_github_error(response)
@@ -112,8 +139,32 @@ impl GithubGraphqlClient {
                 return Err(ProviderError::Parse(messages[0].to_owned()));
             }
         }
-        Ok(value)
+        Ok(GraphqlResponse {
+            value,
+            server_timestamp,
+        })
     }
+}
+
+struct GraphqlResponse {
+    value: Value,
+    server_timestamp: Option<i64>,
+}
+
+fn retry_epoch(value: &str, server_timestamp: Option<i64>) -> Option<i64> {
+    value
+        .parse::<i64>()
+        .ok()
+        .map(|seconds| {
+            server_timestamp
+                .unwrap_or_else(|| Utc::now().timestamp())
+                .saturating_add(seconds.max(0))
+        })
+        .or_else(|| {
+            DateTime::parse_from_rfc2822(value)
+                .ok()
+                .map(|value| value.timestamp())
+        })
 }
 
 pub struct GithubProvider {
@@ -137,9 +188,29 @@ impl GithubProvider {
 #[async_trait::async_trait]
 impl Provider for GithubProvider {
     async fn fetch(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        self.fetch_all(repo).await
+    }
+
+    async fn fetch_snapshot(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
+        self.fetch_all(repo).await
+    }
+
+    async fn fetch_history_page(
+        &self,
+        repo: &RepoRef,
+        request: &stellr_core::HistoryPageRequest,
+    ) -> Result<stellr_core::HistoryPage, ProviderError> {
+        crate::history::fetch_history_page(&self.client, repo, request).await
+    }
+}
+
+impl GithubProvider {
+    async fn fetch_all(&self, repo: &RepoRef) -> Result<ProviderSnapshot, ProviderError> {
         let mut cursor = None;
         let mut nodes = Vec::new();
         let mut viewer_login: Option<String> = None;
+        let mut repository_id: Option<String> = None;
+        let mut history_cutoff = None;
 
         loop {
             let request = GraphqlRequest {
@@ -151,9 +222,12 @@ impl Provider for GithubProvider {
                 },
             };
 
-            let response = self.client.post_value(&request).await?;
+            let response = self.client.post_value_with_timestamp(&request).await?;
+            if history_cutoff.is_none() {
+                history_cutoff = response.server_timestamp;
+            }
 
-            let response: GraphqlEnvelope = serde_json::from_value(response)
+            let response: GraphqlEnvelope = serde_json::from_value(response.value)
                 .map_err(|error| ProviderError::Parse(error.to_string()))?;
 
             let data = response
@@ -167,7 +241,6 @@ impl Provider for GithubProvider {
             if data.viewer.login.trim().is_empty() {
                 return Err(ProviderError::Parse("viewer login is empty".into()));
             }
-
             match viewer_login.as_deref() {
                 Some(login) if login != data.viewer.login => {
                     return Err(ProviderError::Parse(
@@ -178,10 +251,19 @@ impl Provider for GithubProvider {
                 None => viewer_login = Some(data.viewer.login.clone()),
             }
 
-            let connection = data
+            let repository = data
                 .repository
-                .map(|repository| repository.issues)
                 .ok_or_else(|| ProviderError::Parse("missing data.repository.issues".into()))?;
+            if repository_id
+                .as_ref()
+                .is_some_and(|known| known != &repository.id)
+            {
+                return Err(ProviderError::Parse(
+                    "repository identity changed during issue pagination".into(),
+                ));
+            }
+            repository_id = Some(repository.id);
+            let connection = repository.issues;
 
             nodes.extend(connection.nodes);
             if !connection.page_info.has_next_page {
@@ -192,9 +274,12 @@ impl Provider for GithubProvider {
             })?);
         }
 
-        let mut issues = map_issues(nodes);
-        issues.sort_by_key(|issue| issue.number);
-        Ok(ProviderSnapshot::new(viewer_login, issues))
+        Ok(map_snapshot(
+            viewer_login,
+            repository_id,
+            history_cutoff,
+            nodes,
+        ))
     }
 }
 
@@ -205,53 +290,96 @@ fn map_octocrab_error(error: octocrab::Error) -> ProviderError {
     }
 }
 
-fn map_issues(nodes: Vec<IssueNode>) -> Vec<RawIssue> {
-    let mut issues = nodes
-        .into_iter()
-        .map(|node| {
-            let body = node.body.unwrap_or_default();
-            let blocked_by = node
-                .blocked_by
+fn map_snapshot(
+    viewer_login: Option<String>,
+    repository_id: Option<String>,
+    history_cutoff: Option<i64>,
+    nodes: Vec<IssueNode>,
+) -> ProviderSnapshot {
+    let mut issues = Vec::with_capacity(nodes.len());
+    let mut history = Vec::with_capacity(nodes.len());
+    let mut inversions = Vec::new();
+
+    for node in nodes {
+        let body = node.body.unwrap_or_default();
+        let refs = textref::scan(&body);
+        let mut blocked_by = node
+            .blocked_by
+            .nodes
+            .into_iter()
+            .map(|issue| issue.number)
+            .chain(refs.blocked_by)
+            .collect::<Vec<_>>();
+        blocked_by.sort_unstable();
+        blocked_by.dedup();
+
+        inversions.extend(refs.blocks.into_iter().map(|target| (node.number, target)));
+        let parent_issue = node
+            .parent
+            .map(|parent| parent.number)
+            .or_else(|| {
+                if refs.parents.len() == 1 {
+                    Some(refs.parents[0])
+                } else {
+                    None
+                }
+            });
+        history.push(IssueSyncMetadata {
+            issue_id: node.id.clone(),
+            number: node.number,
+            created_at: node.created_at.timestamp(),
+            updated_at: node.updated_at.timestamp(),
+            // Present-day milestone membership cannot establish membership at creation.
+            milestone: None,
+        });
+        issues.push(RawIssue {
+            number: node.number,
+            parent_issue,
+            title: node.title,
+            body,
+            state: match node.state {
+                GithubIssueState::Open => IssueState::Open,
+                GithubIssueState::Closed if node.state_reason.as_deref() == Some("NOT_PLANNED") => {
+                    IssueState::ClosedNotPlanned
+                }
+                GithubIssueState::Closed => IssueState::Closed,
+            },
+            assignees: node
+                .assignees
                 .nodes
                 .into_iter()
-                .map(|issue| issue.number)
-                .collect::<Vec<_>>();
-            RawIssue {
-                number: node.number,
-                parent_issue: node.parent.map(|parent| parent.number),
-                title: node.title,
-                body,
-                state: match node.state {
-                    GithubIssueState::Open => IssueState::Open,
-                    GithubIssueState::Closed
-                        if node.state_reason.as_deref() == Some("NOT_PLANNED") =>
-                    {
-                        IssueState::ClosedNotPlanned
-                    }
-                    GithubIssueState::Closed => IssueState::Closed,
-                },
-                assignees: node
-                    .assignees
-                    .nodes
-                    .into_iter()
-                    .map(|assignee| assignee.login)
-                    .collect(),
-                milestone: node.milestone.map(|milestone| milestone.title),
-                labels: node
-                    .labels
-                    .nodes
-                    .into_iter()
-                    .map(|label| label.name)
-                    .collect(),
-                blocked_by,
-                url: node.url,
-            }
-        })
-        .collect::<Vec<_>>();
+                .map(|assignee| assignee.login)
+                .collect(),
+            milestone: node.milestone.map(|milestone| milestone.title),
+            labels: node
+                .labels
+                .nodes
+                .into_iter()
+                .map(|label| label.name)
+                .collect(),
+            blocked_by,
+            url: node.url,
+        });
+    }
 
-    textref::enrich_relationships(&mut issues);
+    let positions = issues
+        .iter()
+        .enumerate()
+        .map(|(index, issue)| (issue.number, index))
+        .collect::<HashMap<_, _>>();
+    for (blocker, target) in inversions {
+        if let Some(&index) = positions.get(&target) {
+            issues[index].blocked_by.push(blocker);
+        }
+    }
+    for issue in &mut issues {
+        issue.blocked_by.sort_unstable();
+        issue.blocked_by.dedup();
+    }
+    issues.sort_by_key(|issue| issue.number);
+    history.sort_by_key(|issue| issue.number);
 
-    issues
+    ProviderSnapshot::with_history(viewer_login, repository_id, history_cutoff, issues, history)
 }
 
 #[derive(Serialize)]
@@ -285,6 +413,7 @@ struct Viewer {
 
 #[derive(Deserialize)]
 struct Repository {
+    id: String,
     issues: IssueConnection,
 }
 
@@ -305,7 +434,10 @@ struct PageInfo {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct IssueNode {
+    id: String,
     number: u64,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
     title: String,
     body: Option<String>,
     url: String,
@@ -335,7 +467,7 @@ struct Assignee {
     login: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Milestone {
     title: String,
 }

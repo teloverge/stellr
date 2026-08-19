@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::HistorySummary;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -63,6 +65,8 @@ pub struct SpaceModel {
     pub synced_at: Option<i64>,
     pub stale: bool,
     pub error: Option<String>,
+    #[serde(default)]
+    pub history: HistorySummary,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,6 +111,7 @@ mod tests {
                 synced_at: Some(1_753_000_000),
                 stale: false,
                 error: None,
+                history: HistorySummary::default(),
             }],
         };
 

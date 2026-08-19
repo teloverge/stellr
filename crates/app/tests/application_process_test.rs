@@ -3,7 +3,7 @@
 use std::process::Stdio;
 
 use axum::{Json, Router, routing::post};
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::process::Command;
 
 async fn controlled_github() -> (String, tokio::task::JoinHandle<()>) {
@@ -32,15 +32,50 @@ async fn controlled_github() -> (String, tokio::task::JoinHandle<()>) {
         )
         .route(
             "/graphql",
-            post(|| async {
+            post(|Json(request): Json<Value>| async move {
+                let query = request["query"].as_str().unwrap_or_default();
+                if query.contains("FetchIssueHistory") {
+                    return Json(json!({
+                        "data": {
+                            "repository": {
+                                "id": "R_stellr",
+                                "issue": {
+                                    "id": "I_70",
+                                    "timelineItems": {
+                                        "pageInfo": {
+                                            "hasNextPage": false,
+                                            "endCursor": null
+                                        },
+                                        "nodes": [
+                                            {
+                                                "__typename": "ClosedEvent",
+                                                "id": "E_close_70",
+                                                "createdAt": "2026-08-04T12:15:00Z"
+                                            },
+                                            {
+                                                "__typename": "ReopenedEvent",
+                                                "id": "E_reopen_70",
+                                                "createdAt": "2026-08-04T12:30:00Z"
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }));
+                }
                 Json(json!({
                     "data": {
                         "viewer": { "login": "octocat" },
                         "repository": {
+                            "id": "R_stellr",
                             "issues": {
                                 "pageInfo": { "hasNextPage": false, "endCursor": null },
                                 "nodes": [{
+                                    "id": "I_70",
                                     "number": 70,
+                                    "createdAt": "2026-08-04T12:00:00Z",
+                                    "updatedAt": "2026-08-04T13:00:00Z",
                                     "title": "M2 controlled process evidence",
                                     "body": "",
                                     "url": "https://github.com/teloverge/stellr/issues/70",

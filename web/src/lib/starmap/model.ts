@@ -20,6 +20,10 @@ export interface Ticket {
   readyForAgent?: boolean
   assignedToViewer?: boolean
   blocked?: boolean
+  visible?: boolean
+  focusStatus?: TicketStatus
+  milestone?: string | null
+  historical?: boolean
 }
 
 export interface Map {

@@ -37,6 +37,7 @@ serde.workspace = true
 serde_json.workspace = true
 stellr-core = { path = "../core" }
 stellr-github = { path = "../github" }
+stellr-history = { path = "../history" }
 stellr-server = { path = "../server" }
 tauri = { workspace = true, optional = true, features = ["test"] }
 tauri-plugin-deep-link = { workspace = true, optional = true }

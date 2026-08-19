@@ -45,6 +45,7 @@ import {
 } from './label-geometry'
 import { validOrbitNodeNumbers } from './parent-topology'
 import type { Ticket } from './model'
+import { historyEventSummary, type HistoryEvent } from '../history'
 
 export { clipTitle } from './label-geometry'
 
@@ -66,6 +67,7 @@ interface RenderEdge extends WorkflowEdge {
   state: WorkflowVisualState
   satisfied: boolean
   reverseExists: boolean
+  historical: boolean
 }
 
 interface Node {
@@ -73,6 +75,8 @@ interface Node {
   title: string
   type: string
   parentIssue: number | null
+  visible: boolean
+  milestone: string | null
   vstate: VisualState
   // The session overlay riding this star, or null when no session speaks for it
   // (ticket 13). Strictly additive: it never touches layout or the base star.
@@ -238,6 +242,15 @@ function clamp(v: number, a: number, b: number): number {
   return v < a ? a : v > b ? b : v
 }
 
+function milestoneHue(title: string): number {
+  let hash = 2166136261
+  for (const codePoint of title) {
+    hash ^= codePoint.codePointAt(0) ?? 0
+    hash = Math.imul(hash, 16777619)
+  }
+  return Math.abs(hash) % 360
+}
+
 function focusSignature(focus: Focus): string {
   return [
     focus.current ?? '',
@@ -294,6 +307,7 @@ export class StarMap {
   #tickerAt = -1e9
 
   #focus: Focus = analyzeFocus([], null)
+  #historical = false
   // The solved label layout, held between frames. Rebuilt only when its inputs
   // change (see #drawLabels); `#labelEpoch` is what a model push bumps to say the
   // text or the colours moved under it.
@@ -366,6 +380,9 @@ export class StarMap {
     // Titles and statuses can both move under a push, and both feed the label
     // solve — retire the cached one either way.
     this.#labelEpoch++
+    const historical = tickets.some((ticket) => ticket.historical === true)
+    const historicalTransition = historical !== this.#historical
+    this.#historical = historical
     const priorFocus = focusSignature(this.#focus)
     this.#focus = analyzeFocus(tickets, currentIssue)
     const focusChanged = priorFocus !== focusSignature(this.#focus)
@@ -380,6 +397,8 @@ export class StarMap {
         if (!n) continue
         n.title = t.title
         n.type = t.type
+        n.visible = t.visible !== false
+        n.milestone = t.milestone ?? null
         const sstate = sessions[t.num] ?? null
         const vstate = deriveWorkPriority(t, sstate, currentIssue)
         if (vstate !== n.vstate || sstate !== n.sstate) {
@@ -391,7 +410,7 @@ export class StarMap {
       }
       if (changed.length) this.#tick(changed.join('   ·   '))
       this.#refreshEdges(tickets)
-      if (focusChanged) {
+      if (focusChanged && !historicalTransition) {
         this.#refit(false)
         this.#settleIfHeadless()
       }
@@ -419,6 +438,8 @@ export class StarMap {
         title: t.title,
         type: t.type,
         parentIssue: t.parentIssue,
+        visible: t.visible !== false,
+        milestone: t.milestone ?? null,
         vstate: deriveWorkPriority(t, sessions[t.num] ?? null, currentIssue),
         sstate: sessions[t.num] ?? null,
         x: p.x,
@@ -435,15 +456,22 @@ export class StarMap {
   }
 
   #refreshEdges(tickets: Ticket[]): void {
+    const historical = tickets.some((ticket) => ticket.historical === true)
     const byNum = new Map(tickets.map((ticket) => [ticket.num, ticket]))
     const edges = workflowEdges(tickets)
     const reverseEdges = reverseEdgeKeys(edges)
-    this.#edges = edges.map((edge) => ({
+    this.#edges = edges
+      .filter(
+        (edge) =>
+          byNum.get(edge.from)?.visible !== false && byNum.get(edge.to)?.visible !== false,
+      )
+      .map((edge) => ({
       ...edge,
       state: workflowVisualState(edge, byNum),
       satisfied: this.#resolved.has(edge.from),
       reverseExists: reverseEdges.has(edgeKey(edge.from, edge.to)),
-    }))
+      historical,
+      }))
   }
 
   // --- seam: emit selection -------------------------------------------------
@@ -587,6 +615,43 @@ export class StarMap {
     return out
   }
 
+  // Apply one playback beat without touching layout, camera, or selection.
+  // Captions remain under reduced motion; only the radial pulse stands down.
+  replayHistory(events: HistoryEvent[], reducedMotion: boolean): void {
+    if (events.length === 0) return
+    if (!reducedMotion) {
+      for (const event of events) {
+        const node = this.#byNum.get(event.issue_number)
+        if (node) node.flare = 1
+      }
+    }
+    const summaries = events.map((event) => historyEventSummary(event, 2))
+    const caption =
+      summaries.length <= 3
+        ? summaries.join('   ·   ')
+        : `${summaries.length} events   ·   ${summaries.slice(0, 2).join('   ·   ')}`
+    this.#tick(caption.slice(0, 180))
+  }
+
+  pulsing(): number[] {
+    return this.#nodes
+      .filter((node) => node.flare > 0)
+      .map((node) => node.num)
+      .sort((a, b) => a - b)
+  }
+
+  // Temporal milestone membership, grouped exactly as the hull renderer sees
+  // it. Membership is visual state only: it never participates in layout.
+  milestoneMemberships(): Record<string, number[]> {
+    const out: Record<string, number[]> = {}
+    for (const n of this.#nodes) {
+      if (!n.visible || n.milestone === null) continue
+      ;(out[n.milestone] ??= []).push(n.num)
+    }
+    for (const members of Object.values(out)) members.sort((a, b) => a - b)
+    return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)))
+  }
+
   // The live ticker line, or null once it has faded — one line per pushed change.
   ticker(): string | null {
     return this.#tickerAlpha() > 0 ? this.#tickerText : null
@@ -595,7 +660,7 @@ export class StarMap {
   // Current screen position of a star under the live camera.
   screenOf(num: number): { x: number; y: number } | null {
     const n = this.#byNum.get(num)
-    if (!n) return null
+    if (!n || !n.visible) return null
     return { x: n.x * this.#cam.s + this.#cam.x, y: n.y * this.#cam.s + this.#cam.y }
   }
 
@@ -614,6 +679,7 @@ export class StarMap {
     let subissueHit: Node | null = null
     let subissueDistance = Number.POSITIVE_INFINITY
     for (const n of this.#nodes) {
+      if (!n.visible) continue
       const px = n._x * this.#cam.s + this.#cam.x
       const py = n._y * this.#cam.s + this.#cam.y
       const baseRadius = Math.max(14, this.#radius(n) * this.#cam.s + 10)
@@ -990,6 +1056,7 @@ export class StarMap {
     g.translate(this.#cam.x, this.#cam.y)
     g.scale(this.#cam.s, this.#cam.s)
     const focused = this.#focus.emphasized.size > 0
+    this.#drawMilestoneHulls(g)
     for (const edge of this.#edges) {
       if (this.#isSelectedEdge(edge)) continue
       g.save()
@@ -1007,6 +1074,7 @@ export class StarMap {
       g.restore()
     }
     for (const n of this.#nodes) {
+      if (!n.visible) continue
       g.save()
       if (focused && !this.#focus.emphasized.has(n.num)) g.globalAlpha = CONTEXT_ALPHA
       this.#drawStar(g, n, this.#motionClock)
@@ -1022,6 +1090,48 @@ export class StarMap {
       this.#selected !== null &&
       (edge.from === this.#selected || edge.to === this.#selected)
     )
+  }
+
+  #drawMilestoneHulls(g: CanvasRenderingContext2D): void {
+    const groups = new Map<string, Node[]>()
+    for (const n of this.#nodes) {
+      if (!n.visible || n.milestone === null) continue
+      const members = groups.get(n.milestone) ?? []
+      members.push(n)
+      groups.set(n.milestone, members)
+    }
+
+    for (const [title, members] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+      const minX = Math.min(...members.map((member) => member.x)) - 34
+      const maxX = Math.max(...members.map((member) => member.x)) + 34
+      const minY = Math.min(...members.map((member) => member.y)) - 30
+      const maxY = Math.max(...members.map((member) => member.y)) + 34
+      const radius = Math.min(18, (maxX - minX) / 2, (maxY - minY) / 2)
+      const hue = milestoneHue(title)
+
+      g.beginPath()
+      g.moveTo(minX + radius, minY)
+      g.lineTo(maxX - radius, minY)
+      g.quadraticCurveTo(maxX, minY, maxX, minY + radius)
+      g.lineTo(maxX, maxY - radius)
+      g.quadraticCurveTo(maxX, maxY, maxX - radius, maxY)
+      g.lineTo(minX + radius, maxY)
+      g.quadraticCurveTo(minX, maxY, minX, maxY - radius)
+      g.lineTo(minX, minY + radius)
+      g.quadraticCurveTo(minX, minY, minX + radius, minY)
+      g.closePath()
+      g.fillStyle = `hsla(${hue}, 70%, 62%, 0.08)`
+      g.fill()
+      g.strokeStyle = `hsla(${hue}, 72%, 72%, 0.42)`
+      g.lineWidth = 1.5
+      g.setLineDash([5, 5])
+      g.stroke()
+      g.setLineDash([])
+      g.font = '10px ui-sans-serif,system-ui,sans-serif'
+      g.textAlign = 'left'
+      g.fillStyle = `hsla(${hue}, 78%, 82%, 0.9)`
+      g.fillText(title, minX + 10, minY + 15)
+    }
   }
 
   #drawEdge(g: CanvasRenderingContext2D, e: RenderEdge, selected = false): void {
@@ -1073,7 +1183,11 @@ export class StarMap {
     g.lineCap = 'round'
     const usesResolvedStyle = e.state !== 'incomplete' || e.satisfied
     const strokeScale = selected ? SELECTED_EDGE_WIDTH_SCALE : 1
-    if (usesResolvedStyle) {
+    if (e.historical) {
+      g.strokeStyle = 'rgba(174,192,218,0.32)'
+      g.lineWidth = 1.5 * strokeScale
+      g.setLineDash([4, 8])
+    } else if (usesResolvedStyle) {
       g.strokeStyle = 'rgba(150,178,160,0.36)'
       g.lineWidth = 1.6 * strokeScale
       g.setLineDash([])
@@ -1091,6 +1205,7 @@ export class StarMap {
     // Historical paths stay quiet. Only a traversed edge directed into work the
     // operator can act on now carries two small particles toward that endpoint.
     const animatesIntoActiveWork =
+      !e.historical &&
       e.state === 'traversed' &&
       (b.vstate === 'doing_now' || b.vstate === 'my_next' || b.vstate === 'available_next')
     if (animatesIntoActiveWork) {
@@ -1125,11 +1240,13 @@ export class StarMap {
     g.lineTo(tipx - ux * ah + px * aw, tipy - uy * ah + py * aw)
     g.lineTo(tipx - ux * ah - px * aw, tipy - uy * ah - py * aw)
     g.closePath()
-    g.fillStyle = usesResolvedStyle
-      ? 'rgba(190,218,198,0.52)'
-      : mini
-        ? '#c7b8ff'
-        : '#c8d5e8'
+    g.fillStyle = e.historical
+      ? 'rgba(174,192,218,0.5)'
+      : usesResolvedStyle
+        ? 'rgba(190,218,198,0.52)'
+        : mini
+          ? '#c7b8ff'
+          : '#c8d5e8'
     g.fill()
   }
 
@@ -1401,6 +1518,7 @@ export class StarMap {
     // text over the faint outer falloff reads fine.
     const vis: { n: Node; sx: number; sy: number; rad: number }[] = []
     for (const n of this.#nodes) {
+      if (!n.visible) continue
       const sx = n.x * s + this.#cam.x
       const sy = n.y * s + this.#cam.y
       if (sx < -CULL_MARGIN || sx > this.#w + CULL_MARGIN) continue
